@@ -68,9 +68,22 @@ if [ -f "$installed" ]; then
 fi
 
 # 宣言した版が入っていれば何もしない。
-if [ -n "$market_sha" ] && [ -n "$plugin_block" ] &&
-    printf '%s' "$plugin_block" | grep -q "$market_sha"; then
-    exit 0
+#
+# 記録された版は完全な SHA とは限らず、短縮された値のこともある。
+# 長さを揃えずに突き合わせると一致せず、正しい版が入っていても
+# セッションのたびに更新が走ってしまう。前方一致で比べる。
+# 同じプラグインがスコープ違いで複数記録されることがあるため、
+# どれか一つでも宣言した版であれば足りる。
+if [ -n "$market_sha" ] && [ -n "$plugin_block" ]; then
+    while read -r recorded; do
+        [ -n "$recorded" ] || continue
+        case "$market_sha" in
+            "$recorded"*) exit 0 ;;
+        esac
+    done <<EOF
+$(printf '%s' "$plugin_block" |
+    sed -n -E 's/.*"(gitCommitSha|version)"[[:space:]]*:[[:space:]]*"([0-9a-f]{7,})".*/\2/p')
+EOF
 fi
 
 if [ -z "$plugin_block" ]; then
