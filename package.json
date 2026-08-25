@@ -1,0 +1,24 @@
+{
+    "name": "com.qazx7412.kx-vrc-service-status-panel",
+    "version": "0.0.1",
+    "displayName": "Kx VRC Service Status Panel",
+    "description": "VRChatワールドへ設置する、関連サービスの障害情報表示パネル。",
+    "unity": "2022.3",
+    "unityRelease": "22f1",
+    "dependencies": {},
+    "vpmDependencies": {
+        "com.vrchat.worlds": ">=3.7.0"
+    },
+    "author": {
+        "name": "kairox",
+        "url": "https://github.com/limit7412"
+    },
+    "keywords": [
+        "VRChat",
+        "Udon",
+        "UdonSharp",
+        "World",
+        "Status"
+    ],
+    "samples": []
+}
