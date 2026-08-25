@@ -1,0 +1,5 @@
+# フックはシェルとawkで書かれており、LFで取り出す必要がある。
+# Windowsで core.autocrlf=true のまま clone すると CRLF へ変換され、
+# shebang の解釈が `bash\r` になってフックが実行できなくなる。
+*.sh text eol=lf
+*.awk text eol=lf

@@ -10,5 +10,19 @@
         "ref": "v4.0.0"
       }
     }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/install-vrc-udon-skills.sh\"",
+            "timeout": 180,
+            "statusMessage": "VRChat UdonSharp スキルを確認中..."
+          }
+        ]
+      }
+    ]
   }
 }
