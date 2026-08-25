@@ -1,5 +1,8 @@
-# installed_plugins.json から、対象プラグインの記録を
-# 「スコープ US プロジェクト US 版」の行として書き出す。
+# installed_plugins.json から、対象プラグインの記録を書き出す。
+#
+# 1件を US(0x1f)で区切った3つ組とし、RS(0x1e)で終端する。行区切りにすると、
+# パスに改行を含む記録が複数行へ割れて読めなくなる。制御文字は JSON では
+# \u001e のように書かれ、この走査は \u を復号しないため、区切りと衝突しない。
 #
 # 文字列と構造を区別して走査する。区切り文字や括弧で割ると、
 # パスに " や ] を含む記録で途中で切れ、別プロジェクト扱いになる。
@@ -126,7 +129,7 @@ END {
         if (ch != "{") { break }      # ] に当たれば配列の終わり
         readobject(doc, pos)
         if (scope != "") {
-            printf "%s\037%s\037%s\n", scope, path, (sha != "" ? sha : ver)
+            printf "%s\037%s\037%s\036", scope, path, (sha != "" ? sha : ver)
         }
         pos = nextpos
     }

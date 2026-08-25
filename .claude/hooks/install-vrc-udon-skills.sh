@@ -83,7 +83,7 @@ fi
 # 版が分からなければ、比べる基準が無いので何もしない。
 [ -n "$market_sha" ] || exit 0
 
-# 導入済みの記録を「スコープ US プロジェクト US 版」の行へ均す。
+# 導入済みの記録を「スコープ US プロジェクト US 版 RS」の並びへ均す。
 # JSON の走査は別ファイルへ置く。パスに " や ] を含む記録があっても
 # 途中で切らずに読むため、文字列と構造を区別して走査する必要がある。
 records=""
@@ -104,9 +104,9 @@ fi
 found=false
 stale_scopes=""
 if [ -n "$records" ]; then
-    # 区切りにタブを使わない。タブは IFS の空白文字で、projectPath を持たない
-    # 記録のように途中が空だと詰められ、列がずれる。
-    while IFS="$(printf '\037')" read -r scope path recorded; do
+    # 区切りにタブや改行を使わない。タブは IFS の空白文字で、projectPath を
+    # 持たない記録のように途中が空だと詰められる。改行はパスに含まれうる。
+    while IFS="$(printf '\037')" read -r -d "$(printf '\036')" scope path recorded; do
         [ -n "$scope" ] && [ -n "$recorded" ] || continue
         if [ "$scope" != "user" ] && [ -n "$path" ] && [ "$path" != "$project_dir" ]; then
             continue
