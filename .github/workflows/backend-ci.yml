@@ -1,0 +1,61 @@
+name: backend ci
+
+# 集約サーバー（backend/）の format / lint / spec を実行する。
+#
+# 仕様書 10 のとおり、ワークフローはリポジトリ直下に置き、Crystal のコマンドは
+# backend/ を作業ディレクトリにして走らせる。
+#
+# パスによる絞り込みはしない。`on` の `paths` フィルタで起動しなかった
+# ワークフローはチェックランを作らず、required status check に指定すると
+# PR がマージできなくなるためで、これは unity 側の test.yml と同じ理由による。
+# このジョブは Unity を使わずライセンスも要らないので、常に走らせても軽い。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # ameba のコミット固定と噛み合う版に揃える。
+  # 上げるときは backend/shard.yml の ameba の指定と合わせて確認すること。
+  CRYSTAL_VERSION: 1.21.0
+
+jobs:
+  check:
+    name: format / lint / spec
+    # Lambda の実行環境が arm64 なので、CI も同じ命令セットで回す。
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      # crystal: latest だと Crystal の更新でいきなり CI が壊れるため固定する。
+      - name: install crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+
+      - name: install shards
+        run: shards install
+
+      - name: check format
+        run: crystal tool format --check
+
+      # 追従先の ameba（1.7 系）は shard.yml から postinstall が外れており、
+      # shards install だけでは bin/ameba が作られないため明示的にビルドする。
+      - name: build ameba
+        run: |
+          mkdir -p bin
+          crystal build lib/ameba/src/cli.cr -o bin/ameba
+
+      - name: lint with ameba
+        run: ./bin/ameba
+
+      - name: run specs
+        run: crystal spec
