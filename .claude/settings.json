@@ -1,0 +1,14 @@
+{
+  "enabledPlugins": {
+    "vrc-udon-skills@agent-skills-vrc-udon": true
+  },
+  "extraKnownMarketplaces": {
+    "agent-skills-vrc-udon": {
+      "source": {
+        "source": "github",
+        "repo": "niaka3dayo/agent-skills-vrc-udon",
+        "ref": "v4.0.0"
+      }
+    }
+  }
+}
