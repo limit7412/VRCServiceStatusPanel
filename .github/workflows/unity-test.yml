@@ -1,9 +1,10 @@
-name: Test
+name: unity test
 
-# EditModeテストをPRごとに実行する。
+# ワールド側アセット（unity/）のEditModeテストをPRごとに実行する。
 #
-# このリポジトリはVPMパッケージであってUnityプロジェクトではないため、
-# CI側で最小のUnityプロジェクトを組み立て、その `Packages/` へこのリポジトリを置く。
+# 仕様書 10 のとおり、unity/ 自体が動作確認用の最小Unityプロジェクトであり、
+# 配布単位の VPM パッケージはその Packages/ 配下にある。
+# CI側でプロジェクトを組み立てる必要はなく、unity/ をそのまま使う。
 # VPM依存（VRChat Worlds SDK）はUnity Package Managerでは解決できないため、
 # vrc-getで先に入れてからテストランナーを回す。
 #
@@ -32,10 +33,14 @@ permissions:
   pull-requests: read
 
 env:
-  # package.jsonの unity / unityRelease に合わせる。
-  # 変更する場合は unityci/editor に ubuntu-<version>-base-3 タグが存在するか確認する
+  # unity/ProjectSettings/ProjectVersion.txt と package.json の unity /
+  # unityRelease に合わせる。変更する場合は unityci/editor に
+  # ubuntu-<version>-base-3 タグが存在するか確認する
   UNITY_VERSION: 2022.3.22f1
-  PACKAGE_NAME: com.qazx7412.kx-vrc-service-status-panel
+  # テスト実行の対象アセンブリ。絞らないとVRChat SDKが同梱するEditModeテスト
+  # （com.vrchat.worldsのTests.GraphNodeTestsなど）まで走り、こちらの変更と
+  # 無関係な失敗でジョブが落ちる
+  TEST_ASSEMBLY: VRCServiceStatusPanel.Editor.Tests
   VRC_GET_VERSION: v1.9.2
 
 jobs:
@@ -86,7 +91,7 @@ jobs:
           set -euo pipefail
 
           # 1ファイルにつき1行を出す。件数を数えるためで、行数がそのままファイル数になる。
-          # リネームで対象外へ移した変更（Runtime/A.cs → docs/A.cs など）は新パスだけでは
+          # リネームで対象外へ移した変更（unity/A.cs → docs/A.cs など）は新パスだけでは
           # 検出できないため、previous_filenameも同じ行へ並べる。
           RENAME_AWARE='[.filename, (.previous_filename // "")] | @tsv'
 
@@ -127,7 +132,6 @@ jobs:
 
           # テストがコンパイル・実行するコードと、その前提を決めるファイルだけを対象とする。
           # ここに載らないファイルはテスト結果を変えられない。
-          # Editor/ はまだ存在しないが、追加した変更をテスト対象外にしないため先に含める。
           RELEVANT=false
           COUNT=0
           while IFS=$'\t' read -r NEW_PATH OLD_PATH; do
@@ -136,7 +140,7 @@ jobs:
             for FILE in "$NEW_PATH" "$OLD_PATH"; do
               [ -n "$FILE" ] || continue
               case "$FILE" in
-                Editor/*|Runtime/*|Tests/*|package.json|.github/workflows/test.yml)
+                unity/*|.github/workflows/unity-test.yml)
                   echo "テスト対象の変更: $FILE"
                   RELEVANT=true
                   ;;
@@ -163,65 +167,8 @@ jobs:
     if: needs.license.outputs.available == 'true' && needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout package
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # テスト用プロジェクトのPackages配下へ直接チェックアウトする
-          path: TestProject/Packages/${{ env.PACKAGE_NAME }}
-
-      - name: Create Unity project
-        run: |
-          mkdir -p TestProject/Assets TestProject/ProjectSettings
-          echo "m_EditorVersion: $UNITY_VERSION" > TestProject/ProjectSettings/ProjectVersion.txt
-          # Unityが2022.3で生成するマニフェストに合わせた最小構成。
-          #
-          # com.unity.test-framework が無いとテストアセンブリが参照する
-          # UnityEngine.TestRunner / UnityEditor.TestRunner を解決できない。
-          # 組み込みモジュール（com.unity.modules.*）はマニフェストに書いたものだけが
-          # 有効になるため、省くとVRChat SDK側のコンパイルが通らない。
-          # testablesへ追加しないとテストアセンブリがコンパイルされず、テストが0件になる。
-          cat > TestProject/Packages/manifest.json <<JSON
-          {
-            "dependencies": {
-              "com.unity.ext.nunit": "1.0.6",
-              "com.unity.test-framework": "1.1.33",
-              "com.unity.ugui": "1.0.0",
-              "com.unity.modules.ai": "1.0.0",
-              "com.unity.modules.androidjni": "1.0.0",
-              "com.unity.modules.animation": "1.0.0",
-              "com.unity.modules.assetbundle": "1.0.0",
-              "com.unity.modules.audio": "1.0.0",
-              "com.unity.modules.cloth": "1.0.0",
-              "com.unity.modules.director": "1.0.0",
-              "com.unity.modules.imageconversion": "1.0.0",
-              "com.unity.modules.imgui": "1.0.0",
-              "com.unity.modules.jsonserialize": "1.0.0",
-              "com.unity.modules.particlesystem": "1.0.0",
-              "com.unity.modules.physics": "1.0.0",
-              "com.unity.modules.physics2d": "1.0.0",
-              "com.unity.modules.screencapture": "1.0.0",
-              "com.unity.modules.terrain": "1.0.0",
-              "com.unity.modules.terrainphysics": "1.0.0",
-              "com.unity.modules.tilemap": "1.0.0",
-              "com.unity.modules.ui": "1.0.0",
-              "com.unity.modules.uielements": "1.0.0",
-              "com.unity.modules.umbra": "1.0.0",
-              "com.unity.modules.unityanalytics": "1.0.0",
-              "com.unity.modules.unitywebrequest": "1.0.0",
-              "com.unity.modules.unitywebrequestassetbundle": "1.0.0",
-              "com.unity.modules.unitywebrequestaudio": "1.0.0",
-              "com.unity.modules.unitywebrequesttexture": "1.0.0",
-              "com.unity.modules.unitywebrequestwww": "1.0.0",
-              "com.unity.modules.vehicles": "1.0.0",
-              "com.unity.modules.video": "1.0.0",
-              "com.unity.modules.vr": "1.0.0",
-              "com.unity.modules.wind": "1.0.0",
-              "com.unity.modules.xr": "1.0.0"
-            },
-            "testables": [ "$PACKAGE_NAME" ]
-          }
-          JSON
-          jq . TestProject/Packages/manifest.json > /dev/null
 
       - name: Install vrc-get
         run: |
@@ -233,7 +180,7 @@ jobs:
           "$RUNNER_TEMP/bin/vrc-get" --version
 
       - name: Resolve VPM dependencies
-        working-directory: TestProject
+        working-directory: unity
         run: |
           # VRChat公式のVPMリポジトリはvrc-getが既定で持つため、repo addは不要。
           # UdonSharpはcom.vrchat.worldsに含まれるので個別のinstallも要らない。
@@ -243,8 +190,8 @@ jobs:
       - name: Cache Library
         uses: actions/cache@v6
         with:
-          path: TestProject/Library
-          key: Library-${{ env.UNITY_VERSION }}-${{ hashFiles('TestProject/Packages/vpm-manifest.json') }}
+          path: unity/Library
+          key: Library-${{ env.UNITY_VERSION }}-${{ hashFiles('unity/Packages/vpm-manifest.json') }}
           restore-keys: |
             Library-${{ env.UNITY_VERSION }}-
 
@@ -258,14 +205,10 @@ jobs:
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
-          projectPath: TestProject
+          projectPath: unity
           unityVersion: ${{ env.UNITY_VERSION }}
           testMode: editmode
-          # 実行対象をこのパッケージのテストアセンブリだけに絞る。
-          # 絞らないとVRChat SDKが同梱するEditModeテスト（com.vrchat.worldsの
-          # Tests.GraphNodeTestsなど）まで走り、こちらの変更と無関係な失敗で
-          # ジョブが落ちる。
-          customParameters: -assemblyNames ServiceStatusPanel.Editor.Tests
+          customParameters: -assemblyNames ${{ env.TEST_ASSEMBLY }}
           artifactsPath: artifacts
           githubToken: ${{ secrets.GITHUB_TOKEN }}
           checkName: EditMode Test Results

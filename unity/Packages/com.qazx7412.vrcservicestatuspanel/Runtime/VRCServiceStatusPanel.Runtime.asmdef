@@ -1,6 +1,6 @@
 {
-    "name": "ServiceStatusPanel.Runtime",
-    "rootNamespace": "ServiceStatusPanel",
+    "name": "VRCServiceStatusPanel.Runtime",
+    "rootNamespace": "VRCServiceStatusPanel",
     "references": [
         "UdonSharp.Runtime",
         "VRC.Udon",

@@ -1,0 +1,14 @@
+# 動作確認用プロジェクトの生成物。配布物には含めない（仕様書 10）
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+UserSettings/
+*.csproj
+*.sln
+*.user
+
+# vrc-get が解決して書き出す。SDKの導入手順はCIとREADMEに置く
+Packages/vpm-manifest.json

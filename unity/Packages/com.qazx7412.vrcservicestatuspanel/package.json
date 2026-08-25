@@ -1,7 +1,7 @@
 {
-    "name": "com.qazx7412.kx-vrc-service-status-panel",
+    "name": "com.qazx7412.vrcservicestatuspanel",
     "version": "0.0.1",
-    "displayName": "Kx VRC Service Status Panel",
+    "displayName": "VRCServiceStatusPanel",
     "description": "VRChatワールドへ設置する、関連サービスの障害情報表示パネル。",
     "unity": "2022.3",
     "unityRelease": "22f1",

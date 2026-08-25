@@ -1,10 +1,10 @@
 {
-    "name": "ServiceStatusPanel.Editor.Tests",
-    "rootNamespace": "ServiceStatusPanel",
+    "name": "VRCServiceStatusPanel.Editor.Tests",
+    "rootNamespace": "VRCServiceStatusPanel",
     "references": [
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
-        "ServiceStatusPanel.Runtime",
+        "VRCServiceStatusPanel.Runtime",
         "UdonSharp.Runtime",
         "VRC.Udon"
     ],
