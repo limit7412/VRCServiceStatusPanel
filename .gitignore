@@ -1,0 +1,16 @@
+# package directories
+node_modules
+jspm_packages
+
+# Serverless directories
+.serverless
+
+# 環境変数。CI では Secrets から生成する（仕様書 10）
+env.yml
+
+# Crystal のビルド成果物と依存
+backend/bootstrap
+backend/bin
+backend/lib
+
+.idea/
