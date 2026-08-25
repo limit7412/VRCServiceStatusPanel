@@ -7,82 +7,85 @@
 # 環境では、マーケットプレイス自体も入らない。
 # どちらの場合もこのフックが user スコープへ導入し、作業ツリーは汚さない。
 #
-# 版の出典は .claude/settings.json だけにする。このスクリプトが持つのは
-# マーケットプレイス名だけで、リポジトリ名とタグは持たない。
+# 取得元（リポジトリとタグ）の出典は .claude/settings.json だけにする。
+# このスクリプトが持つのは、どのプラグインを対象にするかの識別子だけである。
 
 set -u
 
-# 対象のマーケットプレイス。settings.json から読む対象をこの名前で絞る。
-# 他のマーケットプレイスやプラグインを settings.json へ足しても巻き込まない。
-MARKETPLACE="agent-skills-vrc-udon"
+# 対象のプラグイン。マーケットプレイス名はこの識別子から取る。
+PLUGIN="vrc-udon-skills@agent-skills-vrc-udon"
+MARKETPLACE="${PLUGIN##*@}"
 
 project_dir="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 settings="$project_dir/.claude/settings.json"
 state_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+known="$state_dir/known_marketplaces.json"
+installed="$state_dir/installed_plugins.json"
 
 [ -f "$settings" ] || exit 0
 command -v claude >/dev/null 2>&1 || exit 0
 
 # 宣言ブロックだけを切り出してから読む。ファイル全体から拾うと、
 # 別のマーケットプレイスの repo や ref を混ぜて読んでしまう。
-read_declared() {
+read_source() {
+    [ -f "$1" ] || return 0
     sed -n "/\"$MARKETPLACE\"[[:space:]]*:/,/}/p" "$1" |
         sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" |
         head -1
 }
 
-# このマーケットプレイスに属する有効なプラグインを選ぶ。
-plugin=$(sed -n "s/.*\"\([^\"]*@$MARKETPLACE\)\"[[:space:]]*:[[:space:]]*true.*/\1/p" "$settings" | head -1)
-repo=$(read_declared "$settings" repo)
-ref=$(read_declared "$settings" ref)
+# settings.json がこのプラグインを有効にしていなければ何もしない。
+grep -q "\"$PLUGIN\"[[:space:]]*:[[:space:]]*true" "$settings" || exit 0
 
-[ -n "$plugin" ] && [ -n "$repo" ] || exit 0
+repo=$(read_source "$settings" repo)
+ref=$(read_source "$settings" ref)
+[ -n "$repo" ] || exit 0
 
-source="$repo"
-[ -n "$ref" ] && source="$repo@$ref"
+# ref を省いた宣言も受け付ける。その場合は上流の既定ブランチを追う。
+declared="$repo"
+[ -n "$ref" ] && declared="$repo@$ref"
 
-known="$state_dir/known_marketplaces.json"
-installed="$state_dir/installed_plugins.json"
+known_repo=$(read_source "$known" repo)
+known_ref=$(read_source "$known" ref)
+current="$known_repo"
+[ -n "$known_ref" ] && current="$known_repo@$known_ref"
 
-marketplace_known=false
-installed_ref=""
-if [ -f "$known" ] && grep -q "\"$MARKETPLACE\"" "$known"; then
-    marketplace_known=true
-    installed_ref=$(read_declared "$known" ref)
+# 取得元が宣言と食い違えば取り直す。未登録のときもここを通る。
+# ref だけでなく repo も見る。移転やフォークへ差し替えたときに
+# 古い取得元を使い続けないため。
+if [ "$current" != "$declared" ]; then
+    claude plugin marketplace add "$declared" >/dev/null 2>&1 || exit 0
 fi
 
-plugin_installed=false
-if [ -f "$installed" ] && grep -q "\"$plugin\"" "$installed"; then
-    plugin_installed=true
+# 終了の判断は、マーケットプレイスの ref ではなく導入済みプラグイン自身の版で行う。
+# ref だけを見ると、取得し直しに成功して更新に失敗した次の回に、
+# 古いプラグインを残したまま「宣言どおり」と誤って判定してしまう。
+market_sha=$(git -C "$state_dir/marketplaces/$MARKETPLACE" rev-parse HEAD 2>/dev/null)
+
+plugin_block=""
+if [ -f "$installed" ]; then
+    plugin_block=$(sed -n "/\"$PLUGIN\"[[:space:]]*:/,/]/p" "$installed")
 fi
 
-# 宣言どおりに入っていれば何もしない。
-if [ "$marketplace_known" = true ] && [ "$plugin_installed" = true ] &&
-    [ "$installed_ref" = "$ref" ]; then
+# 宣言した版が入っていれば何もしない。
+if [ -n "$market_sha" ] && [ -n "$plugin_block" ] &&
+    printf '%s' "$plugin_block" | grep -q "$market_sha"; then
     exit 0
 fi
 
-# 未登録のときと、settings.json の ref が変わったときに取り直す。
-# marketplace add は宣言を上書きして参照先を解決し直すため、
-# ref を上げたあとも古いタグのまま使い続けることがない。
-if [ "$marketplace_known" = false ] || [ "$installed_ref" != "$ref" ]; then
-    claude plugin marketplace add "$source" >/dev/null 2>&1 || exit 0
-fi
-
-if [ "$plugin_installed" = false ]; then
-    if claude plugin install "$plugin" --yes >/dev/null 2>&1; then
-        echo "$plugin を導入した。このセッションで使うには /reload-plugins を実行する。"
+if [ -z "$plugin_block" ]; then
+    if claude plugin install "$PLUGIN" --yes >/dev/null 2>&1; then
+        echo "$PLUGIN を導入した。このセッションで使うには /reload-plugins を実行する。"
     fi
     exit 0
 fi
 
-# 導入済みで ref だけが変わった場合。フックが入れるのは user スコープなので
-# そこを更新する。project や local スコープで入れている場合は届かないため、
-# 失敗したら手で更新してもらう。
-if claude plugin update "$plugin" --scope user --yes >/dev/null 2>&1; then
-    echo "$plugin を $ref へ更新した。このセッションで使うには /reload-plugins を実行する。"
+# 導入済みだが版が違う場合。フックが入れるのは user スコープなのでそこを更新する。
+# project や local スコープで入れている場合は届かないため、手で更新してもらう。
+if claude plugin update "$PLUGIN" --scope user --yes >/dev/null 2>&1; then
+    echo "$PLUGIN を ${ref:-最新} へ更新した。このセッションで使うには /reload-plugins を実行する。"
 else
-    echo "$plugin の宣言が $ref に変わっている。claude plugin update $plugin で更新する。"
+    echo "$PLUGIN が宣言（${ref:-既定ブランチ}）と食い違っている。claude plugin update $PLUGIN で更新する。"
 fi
 
 exit 0
