@@ -15,6 +15,12 @@ custom:
   # 流れで、デプロイとは別の周期で動くためである。
   # Serverless の layers で管理すると、Layer を差し替えるたびに
   # 集約サーバーのデプロイを伴うことになる。
+  #
+  # ただし関数が参照するのは、デプロイ時に固定された Layer バージョンの
+  # ARN である。7.3 の再ビルドで新しい Layer を発行しても、それだけでは
+  # 実行中の関数は古い Layer を使い続ける。
+  # 再ビルドのワークフローには、発行のあと UpdateFunctionConfiguration で
+  # 新しい ARN と YTDLP_LAYER_VERSION を関数へ反映する手順が要る。
   ytdlpLayerArn: ${env:YTDLP_LAYER_ARN}
 
   scripts:

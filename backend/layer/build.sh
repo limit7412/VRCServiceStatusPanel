@@ -21,6 +21,14 @@ YTDLP_VERSION="${1:-}"
 QUICKJS_VERSION="${2:-v0.10.1}"
 OUTPUT="${3:-$PWD/ytdlp-layer.zip}"
 
+# 出力先は zip を呼ぶ前に絶対パスへ直す。
+# zip は一時ディレクトリへ cd してから実行するので、相対パスのままだと
+# 一時ディレクトリの中に成果物ができ、trap でそれごと消えてしまう。
+case "$OUTPUT" in
+    /*) ;;
+    *) OUTPUT="$PWD/$OUTPUT" ;;
+esac
+
 if [ -z "$YTDLP_VERSION" ]; then
     echo "usage: $0 <yt-dlp version> [quickjs version] [output zip]" >&2
     echo "  例: $0 2025.09.26" >&2
@@ -58,4 +66,11 @@ rm -f "$OUTPUT"
 (cd "$work" && zip -q -X -r "$OUTPUT" bin)
 
 echo "できあがり: $OUTPUT"
-unzip -l "$OUTPUT"
+
+# 一覧は中身の確認のためだけに出す。
+# unzip は curl や zip と別のパッケージで、入っていない環境がある。
+# set -e のもとでこれを必須にすると、zip ができているのに
+# 非ゼロで終わってしまう。
+if command -v unzip >/dev/null 2>&1; then
+    unzip -l "$OUTPUT"
+fi
