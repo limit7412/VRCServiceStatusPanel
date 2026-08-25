@@ -50,17 +50,32 @@ known_ref=$(read_source "$known" ref)
 current="$known_repo"
 [ -n "$known_ref" ] && current="$known_repo@$known_ref"
 
+# 宣言した版は、マーケットプレイスのチェックアウトの HEAD で表す。
+market_head() {
+    git -C "$state_dir/marketplaces/$MARKETPLACE" rev-parse HEAD 2>/dev/null
+}
+market_sha=$(market_head)
+
 # 取得元が宣言と食い違えば取り直す。未登録のときもここを通る。
 # ref だけでなく repo も見る。移転やフォークへ差し替えたときに
 # 古い取得元を使い続けないため。
+#
+# 取得元の宣言が合っていてもチェックアウトが無ければ取り直す。宣言だけを見て
+# 飛ばすと、以後どのセッションでも版を確かめられず、既に入っているプラグインを
+# 更新できないまま同じ処理を繰り返す。
+# 登録済みのマーケットプレイスへ add を呼んでも何もしないので、
+# その場合は update を使う。
 if [ "$current" != "$declared" ]; then
-    claude plugin marketplace add "$declared" >/dev/null 2>&1 || exit 0
+    claude plugin marketplace add "$declared" >/dev/null 2>&1
+    market_sha=$(market_head)
+elif [ -z "$market_sha" ]; then
+    claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1
+    market_sha=$(market_head)
 fi
 
-# 終了の判断は、マーケットプレイスの ref ではなく導入済みプラグイン自身の版で行う。
-# ref だけを見ると、取得し直しに成功して更新に失敗した次の回に、
-# 古いプラグインを残したまま「宣言どおり」と誤って判定してしまう。
-market_sha=$(git -C "$state_dir/marketplaces/$MARKETPLACE" rev-parse HEAD 2>/dev/null)
+# 取り直しても版が分からなければ、比べる基準が無いので何もしない。
+# 上流へ届かないときなどで、この状態では導入も更新もできない。
+[ -n "$market_sha" ] || exit 0
 
 plugin_block=""
 if [ -f "$installed" ]; then
@@ -79,16 +94,50 @@ fi
 # 記録された版は完全な SHA とは限らず短縮されていることもあるため、前方一致で比べる。
 found=false
 stale_scopes=""
-if [ -n "$market_sha" ] && [ -n "$plugin_block" ]; then
+if [ -n "$plugin_block" ]; then
     # 記録を1件1行の「スコープ、プロジェクト、版」へ均す。区切りは US(0x1f)。
     # awkのプログラムはヒアドキュメントの外へ置く。中に置くと $2 や $4 を
     # シェルが先に展開してしまう。
-    records=$(printf '%s' "$plugin_block" | awk -F'"' '
+    records=$(printf '%s' "$plugin_block" | awk '
+        # 値は JSON の文字列として読み、\" と \\ を復号して返す。
+        # 区切り文字で割ると、パスに " を含む場合に途中で切れて
+        # 別プロジェクト扱いになる。
+        # \n のように文字そのものを表すエスケープは扱わない。
+        # パスに制御文字が入ることは想定しない。
+        function jsonvalue(line, key,   pos, rest, out, ch, i, escaped) {
+            pos = index(line, "\"" key "\"")
+            if (pos == 0) {
+                return ""
+            }
+            rest = substr(line, pos + length(key) + 2)
+            pos = index(rest, ":")
+            rest = substr(rest, pos + 1)
+            pos = index(rest, "\"")
+            rest = substr(rest, pos + 1)
+
+            out = ""
+            escaped = 0
+            for (i = 1; i <= length(rest); i++) {
+                ch = substr(rest, i, 1)
+                if (escaped) {
+                    out = out ch
+                    escaped = 0
+                } else if (ch == "\\") {
+                    escaped = 1
+                } else if (ch == "\"") {
+                    break
+                } else {
+                    out = out ch
+                }
+            }
+            return out
+        }
+
         /^[[:space:]]*\{/ { scope = ""; path = ""; sha = ""; ver = "" }
-        $2 == "scope"        { scope = $4 }
-        $2 == "projectPath"  { path = $4 }
-        $2 == "gitCommitSha" { sha = $4 }
-        $2 == "version"      { ver = $4 }
+        /"scope"/          { scope = jsonvalue($0, "scope") }
+        /"projectPath"/    { path  = jsonvalue($0, "projectPath") }
+        /"gitCommitSha"/   { sha   = jsonvalue($0, "gitCommitSha") }
+        /"version"/        { ver   = jsonvalue($0, "version") }
         /^[[:space:]]*\}/ {
             if (scope != "") {
                 printf "%s\037%s\037%s\n", scope, path, (sha != "" ? sha : ver)
@@ -98,14 +147,9 @@ if [ -n "$market_sha" ] && [ -n "$plugin_block" ]; then
 
     # 区切りにタブを使わない。タブは IFS の空白文字で、projectPath を持たない
     # 記録のように途中が空だと詰められ、列がずれる。
-    # JSON の文字列は \ をエスケープして持つ。awk が返すのはその生の値なので、
-    # こちらのパスも同じ書き方へ直してから比べる。Windows の C:\repo が
-    # C:\\repo として記録されていても、このプロジェクトの記録を取りこぼさないため。
-    project_dir_json=${project_dir//\\/\\\\}
-
     while IFS="$(printf '\037')" read -r scope path recorded; do
         [ -n "$scope" ] && [ -n "$recorded" ] || continue
-        if [ "$scope" != "user" ] && [ -n "$path" ] && [ "$path" != "$project_dir_json" ]; then
+        if [ "$scope" != "user" ] && [ -n "$path" ] && [ "$path" != "$project_dir" ]; then
             continue
         fi
         found=true
