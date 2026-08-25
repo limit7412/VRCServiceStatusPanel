@@ -67,38 +67,74 @@ if [ -f "$installed" ]; then
     plugin_block=$(sed -n "/\"$PLUGIN\"[[:space:]]*:/,/]/p" "$installed")
 fi
 
-# 宣言した版が入っていれば何もしない。
+# 記録されたそれぞれの導入について、宣言した版かどうかを調べる。
 #
-# 記録された版は完全な SHA とは限らず、短縮された値のこともある。
-# 長さを揃えずに突き合わせると一致せず、正しい版が入っていても
-# セッションのたびに更新が走ってしまう。前方一致で比べる。
-# 同じプラグインがスコープ違いで複数記録されることがあるため、
-# どれか一つでも宣言した版であれば足りる。
+# 同じプラグインはスコープごとに記録され、user に新しい版、project や local に
+# 古い版が併存しうる。どれか一つの一致で終了すると、実際に使われる側が
+# 古いまま残る。関係する記録がすべて宣言した版であるときだけ何もしない。
+#
+# scope 付きの記録は projectPath がこのプロジェクトを指すものだけを見る。
+# 他のプロジェクトの導入はこのセッションに影響しないうえ、ここから直せない。
+#
+# 記録された版は完全な SHA とは限らず短縮されていることもあるため、前方一致で比べる。
+found=false
+stale_scopes=""
 if [ -n "$market_sha" ] && [ -n "$plugin_block" ]; then
-    while read -r recorded; do
-        [ -n "$recorded" ] || continue
+    # 記録を1件1行の「スコープ、プロジェクト、版」へ均す。区切りは US(0x1f)。
+    # awkのプログラムはヒアドキュメントの外へ置く。中に置くと $2 や $4 を
+    # シェルが先に展開してしまう。
+    records=$(printf '%s' "$plugin_block" | awk -F'"' '
+        /^[[:space:]]*\{/ { scope = ""; path = ""; sha = ""; ver = "" }
+        $2 == "scope"        { scope = $4 }
+        $2 == "projectPath"  { path = $4 }
+        $2 == "gitCommitSha" { sha = $4 }
+        $2 == "version"      { ver = $4 }
+        /^[[:space:]]*\}/ {
+            if (scope != "") {
+                printf "%s\037%s\037%s\n", scope, path, (sha != "" ? sha : ver)
+            }
+        }
+    ')
+
+    # 区切りにタブを使わない。タブは IFS の空白文字で、projectPath を持たない
+    # 記録のように途中が空だと詰められ、列がずれる。
+    while IFS="$(printf '\037')" read -r scope path recorded; do
+        [ -n "$scope" ] && [ -n "$recorded" ] || continue
+        if [ "$scope" != "user" ] && [ -n "$path" ] && [ "$path" != "$project_dir" ]; then
+            continue
+        fi
+        found=true
         case "$market_sha" in
-            "$recorded"*) exit 0 ;;
+            "$recorded"*) ;;
+            *) stale_scopes="$stale_scopes $scope" ;;
         esac
     done <<EOF
-$(printf '%s' "$plugin_block" |
-    sed -n -E 's/.*"(gitCommitSha|version)"[[:space:]]*:[[:space:]]*"([0-9a-f]{7,})".*/\2/p')
+$records
 EOF
 fi
 
-if [ -z "$plugin_block" ]; then
+# 宣言した版がすべてのスコープへ入っていれば何もしない。
+if [ "$found" = true ] && [ -z "$stale_scopes" ]; then
+    exit 0
+fi
+
+if [ "$found" = false ]; then
     if claude plugin install "$PLUGIN" --yes >/dev/null 2>&1; then
         echo "$PLUGIN を導入した。このセッションで使うには /reload-plugins を実行する。"
     fi
     exit 0
 fi
 
-# 導入済みだが版が違う場合。フックが入れるのは user スコープなのでそこを更新する。
-# project や local スコープで入れている場合は届かないため、手で更新してもらう。
-if claude plugin update "$PLUGIN" --scope user --yes >/dev/null 2>&1; then
+# 古い版が残っているスコープだけを更新する。
+failed=""
+for scope in $stale_scopes; do
+    claude plugin update "$PLUGIN" --scope "$scope" --yes >/dev/null 2>&1 || failed="$failed $scope"
+done
+
+if [ -z "$failed" ]; then
     echo "$PLUGIN を ${ref:-最新} へ更新した。このセッションで使うには /reload-plugins を実行する。"
 else
-    echo "$PLUGIN が宣言（${ref:-既定ブランチ}）と食い違っている。claude plugin update $PLUGIN で更新する。"
+    echo "$PLUGIN が宣言（${ref:-既定ブランチ}）と食い違っている。claude plugin update $PLUGIN --scope${failed// / } で更新する。"
 fi
 
 exit 0
