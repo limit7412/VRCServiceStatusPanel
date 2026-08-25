@@ -1,7 +1,11 @@
 {
     "name": "ServiceStatusPanel.Runtime",
     "rootNamespace": "ServiceStatusPanel",
-    "references": [],
+    "references": [
+        "UdonSharp.Runtime",
+        "VRC.Udon",
+        "VRC.Udon.Serialization.OdinSerializer"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
