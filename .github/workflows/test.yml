@@ -261,6 +261,11 @@ jobs:
           projectPath: TestProject
           unityVersion: ${{ env.UNITY_VERSION }}
           testMode: editmode
+          # 実行対象をこのパッケージのテストアセンブリだけに絞る。
+          # 絞らないとVRChat SDKが同梱するEditModeテスト（com.vrchat.worldsの
+          # Tests.GraphNodeTestsなど）まで走り、こちらの変更と無関係な失敗で
+          # ジョブが落ちる。
+          customParameters: -assemblyNames ServiceStatusPanel.Editor.Tests
           artifactsPath: artifacts
           githubToken: ${{ secrets.GITHUB_TOKEN }}
           checkName: EditMode Test Results
