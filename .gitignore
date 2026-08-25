@@ -8,7 +8,10 @@ jspm_packages
 # 環境変数。CI では Secrets から生成する（仕様書 10）
 env.yml
 
-# Crystal のビルド成果物と依存
+# Crystal のビルド成果物と依存。
+# provided ランタイムが実行するのは zip 直下の bootstrap なので、
+# serverless.yml のビルドフックはリポジトリ直下へ出力する
+/bootstrap
 backend/bootstrap
 backend/bin
 backend/lib

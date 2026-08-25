@@ -1,0 +1,10 @@
+{
+  "name": "vrc-service-status-panel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "集約サーバーのデプロイ定義。ワールド側のVPMパッケージとは別物で、こちらはServerless Frameworkのためにリポジトリ直下へ置く",
+  "devDependencies": {
+    "serverless": "4.41.0",
+    "serverless-plugin-scripts": "1.0.2"
+  }
+}
