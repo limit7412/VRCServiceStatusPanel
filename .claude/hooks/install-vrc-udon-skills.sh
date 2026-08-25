@@ -98,9 +98,14 @@ if [ -n "$market_sha" ] && [ -n "$plugin_block" ]; then
 
     # 区切りにタブを使わない。タブは IFS の空白文字で、projectPath を持たない
     # 記録のように途中が空だと詰められ、列がずれる。
+    # JSON の文字列は \ をエスケープして持つ。awk が返すのはその生の値なので、
+    # こちらのパスも同じ書き方へ直してから比べる。Windows の C:\repo が
+    # C:\\repo として記録されていても、このプロジェクトの記録を取りこぼさないため。
+    project_dir_json=${project_dir//\\/\\\\}
+
     while IFS="$(printf '\037')" read -r scope path recorded; do
         [ -n "$scope" ] && [ -n "$recorded" ] || continue
-        if [ "$scope" != "user" ] && [ -n "$path" ] && [ "$path" != "$project_dir" ]; then
+        if [ "$scope" != "user" ] && [ -n "$path" ] && [ "$path" != "$project_dir_json" ]; then
             continue
         fi
         found=true
@@ -134,7 +139,11 @@ done
 if [ -z "$failed" ]; then
     echo "$PLUGIN を ${ref:-最新} へ更新した。このセッションで使うには /reload-plugins を実行する。"
 else
-    echo "$PLUGIN が宣言（${ref:-既定ブランチ}）と食い違っている。claude plugin update $PLUGIN --scope${failed// / } で更新する。"
+    echo "$PLUGIN が宣言（${ref:-既定ブランチ}）と食い違っている。次を実行して更新する。"
+    # スコープはコマンドごとに 1 つしか指定できないため、1 行にまとめない。
+    for scope in $failed; do
+        echo "  claude plugin update $PLUGIN --scope $scope"
+    done
 fi
 
 exit 0
