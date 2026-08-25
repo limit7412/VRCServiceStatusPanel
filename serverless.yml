@@ -1,3 +1,24 @@
+# 集約サーバーのデプロイ定義（仕様書 5.1、10）。
+#
+# 手順:
+#   1. env.example.yml を env.yml へ複製して値を入れる
+#   2. Layer を発行し、返ってきた ARN を YTDLP_LAYER_ARN へ入れる
+#        backend/layer/build.sh <yt-dlpの版>
+#        aws lambda publish-layer-version \
+#          --layer-name vrc-service-status-panel-ytdlp \
+#          --zip-file fileb://ytdlp-layer.zip \
+#          --compatible-runtimes provided.al2023 \
+#          --compatible-architectures arm64 \
+#          --query LayerVersionArn --output text
+#        export YTDLP_LAYER_ARN=arn:aws:lambda:...
+#   3. npx serverless deploy --stage <ステージ>
+#
+# YTDLP_LAYER_ARN はプロセスの環境変数からしか読まない。
+# env.yml は provider.environment、つまり Lambda の実行時の環境変数に
+# なるものなので、デプロイ時にだけ要るこの値はそちらへ置かない。
+# 未設定のまま deploy や package を実行すると、変数の解決で止まる。
+# CI では GitHub の変数から export する（#8）。
+
 service: vrc-service-status-panel
 
 plugins:
