@@ -83,9 +83,12 @@ fi
 # 版が分からなければ、比べる基準が無いので何もしない。
 [ -n "$market_sha" ] || exit 0
 
-plugin_block=""
+# 導入済みの記録を「スコープ US プロジェクト US 版」の行へ均す。
+# JSON の走査は別ファイルへ置く。パスに " や ] を含む記録があっても
+# 途中で切らずに読むため、文字列と構造を区別して走査する必要がある。
+records=""
 if [ -f "$installed" ]; then
-    plugin_block=$(sed -n "/\"$PLUGIN\"[[:space:]]*:/,/]/p" "$installed")
+    records=$(awk -v PLUGIN="$PLUGIN" -f "$(dirname "$0")/installed-plugins.awk" "$installed" 2>/dev/null)
 fi
 
 # 記録されたそれぞれの導入について、宣言した版かどうかを調べる。
@@ -100,57 +103,7 @@ fi
 # 記録された版は完全な SHA とは限らず短縮されていることもあるため、前方一致で比べる。
 found=false
 stale_scopes=""
-if [ -n "$plugin_block" ]; then
-    # 記録を1件1行の「スコープ、プロジェクト、版」へ均す。区切りは US(0x1f)。
-    # awkのプログラムはヒアドキュメントの外へ置く。中に置くと $2 や $4 を
-    # シェルが先に展開してしまう。
-    records=$(printf '%s' "$plugin_block" | awk '
-        # 値は JSON の文字列として読み、\" と \\ を復号して返す。
-        # 区切り文字で割ると、パスに " を含む場合に途中で切れて
-        # 別プロジェクト扱いになる。
-        # \n のように文字そのものを表すエスケープは扱わない。
-        # パスに制御文字が入ることは想定しない。
-        function jsonvalue(line, key,   pos, rest, out, ch, i, escaped) {
-            pos = index(line, "\"" key "\"")
-            if (pos == 0) {
-                return ""
-            }
-            rest = substr(line, pos + length(key) + 2)
-            pos = index(rest, ":")
-            rest = substr(rest, pos + 1)
-            pos = index(rest, "\"")
-            rest = substr(rest, pos + 1)
-
-            out = ""
-            escaped = 0
-            for (i = 1; i <= length(rest); i++) {
-                ch = substr(rest, i, 1)
-                if (escaped) {
-                    out = out ch
-                    escaped = 0
-                } else if (ch == "\\") {
-                    escaped = 1
-                } else if (ch == "\"") {
-                    break
-                } else {
-                    out = out ch
-                }
-            }
-            return out
-        }
-
-        /^[[:space:]]*\{/ { scope = ""; path = ""; sha = ""; ver = "" }
-        /"scope"/          { scope = jsonvalue($0, "scope") }
-        /"projectPath"/    { path  = jsonvalue($0, "projectPath") }
-        /"gitCommitSha"/   { sha   = jsonvalue($0, "gitCommitSha") }
-        /"version"/        { ver   = jsonvalue($0, "version") }
-        /^[[:space:]]*\}/ {
-            if (scope != "") {
-                printf "%s\037%s\037%s\n", scope, path, (sha != "" ? sha : ver)
-            }
-        }
-    ')
-
+if [ -n "$records" ]; then
     # 区切りにタブを使わない。タブは IFS の空白文字で、projectPath を持たない
     # 記録のように途中が空だと詰められ、列がずれる。
     while IFS="$(printf '\037')" read -r scope path recorded; do
