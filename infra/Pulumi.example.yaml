@@ -6,7 +6,9 @@
 #
 #   # 値を export の右辺に書かない。シェルの履歴に平文で残り、
 #   # commit 済みの設定ファイルと合わされば secret を全部復号できる
-#   read -rsp 'PULUMI_CONFIG_PASSPHRASE: ' PULUMI_CONFIG_PASSPHRASE && echo
+#   # read の -p は zsh では別の意味になるので、プロンプトは printf で出す
+#   printf 'PULUMI_CONFIG_PASSPHRASE: '
+#   read -rs PULUMI_CONFIG_PASSPHRASE && echo
 #   export PULUMI_CONFIG_PASSPHRASE
 #   infra/init-stack.sh dev
 #

@@ -232,7 +232,8 @@ backend:
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
 # シークレットのほうは履歴に残さない
-read -rsp 'AWS_SECRET_ACCESS_KEY: ' AWS_SECRET_ACCESS_KEY && echo
+printf 'AWS_SECRET_ACCESS_KEY: '
+read -rs AWS_SECRET_ACCESS_KEY && echo
 export AWS_SECRET_ACCESS_KEY
 # 一時的な AWS の資格情報を使っていたシェルなら、これを消す。
 # 残っていると R2 への署名に AWS のセッショントークンが混ざって認証に失敗する
@@ -344,7 +345,9 @@ npm ci
 # 値を export の右辺に書かない。シェルの履歴に平文で残る。
 # 履歴に残ったパスフレーズと commit 済みの設定ファイルがそろえば、
 # Cloudflare のトークンもアラートの URL も復号できてしまう
-read -rsp 'PULUMI_CONFIG_PASSPHRASE: ' PULUMI_CONFIG_PASSPHRASE && echo
+# read の -p は zsh では別の意味になるので、プロンプトは printf で出す
+printf 'PULUMI_CONFIG_PASSPHRASE: '
+read -rs PULUMI_CONFIG_PASSPHRASE && echo
 export PULUMI_CONFIG_PASSPHRASE
 
 ./init-stack.sh dev

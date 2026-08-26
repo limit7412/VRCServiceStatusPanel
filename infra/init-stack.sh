@@ -68,9 +68,9 @@ abort_on_eof() {
     printf '\n' >&2
     echo "入力が尽きたので中断する。" >&2
     echo "作りかけのスタックを消すなら、作った分だけ次を実行する" >&2
-    echo "  pulumi -C $here stack rm $stack" >&2
+    echo "  pulumi -C \"$here\" stack rm $stack" >&2
     if [ "$use_ci" = yes ]; then
-        echo "  pulumi -C $here/oidc stack rm $stack" >&2
+        echo "  pulumi -C \"$here/oidc\" stack rm $stack" >&2
     fi
     exit 1
 }
@@ -228,9 +228,11 @@ while [ -z "$use_ci" ]; do
 
     # 打ち間違いを no として飲み込まない。飲み込むと、CI を使うつもりでも
     # スタックも質問も案内も黙って省かれる。
-    case "${ANSWER,,}" in
-        y | yes) use_ci=yes ;;
-        n | no) use_ci=no ;;
+    # ${ANSWER,,} は Bash 4 からで、macOS 標準の 3.2 では bad substitution になる。
+    # case のパターンで大文字小文字を吸収する。
+    case "$ANSWER" in
+        [Yy] | [Yy][Ee][Ss]) use_ci=yes ;;
+        [Nn] | [Nn][Oo]) use_ci=no ;;
         *) echo "  y か n で答える" >&2 ;;
     esac
 done
@@ -290,24 +292,24 @@ echo "次にやること"
 if [ "$use_ci" = no ]; then
     echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
     echo "  2. Layer を発行して本体を流す"
-    echo "       $here/deploy.sh --ytdlp <版>"
+    echo "       \"$here/deploy.sh\" --ytdlp <版>"
 else
     echo "  1. 入口と権限境界を作る"
-    echo "       npm ci --prefix $here/oidc"
-    echo "       pulumi -C $here/oidc up"
+    echo "       npm ci --prefix \"$here/oidc\""
+    echo "       pulumi -C \"$here/oidc\" up"
     echo "     infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない"
     echo "  2. その workloadBoundaryArn を本体へ入れる"
-    echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
-    echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
+    echo "       pulumi -C \"$here\" config set --stack $stack workloadBoundaryArn \\"
+    echo "         \"\$(pulumi -C \"$here/oidc\" stack output workloadBoundaryArn)\""
     echo "  3. 二つの Pulumi.$stack.yaml を commit する（#12）"
     echo "     commit は 2 のあとにする。境界を入れる前の設定を commit すると、"
     echo "     CI はそれを checkout して境界の付いていないロールを作ろうとし、"
     echo "     DenyBoundaryRemoval で止まる"
     echo "  4. Layer を発行して本体を流す"
-    echo "       $here/deploy.sh --ytdlp <版>"
+    echo "       \"$here/deploy.sh\" --ytdlp <版>"
     echo "  5. 次の五つを GitHub の Secrets へ登録する"
     echo "       AWS_DEPLOY_ROLE_ARN"
-    echo "         pulumi -C $here/oidc stack output githubDeployRoleArn"
+    echo "         pulumi -C \"$here/oidc\" stack output githubDeployRoleArn"
     echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
     echo "       PULUMI_STATE_ACCESS_KEY_ID      状態の置き場所（R2）の鍵"
     echo "       PULUMI_STATE_SECRET_ACCESS_KEY  同上"
