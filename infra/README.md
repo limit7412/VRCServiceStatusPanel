@@ -474,6 +474,19 @@ permissions:
   contents: read
 
 steps:
+  - uses: actions/checkout@v7
+
+  # bootstrap.zip は .gitignore の対象で、checkout には入っていない。
+  # src/compute.ts が FileArchive として即座に開くため、無いと
+  # pulumi up は AWS へ触る前にファイル未検出で止まる。
+  #
+  # build.sh は linux/arm64 のイメージを走らせる。x86_64 のランナーでは
+  # binfmt の登録が要る。
+  - uses: docker/setup-qemu-action@v3
+    with:
+      platforms: arm64
+  - run: backend/build.sh
+
   - id: aws
     uses: aws-actions/configure-aws-credentials@v4
     with:
@@ -486,9 +499,17 @@ steps:
       # 差し替えると、R2 への署名に AWS のセッショントークンが混ざって失敗する
       output-env-credentials: false
 
+  - run: npm ci
+    working-directory: infra
+
+  # Pulumi CLI はランナーに入っていない。
+  # このアクションは command を渡さなければ CLI を入れるだけで終わる。
+  # get.pulumi.com のスクリプトで入れてもよい
+  - uses: pulumi/actions@v6
+
   # スタック名は infra/oidc/ を流したときのものと揃える。
   # dev のデプロイロールは prod の関数にもロールにも手が届かない
-  - run: npx pulumi up --yes --stack prod
+  - run: pulumi up --yes --stack prod
     working-directory: infra
     env:
       # Pulumi の状態の置き場所（R2）
@@ -515,7 +536,11 @@ AccessDenied になる。
 
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
 置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
-どちらも checkout した時点でそろっている。
+どちらも checkout した時点でそろっている。**そろっていないのはバイナリだけ**で、
+これは `.gitignore` の対象なので毎回作る。
+
+Layer はここでは発行しない。手で発行して ARN を設定へ入れる形にしてあり、
+CI のデプロイロールにも Layer の読み取りしか与えていない（仕様書 7.1、7.3）。
 
 デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
 

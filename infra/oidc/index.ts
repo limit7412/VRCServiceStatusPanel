@@ -199,21 +199,28 @@ new aws.iam.RolePolicy(
                     Version: "2012-10-17",
                     Statement: [
                         {
-                            Sid: "Functions",
+                            // 読み取りは Get と List をまとめて許す。
+                            //
+                            // 一つずつ並べるのはやめた。プロバイダは指定して
+                            // いない項目もドリフト検出のために読みに行くため、
+                            // 足りない一つが見つかるたびに CI が止まる。
+                            // 実際 GetFunctionConcurrency、
+                            // GetRuntimeManagementConfig、
+                            // GetFunctionRecursionConfig と三度続いた。
+                            //
+                            // 対象はこのスタックの関数だけで、どれも読み取りである。
+                            // 書き込みは下で明示的に並べてある。
+                            Sid: "FunctionsRead",
+                            Effect: "Allow",
+                            Action: ["lambda:Get*", "lambda:List*"],
+                            Resource: fn,
+                        },
+                        {
+                            Sid: "FunctionsWrite",
                             Effect: "Allow",
                             Action: [
                                 "lambda:CreateFunction",
                                 "lambda:DeleteFunction",
-                                "lambda:GetFunction",
-                                "lambda:GetFunctionConfiguration",
-                                "lambda:GetFunctionCodeSigningConfig",
-                                // 同時実行もランタイムの更新方式も指定していないが、
-                                // 差分を見るときに読まれる
-                                "lambda:GetFunctionConcurrency",
-                                "lambda:GetRuntimeManagementConfig",
-                                "lambda:GetPolicy",
-                                "lambda:ListVersionsByFunction",
-                                "lambda:ListTags",
                                 "lambda:TagResource",
                                 "lambda:UntagResource",
                                 "lambda:UpdateFunctionCode",
