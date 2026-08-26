@@ -16,7 +16,8 @@ name: unity test
 # どちらも未設定の場合、テストジョブはスキップされる（フォークからのPRを含む）。
 #
 # テスト対象に触れていない変更では、テストジョブをスキップする。
-# 判定は`on`の`paths`フィルタではなく`changes`ジョブと`if`で行う（理由は当該ジョブに記述）。
+# 判定は`on`の`paths`フィルタではなく`changes`ジョブと`if`で行う
+# （理由は .github/actions/changed-paths/action.yml に記述）。
 
 on:
   pull_request:
@@ -64,107 +65,42 @@ jobs:
             echo "::notice::UNITY_LICENSE / UNITY_SERIAL が未設定のためEditModeテストをスキップします"
           fi
 
-  # 変更がテスト対象に触れているかを判定する。
-  #
-  # `on`の`paths`フィルタを使わないのは、テストをrequired status checkに指定できる
-  # ようにするため。`paths`で起動しなかったワークフローはチェックランを作らないので、
-  # requiredに指定するとチェックが未作成のまま待ち状態になりPRをマージできなくなる。
-  # 一方、`if`で飛ばしたジョブはskippedのチェックランを残し、これはrequiredを満たす。
-  #
-  # 対象パスの一覧はこのジョブだけに置く。`on`側にも書くと二重管理になり、
-  # 片方だけ更新したときに「変更したのにテストが走らない」事故につながる。
+  # 変更がテスト対象に触れているかを判定する。判定の中身と、`on` の `paths` を
+  # 使わない理由は .github/actions/changed-paths/action.yml に書いてある。
   changes:
     name: Check changed paths
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.check.outputs.relevant }}
     steps:
+      # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
+      - uses: actions/checkout@v7
+
       - id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-
-          # 1ファイルにつき1行を出す。件数を数えるためで、行数がそのままファイル数になる。
-          # リネームで対象外へ移した変更（unity/A.cs → docs/A.cs など）は新パスだけでは
-          # 検出できないため、previous_filenameも同じ行へ並べる。
-          RENAME_AWARE='[.filename, (.previous_filename // "")] | @tsv'
-
-          case "$EVENT_NAME" in
-            pull_request)
-              ENDPOINT="repos/$REPO/pulls/$PR_NUMBER/files"
-              JQ=".[] | $RENAME_AWARE"
-              # このエンドポイントが返すのは最大3000件
-              FILE_LIMIT=3000
-              ;;
-            push)
-              # ブランチ作成時やforce push後は`before`が到達不能なコミットを指し比較できない
-              if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-                echo "relevant=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              ENDPOINT="repos/$REPO/compare/$BEFORE...$AFTER"
-              # `?`を付けず、想定外のレスポンスではjqを失敗させる。
-              # 黙って空の一覧として扱うと、判定できない変更をスキップしてしまう。
-              JQ=".files[] | $RENAME_AWARE"
-              # compareの`files`が返すのは最大300件
-              FILE_LIMIT=300
-              ;;
-            *)
-              # workflow_dispatchなど、比較対象を定められないイベントでは常に実行する
-              echo "relevant=true" >> "$GITHUB_OUTPUT"
-              exit 0
-              ;;
-          esac
-
-          # 差分が分からないまま省略すると壊れた変更を通してしまうため、
-          # 取得に失敗した場合はテストを実行する側へ倒す。
-          if ! CHANGED=$(gh api --paginate "$ENDPOINT" --jq "$JQ"); then
-            echo "::warning::変更ファイルの一覧を取得できなかったためEditModeテストを実行します"
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # テストがコンパイル・実行するコードと、その前提を決めるファイルだけを対象とする。
-          # ここに載らないファイルはテスト結果を変えられない。
-          RELEVANT=false
-          COUNT=0
-          while IFS=$'\t' read -r NEW_PATH OLD_PATH; do
-            [ -n "$NEW_PATH" ] || continue
-            COUNT=$((COUNT + 1))
-            for FILE in "$NEW_PATH" "$OLD_PATH"; do
-              [ -n "$FILE" ] || continue
-              case "$FILE" in
-                unity/*|.github/workflows/unity-test.yml)
-                  echo "テスト対象の変更: $FILE"
-                  RELEVANT=true
-                  ;;
-              esac
-            done
-          done <<< "$CHANGED"
-
-          # `--paginate`はページを辿るだけで、エンドポイントごとの返却件数の上限は外さない。
-          # 上限に達した一覧には、返ってこなかった変更が残っている可能性がある。
-          # 完全だと確認できない一覧を根拠にスキップするわけにはいかないので、実行側へ倒す。
-          if [ "$RELEVANT" = "false" ] && [ "$COUNT" -ge "$FILE_LIMIT" ]; then
-            echo "::warning::変更ファイルが上限の${FILE_LIMIT}件に達し一覧が不完全な可能性があるためEditModeテストを実行します"
-            RELEVANT=true
-          fi
-
-          if [ "$RELEVANT" = "false" ]; then
-            echo "::notice::テスト対象のファイルに変更がないためEditModeテストをスキップします"
-          fi
-          echo "relevant=$RELEVANT" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/changed-paths
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          label: EditMode テスト
+          patterns: |
+            unity/*
+            .github/workflows/unity-test.yml
+            .github/actions/changed-paths/*
 
   test:
     name: EditMode tests
     needs: [license, changes]
-    if: needs.license.outputs.available == 'true' && needs.changes.outputs.relevant == 'true'
+    # 判定そのものが失敗したときは検査を走らせる。
+    # needs が失敗するとこのジョブは skipped になり、required status check では
+    # 成功と同じ扱いになる。飛ばす条件を「対象に触れていない」に限らないと、
+    # 判定が壊れているあいだ、壊れた変更が緑のまま通ってしまう。
+    # !cancelled() を置くのは、これが無いと needs の失敗でジョブごと
+    # 飛ばされ、if を読んでもらえないためである。
+    # ライセンスの判定も同じ形にする。available が false のときは意図した
+    # スキップなので飛ばし、ジョブ自体が失敗したときは走らせて赤で見せる。
+    if: >-
+      ${{ !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true')
+      && (needs.license.result != 'success' || needs.license.outputs.available == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
