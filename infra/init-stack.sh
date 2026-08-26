@@ -132,6 +132,42 @@ set_secret() {
     printf '%s' "$ANSWER" | pulumi -C "$dir" config set --stack "$stack" --secret "$key"
 }
 
+# Layer は ARN と版を一組で入れる（仕様書 7.3）。
+# 片方だけだと、deploy.sh の事前確認は ARN しか見ないので通ってしまい、
+# settings.ts が両方を require しているため pulumi up で止まる。
+set_layer() {
+    local arn="" version=""
+
+    while :; do
+        ask "yt-dlp Layer の ARN（未発行なら空のまま）" || abort_on_eof
+        arn="$ANSWER"
+
+        ask "その Layer に入れた yt-dlp の版（同上）" || abort_on_eof
+        version="$ANSWER"
+
+        if [ -n "$arn" ] && [ -z "$version" ]; then
+            echo "  ARN と版は一組で入れる。版だけ空にはできない" >&2
+            continue
+        fi
+
+        if [ -z "$arn" ] && [ -n "$version" ]; then
+            echo "  ARN と版は一組で入れる。ARN だけ空にはできない" >&2
+            continue
+        fi
+
+        break
+    done
+
+    # 両方とも空なら、まだ発行していないということである。
+    # deploy.sh --ytdlp <版> が発行と同時に両方を入れる。
+    if [ -z "$arn" ]; then
+        return 0
+    fi
+
+    pulumi -C "$here" config set --stack "$stack" ytdlpLayerArn "$arn"
+    pulumi -C "$here" config set --stack "$stack" ytdlpLayerVersion "$version"
+}
+
 create_stack() {
     local dir="$1"
 
@@ -164,8 +200,7 @@ set_required "$here" boothProbeItemId "BOOTH の商品 ID"
 
 echo
 echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
-set_optional "$here" ytdlpLayerArn "yt-dlp Layer の ARN（未発行なら空のまま）"
-set_optional "$here" ytdlpLayerVersion "その Layer に入れた yt-dlp の版（同上）"
+set_layer
 set_secret "$here" githubDispatchToken "Layer 再ビルドを起動する GitHub のトークン"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
@@ -190,4 +225,11 @@ echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
 echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
 echo "  4. Layer を発行して本体を流す"
 echo "       $here/deploy.sh --ytdlp <版>"
-echo "  5. PULUMI_CONFIG_PASSPHRASE を GitHub の Secrets へ登録する"
+echo "  5. GitHub Actions から流すなら、次の五つを GitHub の Secrets へ登録する"
+echo "       AWS_DEPLOY_ROLE_ARN"
+echo "         pulumi -C $here/oidc stack output githubDeployRoleArn"
+echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
+echo "       PULUMI_STATE_ACCESS_KEY_ID      状態の置き場所（R2）の鍵"
+echo "       PULUMI_STATE_SECRET_ACCESS_KEY  同上"
+echo "       CLOUDFLARE_API_TOKEN            Cloudflare の API トークン"
+echo "     どれが何に使われるかは README の「ワークフローでの受け取り」にある"
