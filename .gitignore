@@ -2,18 +2,19 @@
 node_modules
 jspm_packages
 
-# Serverless directories
-.serverless
-
-# 環境変数。CI では Secrets から生成する（仕様書 10）
-env.yml
+# Pulumi。スタックごとの値は Secrets から組み立てる（infra/Pulumi.example.yaml）
+infra/Pulumi.*.yaml
+!infra/Pulumi.example.yaml
+infra/bin
 
 # Crystal のビルド成果物と依存。
-# provided ランタイムが実行するのは zip 直下の bootstrap なので、
-# serverless.yml のビルドフックはリポジトリ直下へ出力する
-/bootstrap
+# bootstrap.zip は backend/build.sh が作り、Pulumi がそのまま Lambda へ渡す
 backend/bootstrap
+backend/bootstrap.zip
 backend/bin
 backend/lib
+
+# Layer の zip。backend/layer/build.sh が作る
+ytdlp-layer.zip
 
 .idea/

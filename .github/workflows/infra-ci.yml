@@ -1,0 +1,46 @@
+name: infra ci
+
+# デプロイ定義（infra/）の型検査を実行する。
+#
+# パスによる絞り込みはしない。`on` の `paths` フィルタで起動しなかった
+# ワークフローはチェックランを作らず、required status check に指定すると
+# PR がマージできなくなるためで、これは backend-ci.yml と同じ理由による。
+#
+# pulumi preview はここでは走らせない。AWS と Cloudflare の資格情報が要り、
+# 差分を見るだけでも実在のアカウントへ触れることになる。型検査までを CI に置き、
+# preview は手元かデプロイのワークフローで行う。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: typecheck
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          # Pulumi の nodejs ランタイムが対応する LTS に合わせる。
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      # ci にするのは package-lock.json のとおりに入れるため。
+      # install だと lock を書き換えてしまい、検証した組み合わせと変わる。
+      - name: install
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
