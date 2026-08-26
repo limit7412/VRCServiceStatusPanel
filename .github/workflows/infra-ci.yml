@@ -45,7 +45,13 @@ jobs:
   check:
     name: typecheck
     needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    # 判定そのものが失敗したときは検査を走らせる。
+    # needs が失敗するとこのジョブは skipped になり、required status check では
+    # 成功と同じ扱いになる。飛ばす条件を「対象に触れていない」に限らないと、
+    # 判定が壊れているあいだ、壊れた変更が緑のまま通ってしまう。
+    # !cancelled() を置くのは、これが無いと needs の失敗でジョブごと
+    # 飛ばされ、if を読んでもらえないためである。
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-24.04
     defaults:
       run:
