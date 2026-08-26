@@ -116,6 +116,15 @@ R2 は `アカウント全体` にする。`R2 バケット` を選ぶとバケ�
 
 R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 
+置き場所は先に作っておく。Pulumi の DIY バックエンドはバケットを作らず、
+既にあるものを指すだけである。トークンを絞るときの候補にも、作ってからでないと
+出てこない。順番は、バケット、トークン、`pulumi login` になる。
+
+**この state 用バケットは、`index.ts` が作る内部バケットとは別物である。**
+`status-state-<スタック名>` のほうは集約サーバーが使うもので（仕様書 6）、
+Pulumi が管理する。同じ名前にすると、Pulumi が自分の state の入っている
+バケットを作ろうとして衝突する。`pulumi-state` のようにはっきり分けること。
+
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
 export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
@@ -129,6 +138,7 @@ pulumi login 's3://<状態用バケット>?endpoint=https://<アカウントID>.
 
 この状態用バケットだけは Pulumi の管理外に置き、手で作る。
 自分の状態を自分で管理させると、作る前に置き場所が要ることになる。
+場所はどこでもよい。中身は state の JSON だけである。
 
 鍵も手で作る。上の API トークンとは別物で、こちらは R2 のページから発行する。
 「R2 object storage → Account Details → API Tokens → Manage → Create Account API token」。
