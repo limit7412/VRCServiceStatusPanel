@@ -21,6 +21,24 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 `infra/oidc/` は普段は動かさない。CI を用意するとき、権限を変えるとき、
 `sub` の条件を足すときにだけ、手元から流す。
 
+## ファイルの並び
+
+`infra/` の中身は `src/` に分けてある。`index.ts` はそれらを繋いで
+出力を並べるだけである。
+
+| ファイル | 何があるか |
+| --- | --- |
+| `index.ts` | 環境変数の組み立てと出力 |
+| `src/settings.ts` | スタックごとの設定 |
+| `src/providers.ts` | AWS プロバイダ。R2 バックエンドとの鍵の取り合いを解く |
+| `src/delivery.ts` | R2 のバケットと Cache Rules（仕様書 6） |
+| `src/credentials.ts` | R2 の S3 互換トークンと、そこから導く鍵（仕様書 9） |
+| `src/functions.ts` | 関数の一覧。増やすときはここ |
+| `src/roles.ts` | 実行時のロール |
+| `src/compute.ts` | Lambda、ロググループ、Scheduler（仕様書 5.1） |
+
+`infra/oidc/` は一つのファイルに収まっているので分けていない。
+
 ## 何を作るか
 
 `infra/`
@@ -51,13 +69,13 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 
 ## 関数を増やすとき
 
-関数は `index.ts` の `FUNCTIONS` に並べる。バイナリは一つで、`handler` の
+関数は `src/functions.ts` の `FUNCTIONS` に並べる。バイナリは一つで、`handler` の
 文字列だけが違う。この文字列が `_HANDLER` として渡り、`backend/src/main.cr` の
 `Runtime::Lambda.handler` の名前と一致したものが動く。
 
 増やすときは次の三つを揃える。
 
-1. `index.ts` の `FUNCTIONS` に足す
+1. `src/functions.ts` の `FUNCTIONS` に足す
 2. `backend/src/main.cr` に同じ名前の `handler` を足す
 3. `backend/src/main.cr` の `HANDLERS` に名前を足す
 
@@ -148,7 +166,7 @@ unset AWS_SESSION_TOKEN
 このバケットだけは Pulumi の管理外に置く。自分の状態を自分で管理させると、
 作る前に置き場所が要ることになる。場所はどこでもよい。中身は state の JSON だけである。
 
-**`index.ts` が作る内部バケットとは別物である。**
+**`src/delivery.ts` が作る内部バケットとは別物である。**
 `status-state-<スタック名>` のほうは集約サーバーが使うもので（仕様書 6）、
 Pulumi が管理する。名前を分けてあるのはそのためで、同じにすると Pulumi が
 自分の state の入っているバケットを作ろうとして衝突する。
@@ -168,7 +186,7 @@ Object 系のトークンは S3 互換 API でしか使えないが、DIY バッ
 AWS プロバイダの既定の探索順はこの環境変数を共有プロファイルより先に見るため、
 そのままでは Lambda の操作にも R2 の鍵が使われて認証に失敗する。
 
-AWS 側は `DEPLOY_AWS_*` で渡す。`index.ts` がこれを AWS プロバイダから見た
+AWS 側は `DEPLOY_AWS_*` で渡す。`src/providers.ts` がこれを AWS プロバイダから見た
 `AWS_*` へ写しており、写しは元の変数がある場合だけ効く。
 
 ```
@@ -276,7 +294,7 @@ Layer を発行し直したときは `ytdlpLayerArn` と `ytdlpLayerVersion` の
 `pulumi up` はここで失敗する。`kind: "zone"` のこのフェーズは、ゾーンごとに
 一つしか置けないためである。
 
-既にある場合は取り込んでから、規則を `index.ts` の `rules` に並べ直す。
+既にある場合は取り込んでから、規則を `src/delivery.ts` の `rules` に並べ直す。
 
 ```
 # 既存の ruleset の ID を調べる
@@ -287,7 +305,7 @@ curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
 pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
 ```
 
-取り込んだあと、既存の規則も `index.ts` に書き写す。書き漏らすと次の `pulumi up`
+取り込んだあと、既存の規則も `src/delivery.ts` に書き写す。書き漏らすと次の `pulumi up`
 で消える。Pulumi は自分の定義を正として、そこに無い規則を落とすためである。
 
 自動で取り込んで混ぜる作りにはしていない。こちらが置いた覚えのない規則を黙って
@@ -392,7 +410,7 @@ steps:
       # 設定は checkout した Pulumi.prod.yaml から読まれる。
       # 暗号文で入っている値を開けるのに要る（「設定の置き場所」を参照）
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-      # デプロイ先（AWS）。index.ts がこれを AWS プロバイダの AWS_* へ写す
+      # デプロイ先（AWS）。src/providers.ts がこれを AWS プロバイダの AWS_* へ写す
       DEPLOY_AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
       DEPLOY_AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
       DEPLOY_AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
@@ -467,7 +485,7 @@ Pulumi に載せていないのは、`cloudflare_r2_custom_domain` に、作成�
 Pulumi の Cloudflare プロバイダは同じ Terraform プロバイダを包んだものなので、
 同じ挙動になる。配信そのものが止まる箇所であり、載せる利より害が大きい。
 
-不具合が直れば `index.ts` に `R2CustomDomain` を足すだけで済む。
+不具合が直れば `src/delivery.ts` に `R2CustomDomain` を足すだけで済む。
 
 ## 確かめ方
 
