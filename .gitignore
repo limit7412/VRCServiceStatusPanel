@@ -11,11 +11,9 @@ jspm_packages
 env.yml
 .serverless
 
-# Pulumi。スタックごとの値は Secrets から組み立てる（infra/Pulumi.example.yaml）
-infra/Pulumi.*.yaml
-!infra/Pulumi.example.yaml
-infra/oidc/Pulumi.*.yaml
-!infra/oidc/Pulumi.example.yaml
+# Pulumi のビルド成果物。
+# スタックごとの値（Pulumi.<スタック名>.yaml）は commit する。
+# secret 指定の値は暗号文で入るので平文では残らない（infra/README.md）
 infra/bin
 infra/oidc/bin
 

@@ -124,6 +124,36 @@ R2 をバックエンドにするなら、AWS 側は鍵で渡すことになる�
 同じシェルで `aws` コマンドを叩くときは、その場で `AWS_*` へ移す
 （下のデプロイ手順を参照）。
 
+## 設定の置き場所
+
+スタックごとの値は `Pulumi.<スタック名>.yaml` に入る。**このファイルは commit する。**
+
+`pulumi config set --secret` で入れた値は暗号文として記録される。復号の鍵は
+パスフレーズから導くので、`PULUMI_CONFIG_PASSPHRASE` を持たない相手には読めない。
+
+```yaml
+config:
+  vrc-service-status-panel:cloudflareAccountId: 023e105f4ecef8ad9ca31a8372d0c353
+  vrc-service-status-panel:alertWebhookUrl:
+    secure: v1:zXQ8kR2mN4pL:vT7hJ...
+```
+
+平文で入るのは識別子のほうである。アカウント ID、ゾーン ID、配信ホスト名、
+バケット名、Layer の ARN。ARN には AWS のアカウント ID が含まれる。
+
+commit するのは、CI へ渡すものを減らすためである。ファイルを持たせない道もあるが、
+その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびに
+ワークフローも直すことになる。ずれても `pulumi up` が落ちて初めて気づく。
+commit してあれば、CI へ渡すのはパスフレーズひとつで済む。
+
+このリポジトリは private である。公開するときは、平文の識別子が読まれる前提で
+見直すこと。OIDC のロールは `sub` で引ける相手を絞ってあるので、AWS のアカウント ID
+を知られてもロールを引けるようにはならない。ただしロール名は推測できるようになる。
+
+`Pulumi.example.yaml` は残してある。fork して自分のアカウントへ出すときは、
+こちらを写す。commit されているほうには作者のアカウント ID と、復号できない
+暗号文が入っている。
+
 ## デプロイ
 
 ```
@@ -164,6 +194,9 @@ pulumi config set ytdlpLayerVersion 2025.09.26
 
 # 4. 反映する
 pulumi up
+
+# 5. 出来上がった Pulumi.dev.yaml を commit する
+git add Pulumi.dev.yaml
 ```
 
 `backend/build.sh` を先に走らせておくこと。
@@ -298,6 +331,8 @@ steps:
       # Pulumi の状態の置き場所（R2）
       AWS_ACCESS_KEY_ID: ${{ secrets.PULUMI_STATE_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
+      # 設定は checkout した Pulumi.prod.yaml から読まれる。
+      # 暗号文で入っている値を開けるのに要る（「設定の置き場所」を参照）
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
       # デプロイ先（AWS）。index.ts がこれを AWS プロバイダの AWS_* へ写す
       DEPLOY_AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
@@ -308,6 +343,9 @@ steps:
 
 `output-env-credentials: false` が使えない版なら、pulumi のステップで
 `AWS_SESSION_TOKEN: ""` を明示しても同じことになる。
+
+`pulumi config set` を並べるステップは要らない。設定は checkout した
+`Pulumi.<スタック名>.yaml` にそろっている。
 
 デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
 

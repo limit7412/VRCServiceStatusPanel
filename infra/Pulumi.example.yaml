@@ -1,8 +1,8 @@
 # スタックごとの値の雛形。
 #
 # 使いはじめるときは Pulumi.<スタック名>.yaml へ複製して値を入れる。
-# 実体は git 管理外にしてある。secret 指定の値は pulumi config set --secret で
-# 入れると state と同じ鍵で暗号化されるので、複製して手で書くよりそちらがよい。
+# 出来上がったファイルは commit する。secret 指定の値は pulumi config set --secret で
+# 入れると暗号文として記録されるので、複製して手で書くよりそちらがよい。
 #
 #   pulumi stack init dev
 #   pulumi config set cloudflareAccountId <アカウントID>
