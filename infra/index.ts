@@ -35,6 +35,11 @@ const ytdlpLayerVersion = config.require("ytdlpLayerVersion");
 // 写しは元の変数がある場合だけ効くので、R2 バックエンドを使わない環境では
 // 何も変わらず、aws configure の資格情報がそのまま使われる。
 //
+// 写せるのは鍵だけで、プロファイルでは代わりにならない。
+// AWS_PROFILE を写しても AWS_ACCESS_KEY_ID は R2 のまま残り、
+// 環境変数のほうが共有プロファイルより先に見られる。
+// R2 をバックエンドにするなら、AWS 側は鍵で渡すことになる。
+//
 // 明示したプロバイダはスタック設定の aws:region を自動では読まないため、
 // ここで取り出して渡す。既定は仕様書 5.1 の東京である。
 const awsRegion = new pulumi.Config("aws").get("region") ?? "ap-northeast-1";
@@ -47,7 +52,6 @@ const awsProvider = new aws.Provider(
             DEPLOY_AWS_ACCESS_KEY_ID: "AWS_ACCESS_KEY_ID",
             DEPLOY_AWS_SECRET_ACCESS_KEY: "AWS_SECRET_ACCESS_KEY",
             DEPLOY_AWS_SESSION_TOKEN: "AWS_SESSION_TOKEN",
-            DEPLOY_AWS_PROFILE: "AWS_PROFILE",
         },
     },
 );

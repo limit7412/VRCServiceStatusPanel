@@ -74,10 +74,18 @@ AWS 側は `DEPLOY_AWS_*` で渡す。`index.ts` がこれを AWS プロバイ�
 export DEPLOY_AWS_ACCESS_KEY_ID=<AWSのアクセスキーID>
 export DEPLOY_AWS_SECRET_ACCESS_KEY=<AWSのシークレット>
 # 一時的な資格情報なら DEPLOY_AWS_SESSION_TOKEN も
-# プロファイルを使うなら DEPLOY_AWS_PROFILE
 ```
 
-状態を R2 へ置かない場合はどれも要らない。`AWS_*` がそのまま使われる。
+**プロファイルでは代わりにならない。** `AWS_PROFILE` を渡しても
+`AWS_ACCESS_KEY_ID` は R2 のまま残り、環境変数のほうが先に見られる。
+R2 をバックエンドにするなら、AWS 側は鍵で渡すことになる。
+
+状態を R2 へ置かない場合はどれも要らない。`AWS_*` がそのまま使われ、
+プロファイルも普通に使える。
+
+写し替えが効くのは Pulumi の AWS プロバイダだけである。
+同じシェルで `aws` コマンドを叩くときは、その場で `AWS_*` へ移す
+（下のデプロイ手順を参照）。
 
 ## デプロイ
 
@@ -86,7 +94,12 @@ export DEPLOY_AWS_SECRET_ACCESS_KEY=<AWSのシークレット>
 backend/build.sh
 
 # 2. Layer を発行し、ARN を控える（仕様書 7.1、7.3）
+#
+#    aws コマンドは Pulumi の写し替えを知らないため、AWS の鍵をその場で
+#    AWS_* へ移す。R2 をバックエンドにしていない場合はこの前置きは要らない。
 backend/layer/build.sh 2025.09.26
+AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID" \
+AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY" \
 aws lambda publish-layer-version \
   --layer-name vrc-service-status-panel-ytdlp \
   --zip-file fileb://ytdlp-layer.zip \
