@@ -86,10 +86,31 @@ namespace VRCServiceStatusPanel
         }
 
         /// <summary>
+        /// 整数として受け取れる値か。
+        ///
+        /// 小数を弾くのは、vが1.5でもintへ落とすと1になり、対応版として
+        /// 通ってしまうためである（仕様書 8.2）。桁が大きすぎるものも弾く。
+        /// Udonは既定でオーバーフローを検査するので、そのまま変換すると例外になり、
+        /// パネルが前回値ごと消える。
+        ///
+        /// NaNと無限大も剰余がNaNになるため、ここで落ちる。
+        /// </summary>
+        private static bool IsWhole(double value, double min, double max)
+        {
+            if (value % 1.0 != 0.0)
+            {
+                return false;
+            }
+
+            return value >= min && value <= max;
+        }
+
+        /// <summary>
         /// 整数を取り出す。
         ///
         /// VRCJsonは数値をすべてDoubleにするため、Doubleとして取ってから変換する
-        /// （仕様書 8.4）。無い場合と型が違う場合はfallbackを返す。
+        /// （仕様書 8.4）。無い場合、型が違う場合、整数として受け取れない場合は
+        /// fallbackを返す。
         /// </summary>
         public static int ReadInt(DataDictionary source, string key, int fallback)
         {
@@ -108,7 +129,13 @@ namespace VRCServiceStatusPanel
                 return fallback;
             }
 
-            return (int)token.Double;
+            double value = token.Double;
+            if (!IsWhole(value, int.MinValue, int.MaxValue))
+            {
+                return fallback;
+            }
+
+            return (int)value;
         }
 
         /// <summary>
@@ -134,7 +161,13 @@ namespace VRCServiceStatusPanel
                 return 0;
             }
 
-            return (long)token.Double;
+            double value = token.Double;
+            if (!IsWhole(value, long.MinValue, long.MaxValue))
+            {
+                return 0;
+            }
+
+            return (long)value;
         }
 
         /// <summary>

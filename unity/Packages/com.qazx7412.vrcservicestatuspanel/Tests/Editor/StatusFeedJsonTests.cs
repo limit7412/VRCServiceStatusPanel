@@ -70,6 +70,23 @@ namespace VRCServiceStatusPanel.Tests
         }
 
         [Test]
+        public void IsSupportedVersion_RefusesAVersionThatIsNotAWholeNumber()
+        {
+            // int へ落とすと 1 になるが、これは v1 のフィードではない。
+            Assert.That(
+                StatusFeedJson.IsSupportedVersion(StatusFeedJson.ParseObject(@"{""v"": 1.5}")),
+                Is.False);
+        }
+
+        [Test]
+        public void ReadInt_RefusesANumberTooLargeToConvert()
+        {
+            Assert.That(
+                StatusFeedJson.IsSupportedVersion(StatusFeedJson.ParseObject(@"{""v"": 1e30}")),
+                Is.False);
+        }
+
+        [Test]
         public void ReadString_TakesTheHeaderOfTheFeed()
         {
             Assert.That(StatusFeedJson.ReadString(Feed(), "generated_jst"), Is.EqualTo("2026/08/25 21:00"));
@@ -91,6 +108,16 @@ namespace VRCServiceStatusPanel.Tests
             Assert.That(StatusFeedJson.ReadUnixSeconds(Feed(), "generated_unix"), Is.EqualTo(1756123200L));
             Assert.That(StatusFeedJson.ReadUnixSeconds(Feed(), "nothing"), Is.EqualTo(0L));
             Assert.That(StatusFeedJson.ReadUnixSeconds(Feed(), "generated_jst"), Is.EqualTo(0L));
+        }
+
+        [Test]
+        public void ReadUnixSeconds_RefusesATimeThatIsNotAWholeSecond()
+        {
+            Assert.That(
+                StatusFeedJson.ReadUnixSeconds(
+                    StatusFeedJson.ParseObject(@"{""generated_unix"": 1756123200.5}"),
+                    "generated_unix"),
+                Is.EqualTo(0L));
         }
 
         [Test]
@@ -164,6 +191,9 @@ namespace VRCServiceStatusPanel.Tests
                 Is.EqualTo(ServiceStatusLevel.Unknown));
             Assert.That(
                 StatusFeedJson.ReadLevel(StatusFeedJson.ParseObject("{}")),
+                Is.EqualTo(ServiceStatusLevel.Unknown));
+            Assert.That(
+                StatusFeedJson.ReadLevel(StatusFeedJson.ParseObject(@"{""level"": 1.5}")),
                 Is.EqualTo(ServiceStatusLevel.Unknown));
             Assert.That(StatusFeedJson.ReadLevel(null), Is.EqualTo(ServiceStatusLevel.Unknown));
         }
