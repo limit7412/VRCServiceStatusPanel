@@ -87,6 +87,13 @@ const stateBucket = new cloudflare.R2Bucket(
 // 配信 JSON は .json なので、既定ではキャッシュの対象にならない（仕様書 6）。
 // Cache Rules で /v1/ 以下を対象に入れる。
 //
+// このゾーンの http_request_cache_settings に、既に Cache Rules があると作成は
+// 失敗する。kind: "zone" のこのフェーズはゾーンごとに一つしか置けないためである。
+// 既にあるなら pulumi import で取り込み、規則をここへ並べ直す。手順は README にある。
+//
+// 自動で取り込んで混ぜることはしない。こちらが置いた覚えのない規則を
+// 黙って管理下に入れると、次の pulumi up でそれを消してしまう。
+//
 // edgeTtl は respect_origin を使う。オブジェクトの Cache-Control に従わせる
 // ためで、仕様書 6 の「オブジェクトの Cache-Control に従い 30 秒」がこれにあたる。
 // override_origin で 30 秒を書くことはできない。Edge Cache TTL の下限が
@@ -456,8 +463,8 @@ if (githubRepository !== undefined) {
             name: "deploy",
             role: deployRole.id,
             policy: pulumi
-                .all([identity.accountId, deployRole.arn])
-                .apply(([account, roleArn]) => {
+                .all([identity.accountId, deployRole.arn, pulumi.output(oidcProviderArn)])
+                .apply(([account, roleArn, providerArn]) => {
                     const fn = `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`;
                     const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:vrc-service-status-panel-*`;
                     const role = `arn:aws:iam::${account}:role/vrc-service-status-panel-*`;
@@ -553,6 +560,21 @@ if (githubRepository !== undefined) {
                                     "scheduler:UntagResource",
                                 ],
                                 Resource: schedule,
+                            },
+                            {
+                                // このスタックが OIDC プロバイダを作った場合、pulumi は
+                                // 差分を見るときにそれを読む。読めないと refresh が落ちる。
+                                //
+                                // 読み取りだけにする。プロバイダはアカウントに一つしかなく、
+                                // 他のリポジトリも使っている可能性がある。CI から書き換え
+                                // させると、その巻き添えが出る。
+                                Sid: "ReadOidcProvider",
+                                Effect: "Allow",
+                                Action: [
+                                    "iam:GetOpenIDConnectProvider",
+                                    "iam:ListOpenIDConnectProviderTags",
+                                ],
+                                Resource: providerArn,
                             },
                             {
                                 // 自分の権限は書き換えさせない。

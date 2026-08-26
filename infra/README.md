@@ -56,8 +56,10 @@ R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
 export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
-pulumi login 's3://<状態用バケット>?endpoint=<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto'
+pulumi login 's3://<状態用バケット>?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto'
 ```
+
+`endpoint` にはスキームを付ける。ホスト名だけだと接続先の URL として解決されない。
 
 この状態用バケットだけは Pulumi の管理外に置き、手で作る。
 自分の状態を自分で管理させると、作る前に置き場所が要ることになる。
@@ -137,6 +139,29 @@ pulumi up
 Layer を発行し直したときは `ytdlpLayerArn` と `ytdlpLayerVersion` の両方を
 入れ替えてから `pulumi up` する。片方だけだと、実行時の版の比較が
 食い違いを出し続ける（#8）。
+
+## 前提: ゾーンに既存の Cache Rules が無いこと
+
+`deliveryZoneId` のゾーンで `http_request_cache_settings` を既に使っていると、
+`pulumi up` はここで失敗する。`kind: "zone"` のこのフェーズは、ゾーンごとに
+一つしか置けないためである。
+
+既にある場合は取り込んでから、規則を `index.ts` の `rules` に並べ直す。
+
+```
+# 既存の ruleset の ID を調べる
+curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/<ゾーンID>/rulesets/phases/http_request_cache_settings/entrypoint" \
+  | jq -r '.result.id, (.result.rules[] | .expression)'
+
+pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
+```
+
+取り込んだあと、既存の規則も `index.ts` に書き写す。書き漏らすと次の `pulumi up`
+で消える。Pulumi は自分の定義を正として、そこに無い規則を落とすためである。
+
+自動で取り込んで混ぜる作りにはしていない。こちらが置いた覚えのない規則を黙って
+管理下に入れると、消えたことに気づけない。
 
 ## GitHub Actions から AWS へ入る
 
@@ -221,6 +246,10 @@ steps:
 ただし `vrc-service-status-panel-*` にはこのロール自身も含まれるため、権限を書き換えて
 広げられてしまう。それを塞ぐ Deny を入れてある。読み取りは残してあり、Pulumi が
 毎回このロールの差分を見られる。**このロール自体を変えるときは手元から `pulumi up` する。**
+
+OIDC プロバイダも読み取りだけにしてある。プロバイダはアカウントに一つしかなく、
+他のリポジトリも使っている可能性がある。CI から書き換えさせると巻き添えが出る。
+プロバイダを変えるときも手元から実行する。
 
 ## 手で行う作業
 
