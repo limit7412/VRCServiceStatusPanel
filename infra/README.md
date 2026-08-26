@@ -123,7 +123,7 @@ R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 
 ```yaml
 backend:
-  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
+  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://32cd31ff8a5c721c0583f57a83cb731e.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
 ```
 
 ここで固定するのは、バックエンドがスタックより先に決まるためである。
@@ -246,9 +246,6 @@ aws lambda publish-layer-version \
   --query LayerVersionArn --output text
 
 # 3. 値を入れる（初回のみ）
-#
-#    Pulumi.yaml の backend.url の <アカウントID> を先に埋めておく。
-#    置き場所が決まらないとスタックを作れない。
 cd infra
 npm ci
 pulumi stack init dev

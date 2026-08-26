@@ -12,10 +12,10 @@ description: GitHub Actions の入口と実行時ロールの上限。手元か�
 # 手元でも CI でも pulumi login は要らない。要るのは R2 の鍵だけで、
 # それは AWS_ACCESS_KEY_ID と AWS_SECRET_ACCESS_KEY から読まれる。
 #
-# <アカウントID> は Cloudflare のアカウント ID に置き換える。
+# エンドポイントのホスト名に入っているのは Cloudflare のアカウント ID で、
 # Pulumi.<スタック名>.yaml の cloudflareAccountId と同じ値である。
 backend:
-  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
+  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://32cd31ff8a5c721c0583f57a83cb731e.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
 
 # 値はスタックごとの Pulumi.<スタック名>.yaml に入れる。
 # 雛形は Pulumi.example.yaml にある。
