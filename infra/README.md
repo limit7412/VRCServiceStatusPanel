@@ -231,7 +231,9 @@ backend:
 
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
-export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
+# シークレットのほうは履歴に残さない
+read -rsp 'AWS_SECRET_ACCESS_KEY: ' AWS_SECRET_ACCESS_KEY && echo
+export AWS_SECRET_ACCESS_KEY
 # 一時的な AWS の資格情報を使っていたシェルなら、これを消す。
 # 残っていると R2 への署名に AWS のセッショントークンが混ざって認証に失敗する
 unset AWS_SESSION_TOKEN
@@ -339,9 +341,16 @@ commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` �
 cd infra
 npm ci
 
-export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
+# 値を export の右辺に書かない。シェルの履歴に平文で残る。
+# 履歴に残ったパスフレーズと commit 済みの設定ファイルがそろえば、
+# Cloudflare のトークンもアラートの URL も復号できてしまう
+read -rsp 'PULUMI_CONFIG_PASSPHRASE: ' PULUMI_CONFIG_PASSPHRASE && echo
+export PULUMI_CONFIG_PASSPHRASE
+
 ./init-stack.sh dev
 ```
+
+ファイルに置いてある場合は `PULUMI_CONFIG_PASSPHRASE_FILE` にその場所を渡してもよい。
 
 最初に GitHub Actions からも流すかを聞く。流すなら、本体と `infra/oidc/` の両方に
 同じ名前のスタックを作る。二つの名前がずれると、`dev` のデプロイロールでは `prod` を

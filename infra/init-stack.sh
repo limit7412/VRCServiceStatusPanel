@@ -222,12 +222,18 @@ create_stack() {
 # infra/oidc/ は CI の入口である。手元からだけ流すなら要らない。
 # 作らせると、使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになる。
 # 本体の workloadBoundaryArn は省略できるので、無くても手元からは流せる。
-use_ci=no
-ask "GitHub Actions からもデプロイするか（y/n）" "y" || abort_on_eof
-case "$ANSWER" in
-    y | Y | yes | Yes) use_ci=yes ;;
-    *) use_ci=no ;;
-esac
+use_ci=""
+while [ -z "$use_ci" ]; do
+    ask "GitHub Actions からもデプロイするか（y/n）" "y" || abort_on_eof
+
+    # 打ち間違いを no として飲み込まない。飲み込むと、CI を使うつもりでも
+    # スタックも質問も案内も黙って省かれる。
+    case "${ANSWER,,}" in
+        y | yes) use_ci=yes ;;
+        n | no) use_ci=no ;;
+        *) echo "  y か n で答える" >&2 ;;
+    esac
+done
 
 echo
 echo "=== $stack を作る ==="
@@ -280,21 +286,26 @@ echo "  $here/Pulumi.$stack.yaml"
 [ "$use_ci" = no ] || echo "  $here/oidc/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
-echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
-echo "  2. Layer を発行して本体を流す"
-echo "       $here/deploy.sh --ytdlp <版>"
 
-if [ "$use_ci" = yes ]; then
-    echo
-    echo "GitHub Actions から流すには、2 の前に次も行う"
-    echo "  a. 入口と権限境界を作る"
+if [ "$use_ci" = no ]; then
+    echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
+    echo "  2. Layer を発行して本体を流す"
+    echo "       $here/deploy.sh --ytdlp <版>"
+else
+    echo "  1. 入口と権限境界を作る"
     echo "       npm ci --prefix $here/oidc"
     echo "       pulumi -C $here/oidc up"
     echo "     infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない"
-    echo "  b. その workloadBoundaryArn を本体へ入れる"
+    echo "  2. その workloadBoundaryArn を本体へ入れる"
     echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
     echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
-    echo "  c. 次の五つを GitHub の Secrets へ登録する"
+    echo "  3. 二つの Pulumi.$stack.yaml を commit する（#12）"
+    echo "     commit は 2 のあとにする。境界を入れる前の設定を commit すると、"
+    echo "     CI はそれを checkout して境界の付いていないロールを作ろうとし、"
+    echo "     DenyBoundaryRemoval で止まる"
+    echo "  4. Layer を発行して本体を流す"
+    echo "       $here/deploy.sh --ytdlp <版>"
+    echo "  5. 次の五つを GitHub の Secrets へ登録する"
     echo "       AWS_DEPLOY_ROLE_ARN"
     echo "         pulumi -C $here/oidc stack output githubDeployRoleArn"
     echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
