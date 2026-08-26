@@ -26,9 +26,9 @@ config:
   vrc-service-status-panel:deliveryZoneId: ""
   vrc-service-status-panel:deliveryHost: status.example.com
 
-  # バケット名。省略するとスタック名から status-public-<スタック名> になる
-  # vrc-service-status-panel:publicBucket: status-public-dev
-  # vrc-service-status-panel:stateBucket: status-state-dev
+  # バケット名。省略すると qazx7412-vrc-service-status-panel-<スタック名>-public になる
+  # vrc-service-status-panel:publicBucket: qazx7412-vrc-service-status-panel-dev-public
+  # vrc-service-status-panel:stateBucket: qazx7412-vrc-service-status-panel-dev-state
   vrc-service-status-panel:bucketLocation: apac
 
   # yt-dlp と QuickJS を載せた Layer（仕様書 7.1、7.3）。

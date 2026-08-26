@@ -32,11 +32,11 @@ config:
   publicBucket:
     type: string
     default: ""
-    description: 配信バケット名。空ならスタック名から status-public-<スタック名>
+    description: 配信バケット名。空なら <頭>-<スタック名>-public
   stateBucket:
     type: string
     default: ""
-    description: 内部バケット名。空ならスタック名から status-state-<スタック名>
+    description: 内部バケット名。空なら <頭>-<スタック名>-state
   bucketLocation:
     type: string
     description: バケットの置き場所のヒント。日本向けなので既定は apac

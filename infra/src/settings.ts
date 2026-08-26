@@ -7,8 +7,18 @@ const config = new pulumi.Config();
 
 export const stack = pulumi.getStack();
 
-/** リソース名の頭。同じアカウントに dev と prod を並べても衝突しない */
-export const prefix = `vrc-service-status-panel-${stack}`;
+/**
+ * リソース名の頭。
+ *
+ * 作成者の名前から始めるのは、同じ AWS / Cloudflare アカウントに置いた
+ * 他のものと見分けるためである。スタック名まで含めるので、dev と prod を
+ * 並べても衝突しない。デプロイロールの権限もこの頭で絞ってある。
+ *
+ * 長さの上限がいちばん厳しいのは Lambda の関数名で 64 文字である。
+ * この頭とスタック名で 40 文字ほど使うため、handler 名に使えるのは
+ * 20 文字ほどになる。
+ */
+export const prefix = `qazx7412-vrc-service-status-panel-${stack}`;
 
 // 明示したプロバイダはスタック設定の aws:region を自動では読まないため、
 // ここで取り出しておく。既定は仕様書 5.1 の東京である。
@@ -18,12 +28,12 @@ export const cloudflareAccountId = config.require("cloudflareAccountId");
 export const deliveryZoneId = config.require("deliveryZoneId");
 export const deliveryHost = config.require("deliveryHost");
 
-// 既定にスタック名を入れる。同じアカウントで dev と prod を並べたとき、
-// 名前が同じだと後から作るほうが既存のバケットとぶつかり、通ってしまえば
-// 配信も内部の記録も互いに上書きし合う。
+// バケットも同じ頭で揃える。スタック名まで入れるのは、同じアカウントで
+// dev と prod を並べたときに、名前が同じだと後から作るほうが既存のものと
+// ぶつかり、通ってしまえば配信も内部の記録も互いに上書きし合うためである。
 // 名前を決めたい場合は publicBucket / stateBucket で明示する。
-export const publicBucketName = config.get("publicBucket") || `status-public-${stack}`;
-export const stateBucketName = config.get("stateBucket") || `status-state-${stack}`;
+export const publicBucketName = config.get("publicBucket") || `${prefix}-public`;
+export const stateBucketName = config.get("stateBucket") || `${prefix}-state`;
 export const bucketLocation = config.get("bucketLocation") ?? "apac";
 
 export const ytdlpLayerArn = config.require("ytdlpLayerArn");

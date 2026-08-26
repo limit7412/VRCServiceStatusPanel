@@ -21,6 +21,33 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 `infra/oidc/` は普段は動かさない。CI を用意するとき、権限を変えるとき、
 `sub` の条件を足すときにだけ、手元から流す。
 
+## 名前の付け方
+
+作るものはすべて `qazx7412-vrc-service-status-panel-<スタック名>-` で始める。
+
+| 名前（stack が `dev` の場合） | 何 |
+| --- | --- |
+| `qazx7412-vrc-service-status-panel-dev-lambda` | 実行ロール |
+| `qazx7412-vrc-service-status-panel-dev-scheduler` | Scheduler のロール |
+| `qazx7412-vrc-service-status-panel-dev-refresh` | 関数、Schedule、ロググループ |
+| `qazx7412-vrc-service-status-panel-dev-public` | 配信バケット |
+| `qazx7412-vrc-service-status-panel-dev-state` | 内部バケット |
+| `qazx7412-vrc-service-status-panel-dev-r2` | R2 のデータ用トークン |
+| `qazx7412-vrc-service-status-panel-dev-github-deploy` | デプロイロール |
+| `qazx7412-vrc-service-status-panel-dev-workload-boundary` | 権限境界 |
+
+頭を作成者の名前から始めるのは、同じ AWS / Cloudflare アカウントに置いた
+他のものと見分けるためである。デプロイロールの権限もこの頭で絞ってあり、
+名前を外れたものへは手が届かない。
+
+スタック名まで含めるので、同じアカウントに dev と prod を並べても衝突しない。
+
+Lambda の関数名は 64 文字までである。`qazx7412-vrc-service-status-panel-production-`
+の時点で 44 文字を使うので、handler 名に使えるのは 20 文字ほどになる。
+
+Layer だけはこの規則の外にある。手で発行する不変の成果物で、dev と prod が
+同じものを指すためである（`qazx7412-vrc-service-status-panel-ytdlp`）。
+
 ## ファイルの並び
 
 `infra/` の中身は `src/` に分けてある。`index.ts` はそれらを繋いで
@@ -45,8 +72,8 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 
 | 対象 | リソース | 仕様書 |
 | --- | --- | --- |
-| 配信バケット（既定 `status-public-<スタック名>`） | `cloudflare.R2Bucket` | 6 |
-| 内部バケット（既定 `status-state-<スタック名>`） | `cloudflare.R2Bucket` | 6 |
+| 配信バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-public`） | `cloudflare.R2Bucket` | 6 |
+| 内部バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-state`） | `cloudflare.R2Bucket` | 6 |
 | `/v1/` 以下の Cache Rules | `cloudflare.Ruleset` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
@@ -167,7 +194,7 @@ unset AWS_SESSION_TOKEN
 作る前に置き場所が要ることになる。場所はどこでもよい。中身は state の JSON だけである。
 
 **`src/delivery.ts` が作る内部バケットとは別物である。**
-`status-state-<スタック名>` のほうは集約サーバーが使うもので（仕様書 6）、
+`qazx7412-vrc-service-status-panel-<スタック名>-state` のほうは集約サーバーが使うもので（仕様書 6）、
 Pulumi が管理する。名前を分けてあるのはそのためで、同じにすると Pulumi が
 自分の state の入っているバケットを作ろうとして衝突する。
 
@@ -257,7 +284,7 @@ AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY" \
 AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN" \
 aws lambda publish-layer-version \
   --region ap-northeast-1 \
-  --layer-name vrc-service-status-panel-ytdlp \
+  --layer-name qazx7412-vrc-service-status-panel-ytdlp \
   --zip-file fileb://ytdlp-layer.zip \
   --compatible-runtimes provided.al2023 \
   --compatible-architectures arm64 \
@@ -432,7 +459,7 @@ steps:
 他のリソースへは届かない。スタック名まで含めて絞ってあり、`dev` のデプロイロールから
 `prod` のロールや関数へは手が伸びない。
 
-ただし `vrc-service-status-panel-<スタック名>-*` にはこのロール自身も含まれるため、
+ただし `qazx7412-vrc-service-status-panel-<スタック名>-*` にはこのロール自身も含まれるため、
 権限を書き換えて広げられてしまう。それを塞ぐ Deny を入れてある。読み取りは残してある。
 
 OIDC のプロバイダ、デプロイロール、権限境界のどれも本体には無い。CI が流すのは本体
@@ -440,7 +467,7 @@ OIDC のプロバイダ、デプロイロール、権限境界のどれも本体
 
 ### 実行時ロールの権限境界
 
-名前で絞るだけでは足りない。`vrc-service-status-panel-<スタック名>-*` には Lambda の
+名前で絞るだけでは足りない。`qazx7412-vrc-service-status-panel-<スタック名>-*` には Lambda の
 実行ロールも入るので、次の順で昇格できてしまう。
 
 1. デプロイロールで実行ロールへ任意のポリシーを足す
@@ -476,7 +503,7 @@ OIDC のプロバイダ、デプロイロール、権限境界のどれも本体
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
 
 繋ぐ先のバケット名は `pulumi stack output publicBucketOut` で確かめる。
-既定のままなら `status-public-<スタック名>` である。`publicBucket` を
+既定のままなら `qazx7412-vrc-service-status-panel-<スタック名>-public` である。`publicBucket` を
 設定している場合はその名前になる。
 
 Pulumi に載せていないのは、`cloudflare_r2_custom_domain` に、作成の約一分後に

@@ -15,7 +15,7 @@ const config = new pulumi.Config();
 // 権限を渡す相手は本体スタックである。スタック名を揃えて運用する。
 // 揃えたくない場合だけ targetStack で明示する。
 const targetStack = config.get("targetStack") || pulumi.getStack();
-const prefix = `vrc-service-status-panel-${targetStack}`;
+const prefix = `qazx7412-vrc-service-status-panel-${targetStack}`;
 
 const awsRegion = new pulumi.Config("aws").get("region") ?? "ap-northeast-1";
 
@@ -160,7 +160,7 @@ new aws.iam.RolePolicy(
             .all([awsAccountId, deployRole.arn, workloadBoundary.arn])
             .apply(([account, roleArn, boundaryArn]) => {
                 const fn = `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`;
-                const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:vrc-service-status-panel-*`;
+                const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:qazx7412-vrc-service-status-panel-*`;
                 const role = `arn:aws:iam::${account}:role/${prefix}-*`;
                 const logs = `arn:aws:logs:${awsRegion}:${account}:log-group:/aws/lambda/${prefix}-*`;
                 const schedule = `arn:aws:scheduler:${awsRegion}:${account}:schedule/default/${prefix}-*`;
