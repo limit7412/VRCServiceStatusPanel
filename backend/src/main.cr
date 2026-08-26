@@ -10,9 +10,9 @@ require "./status/models"
 # 関数を増やすときは、ここへ handler を足し、HANDLERS と infra/index.ts の
 # FUNCTIONS にも同じ名前を足す。
 #
-# 取得元のアダプタ（仕様書 11.2 の statuspage、youtube、steam、booth、r2）は
-# まだ無い。いまの refresh は空の Feed を返すだけで、R2 へは書かない。
-# デプロイの経路と Runtime API のやり取りを先に通すための形である。
+# 取得元のアダプタは statuspage だけがある。observe を呼ぶ Usecase#refresh と、
+# 書き出し先の r2 がまだ無いため、いまの refresh は空の Feed を返すだけで、
+# R2 へは書かない。デプロイの経路と Runtime API のやり取りを先に通すための形である。
 
 HANDLERS = %w[refresh]
 

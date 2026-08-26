@@ -72,6 +72,9 @@ module Status
     getter latency : Time::Span?
     getter note : String
     getter components : Array(Component)?
+    # 公式ステータスページから写した level（仕様書 11.5）。
+    # 合成監視は履歴から決めるため、そちらの観測では nil になる。
+    getter level : Level?
 
     def initialize(
       @service_id : String,
@@ -80,6 +83,7 @@ module Status
       @latency : Time::Span? = nil,
       @note : String = "",
       @components : Array(Component)? = nil,
+      @level : Level? = nil,
     )
     end
 
