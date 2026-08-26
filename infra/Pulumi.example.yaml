@@ -1,8 +1,13 @@
 # スタックごとの値の雛形。
 #
-# 使いはじめるときは Pulumi.<スタック名>.yaml へ複製して値を入れる。
-# 出来上がったファイルは commit する。secret 指定の値は pulumi config set --secret で
-# 入れると暗号文として記録されるので、複製して手で書くよりそちらがよい。
+# 使いはじめるときは infra/init-stack.sh が Pulumi.<スタック名>.yaml を作る。
+# ここに並んでいるものを一つずつ聞き、secret 指定のものは暗号文として記録する。
+# 出来上がったファイルは commit する。
+#
+#   export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
+#   infra/init-stack.sh dev
+#
+# 手で入れる場合は次の形になる。--secret を付けないと平文で記録される。
 #
 #   pulumi stack init dev
 #   pulumi config set cloudflareAccountId <アカウントID>

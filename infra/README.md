@@ -76,6 +76,7 @@ Layer だけはこの規則の外にある。手で発行する不変の成果�
 
 | ファイル | 何があるか |
 | --- | --- |
+| `init-stack.sh` | スタックを作って設定を入れる。最初の一回だけ |
 | `deploy.sh` | ビルドから `pulumi up` までをひと通り流す |
 | `index.ts` | 環境変数の組み立てと出力 |
 | `src/settings.ts` | スタックごとの設定 |
@@ -310,21 +311,42 @@ commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` �
 
 ### 初回にすること
 
-スクリプトは設定が埋まっている前提で動く。最初の一回だけ手で用意する。
+`deploy.sh` は設定が埋まっている前提で動く。設定は `infra/init-stack.sh` が作る。
 
 ```
 cd infra
 npm ci
-pulumi stack init dev
-pulumi config set cloudflareAccountId 32cd31ff8a5c721c0583f57a83cb731e
-# 残りは Pulumi.example.yaml を見て埋める
-# CI からデプロイするなら infra/oidc/ を先に流し、その出力を入れる
-# pulumi config set workloadBoundaryArn <infra/oidc の workloadBoundaryArn>
+
+export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
+./init-stack.sh dev
+```
+
+本体と `infra/oidc/` の両方に、同じ名前のスタックを作って値を入れる。
+二つの名前がずれると、`dev` のデプロイロールでは `prod` を触れないまま CI が
+`AccessDenied` で止まる。
+
+値は一つずつ聞かれる。省略できるものは空のまま Enter で飛ばせる。秘密の値は
+標準入力から渡すので、コマンドラインにも履歴にも残らない。何を聞かれるかは
+`Pulumi.example.yaml` に並べてある。
+
+出来上がるのは次の二つで、どちらも commit する（#12）。
+
+```
+infra/Pulumi.dev.yaml
+infra/oidc/Pulumi.dev.yaml
+```
+
+続きはスクリプトが最後に案内する。`infra/oidc/` を流し、その
+`workloadBoundaryArn` を本体へ入れ、Layer の版を渡して本体を流す。
+
+```
+pulumi -C oidc up
+pulumi config set --stack dev workloadBoundaryArn $(pulumi -C oidc stack output workloadBoundaryArn)
 
 # ARN はまだ無いので、初回は必ず版を渡す
 ./deploy.sh --ytdlp 2025.09.26
 
-git add Pulumi.dev.yaml
+git add Pulumi.dev.yaml oidc/Pulumi.dev.yaml
 ```
 
 ### スクリプトが何をしているか

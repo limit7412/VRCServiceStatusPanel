@@ -1,7 +1,13 @@
 # スタックごとの値の雛形。
 #
-# 使いはじめるときは Pulumi.<スタック名>.yaml へ複製して値を入れる。
-# 出来上がったファイルは commit する。secret 指定の値は暗号文として記録される。
+# 使いはじめるときは infra/init-stack.sh が Pulumi.<スタック名>.yaml を作る。
+# 本体と同じ名前のスタックを両方に作るので、こちらだけを別に用意しなくてよい。
+# 出来上がったファイルは commit する。
+#
+#   export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
+#   infra/init-stack.sh dev
+#
+# 手で入れる場合は次の形になる。
 #
 #   pulumi stack init dev
 #   pulumi config set githubRepository limit7412/VRCServiceStatusPanel
