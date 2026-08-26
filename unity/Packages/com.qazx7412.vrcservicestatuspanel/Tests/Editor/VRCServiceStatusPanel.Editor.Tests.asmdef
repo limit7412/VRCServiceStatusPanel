@@ -6,7 +6,8 @@
         "UnityEditor.TestRunner",
         "VRCServiceStatusPanel.Runtime",
         "UdonSharp.Runtime",
-        "VRC.Udon"
+        "VRC.Udon",
+        "VRCSDK3"
     ],
     "includePlatforms": [
         "Editor"
