@@ -2,15 +2,29 @@
 node_modules
 jspm_packages
 
-# Serverless directories
+# Pulumi へ移す前に使っていたもの。
+# 参照はしなくなったが、鍵を入れたまま残っている作業ツリーがありうる。
+# 無視を外すと未追跡として現れ、git add . で鍵ごと commit できてしまう。
+#
+# .serverless には serverless package が展開済みの環境変数を書き込んだ
+# CloudFormation のテンプレートが残る。env.yml と同じ扱いにする
+env.yml
 .serverless
 
-# 環境変数。CI では Secrets から生成する（仕様書 10）
-env.yml
+# Pulumi のビルド成果物。
+# スタックごとの値（Pulumi.<スタック名>.yaml）は commit する。
+# secret 指定の値は暗号文で入るので平文では残らない（infra/README.md）
+infra/bin
+infra/oidc/bin
 
-# Crystal のビルド成果物と依存
+# Crystal のビルド成果物と依存。
+# bootstrap.zip は backend/build.sh が作り、Pulumi がそのまま Lambda へ渡す
 backend/bootstrap
+backend/bootstrap.zip
 backend/bin
 backend/lib
+
+# Layer の zip。backend/layer/build.sh が作る
+ytdlp-layer.zip
 
 .idea/

@@ -1,4 +1,5 @@
 require "spec"
+require "../src/config"
 require "../src/status/models"
 require "../src/status/repository"
 require "../src/status/usecase"

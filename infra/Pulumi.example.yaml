@@ -1,0 +1,54 @@
+# スタックごとの値の雛形。
+#
+# 使いはじめるときは Pulumi.<スタック名>.yaml へ複製して値を入れる。
+# 出来上がったファイルは commit する。secret 指定の値は pulumi config set --secret で
+# 入れると暗号文として記録されるので、複製して手で書くよりそちらがよい。
+#
+#   pulumi stack init dev
+#   pulumi config set cloudflareAccountId <アカウントID>
+#   pulumi config set --secret cloudflare:apiToken <Cloudflareのトークン>
+#   pulumi config set --secret alertWebhookUrl <URL>
+
+config:
+  # デプロイ先。Lambda は東京に置く（仕様書 5.1）
+  aws:region: ap-northeast-1
+
+  # Cloudflare のリソースを操作するトークン。
+  # 要る権限は README の「Cloudflare の API トークン」にまとめてある。
+  # これは R2 のデータ用の鍵とも、状態の置き場所の鍵とも別物である
+  cloudflare:apiToken:
+    secure: pulumi config set --secret cloudflare:apiToken で入れる
+
+  # Cloudflare のアカウント ID。R2 のエンドポイントにも使う
+  vrc-service-status-panel:cloudflareAccountId: ""
+
+  # 配信ドメインの属するゾーンの ID と、そのホスト名（仕様書 6）
+  vrc-service-status-panel:deliveryZoneId: ""
+  vrc-service-status-panel:deliveryHost: status.example.com
+
+  # バケット名。省略すると qazx7412-vrc-service-status-panel-<スタック名>-public になる
+  # vrc-service-status-panel:publicBucket: qazx7412-vrc-service-status-panel-dev-public
+  # vrc-service-status-panel:stateBucket: qazx7412-vrc-service-status-panel-dev-state
+  vrc-service-status-panel:bucketLocation: apac
+
+  # yt-dlp と QuickJS を載せた Layer（仕様書 7.1、7.3）。
+  # backend/layer/build.sh で zip を作り、publish-layer-version で発行した
+  # 結果の ARN と、そこに入れた yt-dlp の版を入れる
+  vrc-service-status-panel:ytdlpLayerArn: ""
+  vrc-service-status-panel:ytdlpLayerVersion: ""
+
+  # 合成監視の対象（仕様書 3.3）。
+  # どちらも作者自身のもので、上流の都合で消えないものを選ぶ
+  vrc-service-status-panel:youtubeProbeVideoId: ""
+  vrc-service-status-panel:boothProbeItemId: ""
+
+  # GitHub Actions からデプロイする場合だけ入れる。
+  # infra/oidc/ を手元から流し、その workloadBoundaryArn の出力を写す。
+  # 手元からしか出さないなら書かなくてよい
+  # vrc-service-status-panel:workloadBoundaryArn: ""
+
+  # secret 指定のもの。pulumi config set --secret で入れる
+  vrc-service-status-panel:githubDispatchToken:
+    secure: pulumi config set --secret で入れる
+  vrc-service-status-panel:alertWebhookUrl:
+    secure: pulumi config set --secret で入れる
