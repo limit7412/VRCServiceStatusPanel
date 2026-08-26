@@ -55,6 +55,7 @@ Layer だけはこの規則の外にある。手で発行する不変の成果�
 
 | ファイル | 何があるか |
 | --- | --- |
+| `deploy.sh` | ビルドから `pulumi up` までをひと通り流す |
 | `index.ts` | 環境変数の組み立てと出力 |
 | `src/settings.ts` | スタックごとの設定 |
 | `src/providers.ts` | AWS プロバイダ。R2 バックエンドとの鍵の取り合いを解く |
@@ -265,6 +266,44 @@ commit してあれば、CI へ渡すのはパスフレーズひとつで済む�
 
 ## デプロイ
 
+`infra/deploy.sh` がひと通り流す。
+
+```
+infra/deploy.sh                     # 今の設定のまま作り直す
+infra/deploy.sh --ytdlp 2025.09.26  # Layer をこの版で発行し直してから流す
+```
+
+`--ytdlp` を付けたときだけ Layer を作り直す。`ytdlpLayerArn` と
+`ytdlpLayerVersion` は必ず一緒に更新されるので、片方だけ古いまま残ることがない。
+片方だけだと実行時の版の比較が食い違いを出し続ける（#8）。
+
+`--ytdlp` 以外の引数はそのまま `pulumi up` へ渡る（`--yes` など）。
+
+commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` を自分で残す。
+
+### 初回にすること
+
+スクリプトは設定が埋まっている前提で動く。最初の一回だけ手で用意する。
+
+```
+cd infra
+npm ci
+pulumi stack init dev
+pulumi config set cloudflareAccountId 32cd31ff8a5c721c0583f57a83cb731e
+# 残りは Pulumi.example.yaml を見て埋める
+# CI からデプロイするなら infra/oidc/ を先に流し、その出力を入れる
+# pulumi config set workloadBoundaryArn <infra/oidc の workloadBoundaryArn>
+
+# ARN はまだ無いので、初回は必ず版を渡す
+./deploy.sh --ytdlp 2025.09.26
+
+git add Pulumi.dev.yaml
+```
+
+### スクリプトが何をしているか
+
+手で並べると次の四つになる。詰まったときはこの順で追う。
+
 ```
 # 1. バイナリを作る（docker が要る）
 backend/build.sh
@@ -273,7 +312,6 @@ backend/build.sh
 #
 #    aws コマンドは Pulumi の写し替えを知らないため、AWS の鍵をその場で
 #    AWS_* へ移す。R2 をバックエンドにしていない場合はこの前置きは要らない。
-#    一時的な資格情報ならセッショントークンも要る。
 #
 #    --region は aws:region と同じ値にする。Layer は関数と同じリージョンに
 #    無いと結べない。CLI の既定リージョンに任せると、未設定なら止まり、
@@ -290,30 +328,18 @@ aws lambda publish-layer-version \
   --compatible-architectures arm64 \
   --query LayerVersionArn --output text
 
-# 3. 値を入れる（初回のみ）
-cd infra
-npm ci
-pulumi stack init dev
-pulumi config set cloudflareAccountId <アカウントID>
+# 3. ARN と版を入れる
 pulumi config set ytdlpLayerArn <2で得たARN>
 pulumi config set ytdlpLayerVersion 2025.09.26
-# CI からデプロイするなら infra/oidc/ を先に流し、その出力を入れる
-# pulumi config set workloadBoundaryArn <infra/oidc の workloadBoundaryArn>
-# 残りは Pulumi.example.yaml を見て埋める
 
 # 4. 反映する
 pulumi up
-
-# 5. 出来上がった Pulumi.dev.yaml を commit する
-git add Pulumi.dev.yaml
 ```
 
-`backend/build.sh` を先に走らせておくこと。
-`pulumi up` は `../backend/bootstrap.zip` を読むので、無ければそこで止まる。
+`pulumi up` は `../backend/bootstrap.zip` を読むので、1 を飛ばすとそこで止まる。
 
-Layer を発行し直したときは `ytdlpLayerArn` と `ytdlpLayerVersion` の両方を
-入れ替えてから `pulumi up` する。片方だけだと、実行時の版の比較が
-食い違いを出し続ける（#8）。
+`infra/oidc/` はこのスクリプトの対象外である。あちらは CI の権限そのものを
+決める場所で、普段は流さない（「GitHub Actions から AWS へ入る」を参照）。
 
 ## 前提: ゾーンに既存の Cache Rules が無いこと
 
