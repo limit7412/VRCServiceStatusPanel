@@ -2,10 +2,14 @@
 node_modules
 jspm_packages
 
-# Pulumi へ移す前に使っていた環境変数のファイル。
+# Pulumi へ移す前に使っていたもの。
 # 参照はしなくなったが、鍵を入れたまま残っている作業ツリーがありうる。
-# 無視を外すと未追跡として現れ、git add . で鍵ごと commit できてしまう
+# 無視を外すと未追跡として現れ、git add . で鍵ごと commit できてしまう。
+#
+# .serverless には serverless package が展開済みの環境変数を書き込んだ
+# CloudFormation のテンプレートが残る。env.yml と同じ扱いにする
 env.yml
+.serverless
 
 # Pulumi。スタックごとの値は Secrets から組み立てる（infra/Pulumi.example.yaml）
 infra/Pulumi.*.yaml

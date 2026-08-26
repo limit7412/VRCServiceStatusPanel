@@ -101,10 +101,17 @@ backend/build.sh
 #
 #    aws コマンドは Pulumi の写し替えを知らないため、AWS の鍵をその場で
 #    AWS_* へ移す。R2 をバックエンドにしていない場合はこの前置きは要らない。
+#    一時的な資格情報ならセッショントークンも要る。
+#
+#    --region は aws:region と同じ値にする。Layer は関数と同じリージョンに
+#    無いと結べない。CLI の既定リージョンに任せると、未設定なら止まり、
+#    別のリージョンなら pulumi up まで気づけない。
 backend/layer/build.sh 2025.09.26
 AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID" \
 AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY" \
+AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN" \
 aws lambda publish-layer-version \
+  --region ap-northeast-1 \
   --layer-name vrc-service-status-panel-ytdlp \
   --zip-file fileb://ytdlp-layer.zip \
   --compatible-runtimes provided.al2023 \
