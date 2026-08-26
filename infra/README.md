@@ -116,14 +116,22 @@ R2 は `アカウント全体` にする。`R2 バケット` を選ぶとバケ�
 
 R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 
-置き場所は先に作っておく。Pulumi の DIY バックエンドはバケットを作らず、
-既にあるものを指すだけである。トークンを絞るときの候補にも、作ってからでないと
-出てこない。順番は、バケット、トークン、`pulumi login` になる。
+置き場所は `Pulumi.yaml` の `backend.url` で固定してある。`infra/` と
+`infra/oidc/` の両方に同じ URL が書いてあり、バケットは
+`qazx7412-vrc-service-status-panel-pulumi-state` ひとつを共有する。
+プロジェクトとスタックで別のパスに入るので、混ざらない。
 
-**この state 用バケットは、`index.ts` が作る内部バケットとは別物である。**
-`status-state-<スタック名>` のほうは集約サーバーが使うもので（仕様書 6）、
-Pulumi が管理する。同じ名前にすると、Pulumi が自分の state の入っている
-バケットを作ろうとして衝突する。`pulumi-state` のようにはっきり分けること。
+```yaml
+backend:
+  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
+```
+
+ここで固定するのは、バックエンドがスタックより先に決まるためである。
+`Pulumi.<スタック名>.yaml` の設定はバックエンドが決まってからでないと読めないので、
+置き場所を書く先にはならない。`endpoint` にはスキームを付ける。ホスト名だけだと
+接続先の URL として解決されない。
+
+**`pulumi login` は要らない。** 手元でも CI でも、要るのは R2 の鍵だけである。
 
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
@@ -131,14 +139,19 @@ export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
 # 一時的な AWS の資格情報を使っていたシェルなら、これを消す。
 # 残っていると R2 への署名に AWS のセッショントークンが混ざって認証に失敗する
 unset AWS_SESSION_TOKEN
-pulumi login 's3://<状態用バケット>?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto'
 ```
 
-`endpoint` にはスキームを付ける。ホスト名だけだと接続先の URL として解決されない。
+バケットは先に手で作っておく。Pulumi の DIY バックエンドはバケットを作らず、
+既にあるものを指すだけである。トークンを絞るときの候補にも、作ってからでないと
+出てこない。順番は、バケット、トークン、`pulumi up` になる。
 
-この状態用バケットだけは Pulumi の管理外に置き、手で作る。
-自分の状態を自分で管理させると、作る前に置き場所が要ることになる。
-場所はどこでもよい。中身は state の JSON だけである。
+このバケットだけは Pulumi の管理外に置く。自分の状態を自分で管理させると、
+作る前に置き場所が要ることになる。場所はどこでもよい。中身は state の JSON だけである。
+
+**`index.ts` が作る内部バケットとは別物である。**
+`status-state-<スタック名>` のほうは集約サーバーが使うもので（仕様書 6）、
+Pulumi が管理する。名前を分けてあるのはそのためで、同じにすると Pulumi が
+自分の state の入っているバケットを作ろうとして衝突する。
 
 鍵も手で作る。上の API トークンとは別物で、こちらは R2 のページから発行する。
 「R2 object storage → Account Details → API Tokens → Manage → Create Account API token」。
@@ -233,6 +246,9 @@ aws lambda publish-layer-version \
   --query LayerVersionArn --output text
 
 # 3. 値を入れる（初回のみ）
+#
+#    Pulumi.yaml の backend.url の <アカウントID> を先に埋めておく。
+#    置き場所が決まらないとスタックを作れない。
 cd infra
 npm ci
 pulumi stack init dev
@@ -357,12 +373,6 @@ permissions:
   id-token: write   # OIDC のトークンを発行させる。既定では付かない
   contents: read
 
-env:
-  # まっさらなランナーには pulumi の資格情報ファイルが無い。
-  # 指定しないと既定の Pulumi Cloud を見に行って認証で止まる。
-  # pulumi login を別に走らせる代わりに、これで置き場所を指す
-  PULUMI_BACKEND_URL: s3://<状態用バケット>?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
-
 steps:
   - id: aws
     uses: aws-actions/configure-aws-credentials@v4
@@ -395,8 +405,9 @@ steps:
 `output-env-credentials: false` が使えない版なら、pulumi のステップで
 `AWS_SESSION_TOKEN: ""` を明示しても同じことになる。
 
-`pulumi config set` を並べるステップは要らない。設定は checkout した
-`Pulumi.<スタック名>.yaml` にそろっている。
+`pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
+置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
+どちらも checkout した時点でそろっている。
 
 デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
 
