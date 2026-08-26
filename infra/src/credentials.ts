@@ -12,7 +12,8 @@ import { cloudflareAccountId, prefix } from "./settings";
 
 // R2 のトークンで選べるのは Admin Read & Write、Admin Read only、
 // Object Read & Write、Object Read only の四つで、書き込みのみの段階は無い。
-// S3 互換 API から使えるのは Object 系だけなので、書ける最小の権限がこれになる。
+// 書けるのは Admin Read & Write と Object Read & Write の二つで、Object 系だけが
+// バケット単位に絞れる。S3 互換 API での読み書きしか要らないので、狭いほうを選ぶ。
 //
 // 読み取りが付くのは避けられないが、内部バケットは毎回読む（仕様書 5.2 の手順 4）
 // ため、どちらにせよ要る。

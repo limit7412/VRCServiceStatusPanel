@@ -122,9 +122,13 @@ Pulumi が発行するトークンは、配信バケットと内部バケット�
 **Object Read & Write** である（仕様書 9）。
 
 R2 のトークンに「書き込みのみ」の段階は無い。選べるのは Admin Read & Write、
-Admin Read only、Object Read & Write、Object Read only の四つで、S3 互換 API から
-使えるのは Object 系の二つに限られる。書けるトークンは Object Read & Write だけで、
-読み取りが必ず伴う。
+Admin Read only、Object Read & Write、Object Read only の四つで、書けるのは
+Admin Read & Write と Object Read & Write の二つである。どちらも読み取りを伴う。
+
+その二つのうち Object 系を選ぶのは、バケット単位に絞れるためである。Admin 系は
+絞れず、アカウントの R2 全体に届く。そのかわり Admin 系は Cloudflare の REST API
+でも使えるのに対し、Object 系は S3 互換 API 専用で、REST API へ使うと 401 か 403 に
+なる。集約サーバーが要るのは S3 互換 API での読み書きだけなので、狭いほうで足りる。
 
 読み取りはどちらにせよ要る。内部バケットは、前回の状態を引き継ぐために毎回読む
 （仕様書 5.2 の手順 4）。配信バケットの内容は CDN から誰でも読めるので、そこに
