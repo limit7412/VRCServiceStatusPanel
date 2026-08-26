@@ -30,6 +30,21 @@ case "$stack" in
         ;;
 esac
 
+# 名前の規則は infra/src/settings.ts と infra/oidc/index.ts に合わせる。
+# ここで弾かないと、二つのスタックと十四の設定を作ったあと pulumi up が
+# 名前の検証で必ず止まる。使えないスタックだけが残る。
+MAX_STACK_NAME=16
+
+if ! printf '%s' "$stack" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+    echo "スタック名 \"$stack\" は物理名に使えない。小文字、数字、ハイフンだけで、先頭と末尾は小文字か数字にする" >&2
+    exit 2
+fi
+
+if [ "${#stack}" -gt "$MAX_STACK_NAME" ]; then
+    echo "スタック名 \"$stack\" が長い（${#stack} 文字）。${MAX_STACK_NAME} 文字までにする" >&2
+    exit 2
+fi
+
 if ! command -v pulumi > /dev/null 2>&1; then
     echo "pulumi が無い。https://www.pulumi.com/docs/install/ から入れる" >&2
     exit 1
@@ -42,9 +57,24 @@ if [ -z "${PULUMI_CONFIG_PASSPHRASE:-}" ] && [ -z "${PULUMI_CONFIG_PASSPHRASE_FI
     exit 1
 fi
 
-# 一問だけ聞く。既定があれば、空の答えはそれで埋める。
+# 入力が尽きたら止める。省略ではなく中断だからである。
+# 省略できない値を聞いている途中で Ctrl-D を押されたときに、
+# 同じ警告を出し続ける無限ループにならないようにする。
+abort_on_eof() {
+    printf '\n' >&2
+    echo "入力が尽きたので中断する。作りかけのスタックは pulumi stack rm $stack で消せる" >&2
+    exit 1
+}
+
+# 一問だけ聞く。答えは ANSWER に入れる。既定があれば、空の答えはそれで埋める。
+# EOF なら 1 を返す。呼び出し側は abort_on_eof で止める。
+#
+# 秘密の値は端末へ出さない。履歴に残らなくても、打っている最中の画面と
+# セッションの録画には残るためである。
 ask() {
-    local label="$1" default="${2:-}" answer=""
+    local label="$1" default="${2:-}" hidden="${3:-}"
+
+    ANSWER=""
 
     if [ -n "$default" ]; then
         printf '%s [%s]: ' "$label" "$default" >&2
@@ -52,45 +82,54 @@ ask() {
         printf '%s: ' "$label" >&2
     fi
 
-    read -r answer || answer=""
-    [ -n "$answer" ] || answer="$default"
-    printf '%s' "$answer"
+    if [ -n "$hidden" ]; then
+        # -s は改行を出さないので、こちらで出す
+        read -rs ANSWER || return 1
+        printf '\n' >&2
+    else
+        read -r ANSWER || return 1
+    fi
+
+    [ -n "$ANSWER" ] || ANSWER="$default"
+    return 0
 }
 
 # 省略できない値。空で返ってきたら聞き直す。
 set_required() {
-    local dir="$1" key="$2" label="$3" default="${4:-}" answer=""
+    local dir="$1" key="$2" label="$3" default="${4:-}"
 
-    while [ -z "$answer" ]; do
-        answer=$(ask "$label" "$default")
-        [ -n "$answer" ] || echo "  ここは省略できない" >&2
+    while :; do
+        ask "$label" "$default" || abort_on_eof
+        [ -n "$ANSWER" ] && break
+        echo "  ここは省略できない" >&2
     done
 
-    pulumi -C "$dir" config set --stack "$stack" "$key" "$answer"
+    pulumi -C "$dir" config set --stack "$stack" "$key" "$ANSWER"
 }
 
 # 省略できる値。空なら設定へ書かない。
 set_optional() {
-    local dir="$1" key="$2" label="$3" default="${4:-}" answer=""
+    local dir="$1" key="$2" label="$3" default="${4:-}"
 
-    answer=$(ask "$label" "$default")
-    if [ -z "$answer" ]; then
+    ask "$label" "$default" || abort_on_eof
+    if [ -z "$ANSWER" ]; then
         return 0
     fi
 
-    pulumi -C "$dir" config set --stack "$stack" "$key" "$answer"
+    pulumi -C "$dir" config set --stack "$stack" "$key" "$ANSWER"
 }
 
-# 秘密の値。標準入力から渡して暗号文として記録する。
+# 秘密の値。打っている最中も画面に出さず、標準入力から渡して暗号文として記録する。
 set_secret() {
-    local dir="$1" key="$2" label="$3" answer=""
+    local dir="$1" key="$2" label="$3"
 
-    while [ -z "$answer" ]; do
-        answer=$(ask "$label")
-        [ -n "$answer" ] || echo "  ここは省略できない" >&2
+    while :; do
+        ask "$label" "" hidden || abort_on_eof
+        [ -n "$ANSWER" ] && break
+        echo "  ここは省略できない" >&2
     done
 
-    printf '%s' "$answer" | pulumi -C "$dir" config set --stack "$stack" --secret "$key"
+    printf '%s' "$ANSWER" | pulumi -C "$dir" config set --stack "$stack" --secret "$key"
 }
 
 create_stack() {
@@ -104,9 +143,9 @@ echo "=== $stack を作る ==="
 create_stack "$here"
 create_stack "$here/oidc"
 
-region=$(ask "AWS のリージョン（仕様書 5.1）" "ap-northeast-1")
-pulumi -C "$here" config set --stack "$stack" aws:region "$region"
-pulumi -C "$here/oidc" config set --stack "$stack" aws:region "$region"
+ask "AWS のリージョン（仕様書 5.1）" "ap-northeast-1" || abort_on_eof
+pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
+pulumi -C "$here/oidc" config set --stack "$stack" aws:region "$ANSWER"
 
 echo
 echo "--- Cloudflare（仕様書 6） ---"
@@ -135,16 +174,20 @@ echo "--- GitHub Actions からの入口（仕様書 9.1） ---"
 set_required "$here/oidc" githubRepository "デプロイを許すリポジトリ" "limit7412/VRCServiceStatusPanel"
 set_optional "$here/oidc" githubOidcProviderArn "既にある OIDC プロバイダの ARN（無ければ空のまま）"
 
+# 案内は絶対パスで出す。README の手順は infra/ から実行するので、
+# infra/oidc のような相対パスを出すと、そこからは infra/infra/oidc を指してしまう。
 echo
 echo "=== ここまでで出来たもの ==="
-echo "  infra/Pulumi.$stack.yaml"
-echo "  infra/oidc/Pulumi.$stack.yaml"
+echo "  $here/Pulumi.$stack.yaml"
+echo "  $here/oidc/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
 echo "  1. 二つの Pulumi.$stack.yaml を commit する（#12）"
-echo "  2. pulumi -C infra/oidc up で入口と権限境界を作る"
+echo "  2. 入口と権限境界を作る"
+echo "       pulumi -C $here/oidc up"
 echo "  3. その workloadBoundaryArn を本体へ入れる"
-echo "       pulumi -C infra/oidc stack output workloadBoundaryArn"
-echo "       pulumi -C infra config set --stack $stack workloadBoundaryArn <出力された ARN>"
-echo "  4. infra/deploy.sh --ytdlp <版> で Layer を発行し、本体を流す"
+echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
+echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
+echo "  4. Layer を発行して本体を流す"
+echo "       $here/deploy.sh --ytdlp <版>"
 echo "  5. PULUMI_CONFIG_PASSPHRASE を GitHub の Secrets へ登録する"
