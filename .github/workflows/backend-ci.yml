@@ -5,10 +5,9 @@ name: backend ci
 # 仕様書 10 のとおり、ワークフローはリポジトリ直下に置き、Crystal のコマンドは
 # backend/ を作業ディレクトリにして走らせる。
 #
-# パスによる絞り込みはしない。`on` の `paths` フィルタで起動しなかった
-# ワークフローはチェックランを作らず、required status check に指定すると
-# PR がマージできなくなるためで、これは unity 側の test.yml と同じ理由による。
-# このジョブは Unity を使わずライセンスも要らないので、常に走らせても軽い。
+# backend/ に触れていない変更では検査をスキップする。
+# 判定は `on` の `paths` フィルタではなく `changes` ジョブと `if` で行う
+# （理由は .github/actions/changed-paths/action.yml に記述）。
 
 on:
   push:
@@ -17,6 +16,8 @@ on:
 
 permissions:
   contents: read
+  # 変更ファイルの一覧を Pull Requests API から取得するために必要
+  pull-requests: read
 
 env:
   # ameba のコミット固定と噛み合う版に揃える。
@@ -24,8 +25,31 @@ env:
   CRYSTAL_VERSION: 1.21.0
 
 jobs:
+  # 変更が対象に触れているかを判定する。判定の中身と、`on` の `paths` を
+  # 使わない理由は .github/actions/changed-paths/action.yml に書いてある。
+  changes:
+    name: Check changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.check.outputs.relevant }}
+    steps:
+      # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
+      - uses: actions/checkout@v7
+
+      - id: check
+        uses: ./.github/actions/changed-paths
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          label: backend の検査
+          patterns: |
+            backend/*
+            .github/workflows/backend-ci.yml
+            .github/actions/changed-paths/*
+
   check:
     name: format / lint / spec
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     # Lambda の実行環境が arm64 なので、CI も同じ命令セットで回す。
     runs-on: ubuntu-24.04-arm
     defaults:

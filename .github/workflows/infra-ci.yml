@@ -2,9 +2,9 @@ name: infra ci
 
 # デプロイ定義（infra/ と infra/oidc/）の型検査を実行する。
 #
-# パスによる絞り込みはしない。`on` の `paths` フィルタで起動しなかった
-# ワークフローはチェックランを作らず、required status check に指定すると
-# PR がマージできなくなるためで、これは backend-ci.yml と同じ理由による。
+# infra/ に触れていない変更では型検査をスキップする。
+# 判定は `on` の `paths` フィルタではなく `changes` ジョブと `if` で行う
+# （理由は .github/actions/changed-paths/action.yml に記述）。
 #
 # pulumi preview はここでは走らせない。AWS と Cloudflare の資格情報が要り、
 # 差分を見るだけでも実在のアカウントへ触れることになる。型検査までを CI に置き、
@@ -17,10 +17,35 @@ on:
 
 permissions:
   contents: read
+  # 変更ファイルの一覧を Pull Requests API から取得するために必要
+  pull-requests: read
 
 jobs:
+  # 変更が対象に触れているかを判定する。判定の中身と、`on` の `paths` を
+  # 使わない理由は .github/actions/changed-paths/action.yml に書いてある。
+  changes:
+    name: Check changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.check.outputs.relevant }}
+    steps:
+      # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
+      - uses: actions/checkout@v7
+
+      - id: check
+        uses: ./.github/actions/changed-paths
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          label: infra の型検査
+          patterns: |
+            infra/*
+            .github/workflows/infra-ci.yml
+            .github/actions/changed-paths/*
+
   check:
     name: typecheck
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-24.04
     defaults:
       run:
