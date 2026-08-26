@@ -14,8 +14,8 @@ config:
   aws:region: ap-northeast-1
 
   # Cloudflare のリソースを操作するトークン。
-  # R2 の編集、ゾーンの Cache Rules の編集、トークンの発行が要る。
-  # これは R2 のデータ用の鍵とは別物で、そちらは Pulumi が発行する
+  # 要る権限は README の「Cloudflare の API トークン」にまとめてある。
+  # これは R2 のデータ用の鍵とも、状態の置き場所の鍵とも別物である
   cloudflare:apiToken:
     secure: pulumi config set --secret cloudflare:apiToken で入れる
 

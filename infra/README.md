@@ -68,7 +68,7 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 
 - Pulumi CLI
 - AWS の資格情報（`aws configure` などで解決できる状態）
-- Cloudflare の API トークン。R2 の編集、ゾーンの Cache Rules の編集、トークンの発行の三つが要る
+- Cloudflare の API トークン（下記）
 - 状態の置き場所にする R2 バケット（下記）
 
 GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く必要はない。
@@ -76,6 +76,32 @@ GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く�
 （「GitHub Actions から AWS へ入る」を参照）。
 
 R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そのまま Lambda へ渡す。
+
+### Cloudflare の API トークン
+
+「My Profile → API Tokens → Create Token → Create Custom Token」で作る。
+必要な権限は五つある。
+
+| スコープ | 権限 | 何のため |
+| --- | --- | --- |
+| Account | Workers R2 Storage : Edit | バケットの作成、削除、設定の変更 |
+| Account | Account API Tokens : Edit | R2 のデータ用トークンを発行する |
+| Account | Account Rulesets : Edit | Cache Rules |
+| Account | Account Filter Lists : Edit | Cache Rules |
+| Zone | Cache Rules : Edit | Cache Rules |
+
+Cache Rules の三つは
+[公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)が
+挙げている組み合わせである。Account Filter Lists まで要るかは確かめていない。
+
+リソースの指定は絞る。Zone は配信ドメインのゾーンひとつ、Account も対象のアカウント
+だけにする。
+
+**Account API Tokens : Edit の重さは把握しておくこと。** これはトークンを作る権限で
+あり、持たせた相手はアカウント内の任意の権限を持つトークンを発行できる。実質的に
+管理者相当である。R2 のデータ用トークンを Pulumi に発行させる以上は避けられないが、
+[IP 制限や TTL](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/)
+で使える範囲を狭められる。
 
 ## 状態の置き場所
 
@@ -94,6 +120,12 @@ pulumi login 's3://<状態用バケット>?endpoint=https://<アカウントID>.
 
 この状態用バケットだけは Pulumi の管理外に置き、手で作る。
 自分の状態を自分で管理させると、作る前に置き場所が要ることになる。
+
+鍵も手で作る。上の API トークンとは別物で、こちらは R2 のページから発行する。
+「R2 object storage → Account Details → API Tokens → Manage → Create Account API token」。
+権限は **Object Read & Write**、スコープは状態用バケットひとつに絞る。
+Object 系のトークンは S3 互換 API でしか使えないが、DIY バックエンドが叩くのは
+そちらなので足りる。Secret Access Key は作成直後の一度しか表示されない。
 
 鍵は state の中で暗号化される。DIY バックエンドではパスフレーズから鍵を導くので、
 `PULUMI_CONFIG_PASSPHRASE` を無くすと state を読めなくなる。控えておくこと。
