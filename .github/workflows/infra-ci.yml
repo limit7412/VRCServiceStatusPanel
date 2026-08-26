@@ -1,6 +1,6 @@
 name: infra ci
 
-# デプロイ定義（infra/）の型検査を実行する。
+# デプロイ定義（infra/ と infra/oidc/）の型検査を実行する。
 #
 # パスによる絞り込みはしない。`on` の `paths` フィルタで起動しなかった
 # ワークフローはチェックランを作らず、required status check に指定すると
@@ -35,7 +35,9 @@ jobs:
           # Pulumi の nodejs ランタイムが対応する LTS に合わせる。
           node-version: 22
           cache: npm
-          cache-dependency-path: infra/package-lock.json
+          cache-dependency-path: |
+            infra/package-lock.json
+            infra/oidc/package-lock.json
 
       # ci にするのは package-lock.json のとおりに入れるため。
       # install だと lock を書き換えてしまい、検証した組み合わせと変わる。
@@ -44,3 +46,14 @@ jobs:
 
       - name: typecheck
         run: npm run typecheck
+
+      # infra/oidc/ は独立した Pulumi プロジェクトで、依存も lock も別に持つ。
+      # ジョブを分けないのは、名前の変わったチェックランが
+      # required status check の指定から外れてしまうためである。
+      - name: install (oidc)
+        run: npm ci
+        working-directory: infra/oidc
+
+      - name: typecheck (oidc)
+        run: npm run typecheck
+        working-directory: infra/oidc

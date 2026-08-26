@@ -7,19 +7,45 @@ AWS と Cloudflare を一つの Pulumi プログラムにまとめている。
 R2 のバケット名も、トークンから導いた鍵も、そのまま Lambda の環境変数になる。
 分けて書くと、その受け渡しを人が写すことになり、鍵を替えたときに写し忘れる。
 
+## 二つのプロジェクト
+
+| ディレクトリ | 何を持つか | 誰が流すか |
+| --- | --- | --- |
+| `infra/` | 配信経路と集約サーバー。毎回のデプロイで動く | 手元 / CI |
+| `infra/oidc/` | CI の入口と、実行時ロールの上限 | 手元だけ |
+
+分けてあるのは、`infra/oidc/` が CI の権限そのものを決める場所だからである。
+同じプログラムに置くと、CI が自分を縛っている境界を書き換えられることになり、
+境界も入口も意味を失う。
+
+`infra/oidc/` は普段は動かさない。CI を用意するとき、権限を変えるとき、
+`sub` の条件を足すときにだけ、手元から流す。
+
 ## 何を作るか
+
+`infra/`
 
 | 対象 | リソース | 仕様書 |
 | --- | --- | --- |
-| 配信バケット（既定 `status-public`） | `cloudflare.R2Bucket` | 6 |
-| 内部バケット（既定 `status-state`） | `cloudflare.R2Bucket` | 6 |
+| 配信バケット（既定 `status-public-<スタック名>`） | `cloudflare.R2Bucket` | 6 |
+| 内部バケット（既定 `status-state-<スタック名>`） | `cloudflare.R2Bucket` | 6 |
 | `/v1/` 以下の Cache Rules | `cloudflare.Ruleset` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
-| GitHub Actions 用の OIDC とロール（任意） | `aws.iam.OpenIdConnectProvider` / `aws.iam.Role` | — |
+
+`infra/oidc/`
+
+| 対象 | リソース | 仕様書 |
+| --- | --- | --- |
+| GitHub Actions 用の OIDC プロバイダ | `aws.iam.OpenIdConnectProvider` | — |
+| デプロイロールとその権限 | `aws.iam.Role` / `aws.iam.RolePolicy` | — |
 | 実行時ロールの権限境界 | `aws.iam.Policy` | — |
+
+バケット名の既定にスタック名が入るのは、同じアカウントで `dev` と `prod` を
+並べたときに名前がぶつかるためである。決めた名前を使いたければ
+`publicBucket` と `stateBucket` で明示する。
 
 カスタムドメインは作らない。理由は下の「手で行う作業」にある。
 
@@ -46,7 +72,8 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 - 状態の置き場所にする R2 バケット（下記）
 
 GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く必要はない。
-OIDC のロールを作る（「GitHub Actions から AWS へ入る」を参照）。
+`infra/oidc/` を手元から一度流し、OIDC のロールを作る
+（「GitHub Actions から AWS へ入る」を参照）。
 
 R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そのまま Lambda へ渡す。
 
@@ -57,6 +84,9 @@ R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
 export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
+# 一時的な AWS の資格情報を使っていたシェルなら、これを消す。
+# 残っていると R2 への署名に AWS のセッショントークンが混ざって認証に失敗する
+unset AWS_SESSION_TOKEN
 pulumi login 's3://<状態用バケット>?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto'
 ```
 
@@ -128,6 +158,8 @@ pulumi stack init dev
 pulumi config set cloudflareAccountId <アカウントID>
 pulumi config set ytdlpLayerArn <2で得たARN>
 pulumi config set ytdlpLayerVersion 2025.09.26
+# CI からデプロイするなら infra/oidc/ を先に流し、その出力を入れる
+# pulumi config set workloadBoundaryArn <infra/oidc の workloadBoundaryArn>
 # 残りは Pulumi.example.yaml を見て埋める
 
 # 4. 反映する
@@ -166,12 +198,20 @@ pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rul
 
 ## GitHub Actions から AWS へ入る
 
-`githubRepository` を設定すると、OIDC のプロバイダとデプロイ用のロールを作る。
-長い寿命の鍵を Secrets へ置かずに済む。設定しなければ何も作らない。
+入口は `infra/oidc/` にある。**このプロジェクトは手元からだけ流す。**
+長い寿命の鍵を Secrets へ置かずに済む。CI を使わないなら流さなくてよい。
 
 ```
+cd infra/oidc
+npm ci
+pulumi stack init dev            # 本体と同じスタック名にする
 pulumi config set githubRepository limit7412/VRCServiceStatusPanel
+pulumi up
 ```
+
+スタック名は本体と揃える。ロール名も境界も本体のスタック名から組み立てており、
+名前が揃っていないと権限の範囲がずれる。揃えられない事情があるときだけ
+`targetStack` に本体のスタック名を入れる。
 
 アカウントに GitHub の OIDC プロバイダを既に置いてある場合は、その ARN を渡す。
 プロバイダはアカウントに一つしか置けない。
@@ -180,19 +220,37 @@ pulumi config set githubRepository limit7412/VRCServiceStatusPanel
 pulumi config set githubOidcProviderArn arn:aws:iam::<アカウント>:oidc-provider/token.actions.githubusercontent.com
 ```
 
+### 本体へ渡すもの
+
+`infra/oidc/` の出力を二つ使う。
+
+```
+pulumi stack output workloadBoundaryArn   # 本体の設定に入れる
+pulumi stack output githubDeployRoleArn   # GitHub の Secrets に入れる
+```
+
+```
+cd ../
+pulumi config set workloadBoundaryArn <上で得たARN>
+```
+
+`workloadBoundaryArn` を入れないと、実行ロールに境界が付かない。手元から流す分には
+それでも通るが、CI からは通らない。デプロイロールは境界の付いたロールしか作れず、
+`CreateRole` がそこで止まる。
+
 ### 順番
 
-ロールは、そのロールを作る `pulumi up` より後にしか存在しない。
-最初の一回は手元の資格情報で実行する。以降は CI から引ける。
+境界とロールが先である。本体の `pulumi up` は境界の ARN を要求するだけで、
+それを作りはしない。
 
-```
-pulumi up                              # 手元で一度
-pulumi stack output githubDeployRoleArnOut
-```
+1. `infra/oidc/` を手元から流す
+2. 出力を本体の `workloadBoundaryArn` と GitHub の Secrets へ写す
+3. 本体を流す（一度目は手元から。以降は CI から引ける）
 
 ### 誰が引けるか
 
 既定は master への push に限る。広げるときは `githubDeploySubjects` に並べる。
+これも `infra/oidc/` の設定である。
 
 ```
 pulumi config set --path githubDeploySubjects[0] 'repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master'
@@ -255,21 +313,20 @@ steps:
 
 ### ロールの権限
 
-このスタックが触る範囲だけを与えてある。名前の頭で絞っているので、同じアカウントの
-他のリソースへは届かない。
+本体のスタックが触る範囲だけを与えてある。名前の頭で絞っているので、同じアカウントの
+他のリソースへは届かない。スタック名まで含めて絞ってあり、`dev` のデプロイロールから
+`prod` のロールや関数へは手が伸びない。
 
-ただし `vrc-service-status-panel-*` にはこのロール自身も含まれるため、権限を書き換えて
-広げられてしまう。それを塞ぐ Deny を入れてある。読み取りは残してあり、Pulumi が
-毎回このロールの差分を見られる。**このロール自体を変えるときは手元から `pulumi up` する。**
+ただし `vrc-service-status-panel-<スタック名>-*` にはこのロール自身も含まれるため、
+権限を書き換えて広げられてしまう。それを塞ぐ Deny を入れてある。読み取りは残してある。
 
-OIDC プロバイダも読み取りだけにしてある。プロバイダはアカウントに一つしかなく、
-他のリポジトリも使っている可能性がある。CI から書き換えさせると巻き添えが出る。
-プロバイダを変えるときも手元から実行する。
+OIDC のプロバイダ、デプロイロール、権限境界のどれも本体には無い。CI が流すのは本体
+だけなので、CI からはこれらに触れられない。**変えるときは `infra/oidc/` を手元から流す。**
 
 ### 実行時ロールの権限境界
 
-名前で絞るだけでは足りない。`vrc-service-status-panel-*` には Lambda の実行ロールも
-入るので、次の順で昇格できてしまう。
+名前で絞るだけでは足りない。`vrc-service-status-panel-<スタック名>-*` には Lambda の
+実行ロールも入るので、次の順で昇格できてしまう。
 
 1. デプロイロールで実行ロールへ任意のポリシーを足す
 2. `lambda:UpdateFunctionCode` でコードを差し替える
@@ -287,11 +344,13 @@ OIDC プロバイダも読み取りだけにしてある。プロバイダはア
 
 デプロイロールの側も合わせてある。
 
-- ロールを作る・書き換える操作は、`iam:PermissionsBoundary` がこの境界と一致する場合だけ許す。境界の無いロールは作れない
+- `iam:CreateRole` と `iam:PutRolePermissionsBoundary` は、要求に入る境界がこの境界と一致する場合だけ許す。境界の無いロールは作れない
+- `iam:PutRolePolicy` などポリシーを足し引きする操作も、相手のロールにこの境界が付いている場合だけ許す
+- `iam:DeleteRole` と `iam:UpdateAssumeRolePolicy` には条件を掛けない。この二つは `iam:PermissionsBoundary` の対象に入っておらず、掛けると Allow が成立しなくなる。境界の無いロールはそもそも作れないので、ここへ届く相手はどれも境界付きである
 - `iam:DeleteRolePermissionsBoundary` を Deny する。境界を外す道を塞ぐ
-- 境界そのもの（`aws.iam.Policy`）は読み取りだけ。中身を書き換える操作は Deny する
+- 境界そのもの（`aws.iam.Policy`）は本体に無い。書き換える操作は明示的に Deny してもある
 
-**境界を変えるときは手元から `pulumi up` する。** デプロイロール自身と同じ扱いである。
+**境界を変えるときは `infra/oidc/` を手元から流す。** デプロイロール自身と同じ扱いである。
 
 なお、関数の環境変数に入る R2 の鍵はこの境界の外にある。コードを差し替えられれば
 その鍵は使われる。境界が抑えるのは AWS 側の権限であって、関数が持つ資格情報ではない。
@@ -302,8 +361,8 @@ OIDC プロバイダも読み取りだけにしてある。プロバイダはア
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
 
 繋ぐ先のバケット名は `pulumi stack output publicBucketOut` で確かめる。
-`publicBucket` を既定から変えている場合、`status-public` は別のバケットか、
-そもそも存在しない。
+既定のままなら `status-public-<スタック名>` である。`publicBucket` を
+設定している場合はその名前になる。
 
 Pulumi に載せていないのは、`cloudflare_r2_custom_domain` に、作成の約一分後に
 `enabled` が `false` へ戻る不具合があるためである
@@ -318,4 +377,13 @@ Pulumi の Cloudflare プロバイダは同じ Terraform プロバイダを包�
 ```
 npm run typecheck   # tsc --noEmit
 pulumi preview      # 差分を見る
+```
+
+`infra/oidc/` も同じである。別の Pulumi プロジェクトなので、`npm ci` も
+`pulumi stack` も別に持つ。
+
+```
+cd oidc
+npm ci
+npm run typecheck
 ```

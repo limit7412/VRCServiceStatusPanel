@@ -1,0 +1,35 @@
+name: vrc-service-status-panel-oidc
+runtime:
+  name: nodejs
+  options:
+    packagemanager: npm
+description: GitHub Actions の入口と実行時ロールの上限。手元からだけ流す
+
+# 値はスタックごとの Pulumi.<スタック名>.yaml に入れる。
+# 雛形は Pulumi.example.yaml にある。
+config:
+  githubRepository:
+    type: string
+    description: デプロイを許すリポジトリ（owner/repo）
+  # ここから下は任意。既定値を置いてあるのは、宣言した設定に既定が無いと
+  # 未設定のときに pulumi が止まるためである。空文字を未設定として扱う。
+  targetStack:
+    type: string
+    default: ""
+    description: |
+      権限を渡す相手の本体スタック名。
+      空ならこのスタックと同じ名前を使う
+  githubOidcProviderArn:
+    type: string
+    default: ""
+    description: |
+      既にアカウントへ置いてある GitHub の OIDC プロバイダの ARN。
+      空なら新しく作る。プロバイダはアカウントに一つしか置けない
+  githubDeploySubjects:
+    type: array
+    items:
+      type: string
+    default: []
+    description: |
+      ロールを引ける JWT の sub。空なら master への push のみ。
+      例: repo:owner/repo:ref:refs/heads/master

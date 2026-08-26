@@ -16,10 +16,23 @@ const prefix = `vrc-service-status-panel-${stack}`;
 const cloudflareAccountId = config.require("cloudflareAccountId");
 const deliveryZoneId = config.require("deliveryZoneId");
 const deliveryHost = config.require("deliveryHost");
-const publicBucketName = config.get("publicBucket") ?? "status-public";
-const stateBucketName = config.get("stateBucket") ?? "status-state";
+// 既定にスタック名を入れる。同じアカウントで dev と prod を並べたとき、
+// 名前が同じだと後から作るほうが既存のバケットとぶつかり、通ってしまえば
+// 配信も内部の記録も互いに上書きし合う。
+// 名前を決めたい場合は publicBucket / stateBucket で明示する。
+const publicBucketName = config.get("publicBucket") || `status-public-${stack}`;
+const stateBucketName = config.get("stateBucket") || `status-state-${stack}`;
 const bucketLocation = config.get("bucketLocation") ?? "apac";
 const ytdlpLayerArn = config.require("ytdlpLayerArn");
+
+// 実行時ロールに付ける上限。infra/oidc/ が作り、その出力をここへ入れる。
+//
+// 上限を決める場所を CI の届かないところへ置きたいので、本体では作らない。
+// 同じプログラムに置くと、CI が自分を縛っている上限を書き換えられる。
+//
+// 手元からしかデプロイしないなら空でよい。CI からデプロイする場合は、
+// デプロイロールが境界付きのロールしか作れないため、空だと CreateRole で止まる。
+const workloadBoundaryArn = config.get("workloadBoundaryArn") || undefined;
 const ytdlpLayerVersion = config.require("ytdlpLayerVersion");
 
 // ---------------------------------------------------------------------------
@@ -225,56 +238,11 @@ const FUNCTIONS: FunctionSpec[] = [
     },
 ];
 
-// OIDC のロールは任意なので、作られなければ未定義のまま出力する。
-let githubDeployRoleArn: pulumi.Output<string> | undefined;
-
-// 実行時のロールに付ける権限境界。
-//
-// 境界は上限であって付与ではない。ここに無いものは、ロールのポリシーで
-// 許しても効かない。デプロイロールが乗っ取られて実行ロールへ強い権限を
-// 足しても、この上限を超えられない。
-//
-// これが無いと次の順で昇格できる。
-//   1. デプロイロールで実行ロールへ任意のポリシーを足す
-//   2. lambda:UpdateFunctionCode でコードを差し替える
-//   3. 次の起動でその権限のまま動く
-const awsAccountId = aws.getCallerIdentityOutput({}, { provider: awsProvider }).accountId;
-
-const workloadBoundary = new aws.iam.Policy(
-    "workload-boundary",
-    {
-        name: `${prefix}-workload-boundary`,
-        description: "集約サーバーの実行時ロールが超えられない上限",
-        policy: awsAccountId.apply((account) =>
-            JSON.stringify({
-                Version: "2012-10-17",
-                Statement: [
-                    {
-                        // 記録を書く。ロググループ自体は作らせない
-                        Sid: "WriteOwnLogs",
-                        Effect: "Allow",
-                        Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
-                        Resource: `arn:aws:logs:${awsRegion}:${account}:log-group:/aws/lambda/${prefix}-*:*`,
-                    },
-                    {
-                        // Scheduler がこのスタックの関数を呼ぶ
-                        Sid: "InvokeOwnFunctions",
-                        Effect: "Allow",
-                        Action: "lambda:InvokeFunction",
-                        Resource: `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`,
-                    },
-                ],
-            }),
-        ),
-    },
-    onAws,
-);
-
 const lambdaRole = new aws.iam.Role(
     "lambda",
     {
         name: `${prefix}-lambda`,
-        permissionsBoundary: workloadBoundary.arn,
+        permissionsBoundary: workloadBoundaryArn,
         assumeRolePolicy: JSON.stringify({
             Version: "2012-10-17",
             Statement: [
@@ -295,7 +263,7 @@ const schedulerRole = new aws.iam.Role(
     "scheduler",
     {
         name: `${prefix}-scheduler`,
-        permissionsBoundary: workloadBoundary.arn,
+        permissionsBoundary: workloadBoundaryArn,
         assumeRolePolicy: JSON.stringify({
             Version: "2012-10-17",
             Statement: [
@@ -426,283 +394,6 @@ new aws.iam.RolePolicy(
 );
 
 // ---------------------------------------------------------------------------
-// GitHub Actions から AWS へ入るための OIDC（任意）
-// ---------------------------------------------------------------------------
-
-// githubRepository を設定したときだけ作る。
-// 手元からしかデプロイしない構成では要らない。
-//
-// 空文字も未設定として扱う。Pulumi.yaml の宣言に既定値を置いており、
-// 設定しなければ空文字で解決されるためである。
-const githubRepository = config.get("githubRepository") || undefined;
-
-if (githubRepository !== undefined) {
-    // GitHub の OIDC プロバイダはアカウントに一つしか置けない。
-    // 他のリポジトリのために既に作ってあるなら、その ARN を設定で渡す。
-    const existingProviderArn = config.get("githubOidcProviderArn") || undefined;
-
-    const oidcProviderArn =
-        existingProviderArn ??
-        new aws.iam.OpenIdConnectProvider(
-            "github",
-            {
-                url: "https://token.actions.githubusercontent.com",
-                // OIDC で受け取った JWT の aud に入る値。
-                clientIdLists: ["sts.amazonaws.com"],
-                // thumbprintLists は渡さない。GitHub を含むいくつかの発行者について、
-                // AWS は自前の信頼された CA で検証し、指紋を見ない。
-                // 一度渡すと外しても設定に残り続けるので、初めから置かない。
-            },
-            onAws,
-        ).arn;
-
-    // 誰がこのロールを使えるか。既定は master への push に限る。
-    //
-    // sub を絞らないと、同じ発行者の JWT を持つ任意のリポジトリから
-    // このロールを引ける。GitHub Actions の OIDC でいちばん間違えやすい箇所である。
-    const configured = config.getObject<string[]>("githubDeploySubjects");
-    const subjects = configured !== undefined && configured.length > 0 ? configured : [
-        `repo:${githubRepository}:ref:refs/heads/master`,
-    ];
-
-    const deployRole = new aws.iam.Role(
-        "github-deploy",
-        {
-            name: `${prefix}-github-deploy`,
-            description: `${githubRepository} の GitHub Actions からデプロイする`,
-            assumeRolePolicy: pulumi.all([oidcProviderArn]).apply(([arn]) =>
-                JSON.stringify({
-                    Version: "2012-10-17",
-                    Statement: [
-                        {
-                            Effect: "Allow",
-                            Principal: { Federated: arn },
-                            Action: "sts:AssumeRoleWithWebIdentity",
-                            Condition: {
-                                StringEquals: {
-                                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                                },
-                                StringLike: {
-                                    "token.actions.githubusercontent.com:sub": subjects,
-                                },
-                            },
-                        },
-                    ],
-                }),
-            ),
-        },
-        onAws,
-    );
-
-    // このスタックが触る範囲だけを与える。
-    //
-    // 名前の頭で絞っているので、同じアカウントの他のリソースへは届かない。
-    // ただし deployRole 自身もその範囲に入るため、権限を書き換えて広げられる。
-    // それを塞ぐ Deny を最後に置いてある。
-    new aws.iam.RolePolicy(
-        "github-deploy",
-        {
-            name: "deploy",
-            role: deployRole.id,
-            policy: pulumi
-                .all([awsAccountId, deployRole.arn, pulumi.output(oidcProviderArn), workloadBoundary.arn])
-                .apply(([account, roleArn, providerArn, boundaryArn]) => {
-                    const fn = `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`;
-                    const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:vrc-service-status-panel-*`;
-                    const role = `arn:aws:iam::${account}:role/vrc-service-status-panel-*`;
-                    const logs = `arn:aws:logs:${awsRegion}:${account}:log-group:/aws/lambda/${prefix}-*`;
-                    const schedule = `arn:aws:scheduler:${awsRegion}:${account}:schedule/default/${prefix}-*`;
-
-                    return JSON.stringify({
-                        Version: "2012-10-17",
-                        Statement: [
-                            {
-                                Sid: "Functions",
-                                Effect: "Allow",
-                                Action: [
-                                    "lambda:CreateFunction",
-                                    "lambda:DeleteFunction",
-                                    "lambda:GetFunction",
-                                    "lambda:GetFunctionConfiguration",
-                                    "lambda:GetFunctionCodeSigningConfig",
-                                    // 同時実行は指定していないが、差分を見るときに読まれる
-                                    "lambda:GetFunctionConcurrency",
-                                    "lambda:GetPolicy",
-                                    "lambda:ListVersionsByFunction",
-                                    "lambda:ListTags",
-                                    "lambda:TagResource",
-                                    "lambda:UntagResource",
-                                    "lambda:UpdateFunctionCode",
-                                    "lambda:UpdateFunctionConfiguration",
-                                ],
-                                Resource: fn,
-                            },
-                            {
-                                // Layer の発行と、関数へ結ぶときの参照（仕様書 7.1、7.3）
-                                Sid: "Layers",
-                                Effect: "Allow",
-                                Action: [
-                                    "lambda:PublishLayerVersion",
-                                    "lambda:DeleteLayerVersion",
-                                    "lambda:GetLayerVersion",
-                                    "lambda:ListLayerVersions",
-                                ],
-                                Resource: layer,
-                            },
-                            {
-                                // 読み取りと受け渡し。境界の有無に関わらず要る
-                                Sid: "ReadRoles",
-                                Effect: "Allow",
-                                Action: [
-                                    "iam:GetRole",
-                                    "iam:GetRolePolicy",
-                                    "iam:ListRolePolicies",
-                                    "iam:ListAttachedRolePolicies",
-                                    "iam:ListRoleTags",
-                                    "iam:PassRole",
-                                    "iam:TagRole",
-                                    "iam:UntagRole",
-                                ],
-                                Resource: role,
-                            },
-                            {
-                                // 実行ロールと Scheduler のロールを作り、書き換える。
-                                //
-                                // 境界が付いているロールにしか手を出せないようにする。
-                                // 境界の無いロールを作られると、そこへ任意の権限を足して
-                                // lambda:UpdateFunctionCode で乗っ取れてしまう。
-                                Sid: "WriteBoundedRoles",
-                                Effect: "Allow",
-                                Action: [
-                                    "iam:CreateRole",
-                                    "iam:DeleteRole",
-                                    "iam:UpdateAssumeRolePolicy",
-                                    "iam:PutRolePolicy",
-                                    "iam:DeleteRolePolicy",
-                                    "iam:AttachRolePolicy",
-                                    "iam:DetachRolePolicy",
-                                    "iam:PutRolePermissionsBoundary",
-                                ],
-                                Resource: role,
-                                Condition: {
-                                    StringEquals: { "iam:PermissionsBoundary": boundaryArn },
-                                },
-                            },
-                            {
-                                // 境界そのものは読むだけ。書き換えられると上限を広げられる。
-                                // 境界を変えるときは手元から pulumi up する。
-                                Sid: "ReadBoundary",
-                                Effect: "Allow",
-                                Action: [
-                                    "iam:GetPolicy",
-                                    "iam:GetPolicyVersion",
-                                    "iam:ListPolicyVersions",
-                                    // タグを書いていなくても差分を見るときに読まれる
-                                    "iam:ListPolicyTags",
-                                ],
-                                Resource: boundaryArn,
-                            },
-                            {
-                                // 境界を外す道を塞ぐ。
-                                // Deny は Allow に優先するので、上の Condition を
-                                // 満たしていても通らない。
-                                Sid: "DenyBoundaryRemoval",
-                                Effect: "Deny",
-                                Action: "iam:DeleteRolePermissionsBoundary",
-                                Resource: role,
-                            },
-                            {
-                                // 境界の中身を書き換える道も塞ぐ
-                                Sid: "DenyBoundaryEdit",
-                                Effect: "Deny",
-                                Action: [
-                                    "iam:CreatePolicyVersion",
-                                    "iam:DeletePolicy",
-                                    "iam:DeletePolicyVersion",
-                                    "iam:SetDefaultPolicyVersion",
-                                ],
-                                Resource: boundaryArn,
-                            },
-                            {
-                                Sid: "LogGroups",
-                                Effect: "Allow",
-                                Action: [
-                                    "logs:CreateLogGroup",
-                                    "logs:DeleteLogGroup",
-                                    "logs:PutRetentionPolicy",
-                                    "logs:DeleteRetentionPolicy",
-                                    "logs:ListTagsForResource",
-                                    "logs:TagResource",
-                                    "logs:UntagResource",
-                                ],
-                                Resource: logs,
-                            },
-                            {
-                                // 一覧はリソース単位で絞れない
-                                Sid: "DescribeLogGroups",
-                                Effect: "Allow",
-                                Action: "logs:DescribeLogGroups",
-                                Resource: "*",
-                            },
-                            {
-                                Sid: "Schedules",
-                                Effect: "Allow",
-                                Action: [
-                                    "scheduler:CreateSchedule",
-                                    "scheduler:DeleteSchedule",
-                                    "scheduler:GetSchedule",
-                                    "scheduler:UpdateSchedule",
-                                    "scheduler:ListTagsForResource",
-                                    "scheduler:TagResource",
-                                    "scheduler:UntagResource",
-                                ],
-                                Resource: schedule,
-                            },
-                            {
-                                // このスタックが OIDC プロバイダを作った場合、pulumi は
-                                // 差分を見るときにそれを読む。読めないと refresh が落ちる。
-                                //
-                                // 読み取りだけにする。プロバイダはアカウントに一つしかなく、
-                                // 他のリポジトリも使っている可能性がある。CI から書き換え
-                                // させると、その巻き添えが出る。
-                                Sid: "ReadOidcProvider",
-                                Effect: "Allow",
-                                Action: [
-                                    "iam:GetOpenIDConnectProvider",
-                                    "iam:ListOpenIDConnectProviderTags",
-                                ],
-                                Resource: providerArn,
-                            },
-                            {
-                                // 自分の権限は書き換えさせない。
-                                // 読み取りは残す。Pulumi が毎回このロールの差分を見るため、
-                                // GetRole まで塞ぐと CI からの pulumi up が通らなくなる。
-                                //
-                                // このロール自体を変えるときは、手元から pulumi up する。
-                                Sid: "DenySelfEscalation",
-                                Effect: "Deny",
-                                Action: [
-                                    "iam:AttachRolePolicy",
-                                    "iam:DetachRolePolicy",
-                                    "iam:DeleteRole",
-                                    "iam:DeleteRolePolicy",
-                                    "iam:PutRolePolicy",
-                                    "iam:PutRolePermissionsBoundary",
-                                    "iam:UpdateAssumeRolePolicy",
-                                ],
-                                Resource: roleArn,
-                            },
-                        ],
-                    });
-                }),
-        },
-        onAws,
-    );
-
-    githubDeployRoleArn = deployRole.arn;
-}
-
-// ---------------------------------------------------------------------------
 // 出力
 // ---------------------------------------------------------------------------
 
@@ -712,7 +403,5 @@ export const r2EndpointOut = r2Endpoint;
 export const functionNames = pulumi.all(functions.map((fn) => fn.name));
 export const logGroupNames = pulumi.all(logGroups.map((group) => group.name));
 export const cacheRulesetId = cacheRuleset.id;
-// GitHub Actions の configure-aws-credentials に渡す（README を参照）。
-export const githubDeployRoleArnOut = githubDeployRoleArn;
 // カスタムドメインを手で繋ぐときの相手。
 export const deliveryUrl = `https://${deliveryHost}/v1/status.json`;

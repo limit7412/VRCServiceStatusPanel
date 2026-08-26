@@ -14,7 +14,10 @@ env.yml
 # Pulumi。スタックごとの値は Secrets から組み立てる（infra/Pulumi.example.yaml）
 infra/Pulumi.*.yaml
 !infra/Pulumi.example.yaml
+infra/oidc/Pulumi.*.yaml
+!infra/oidc/Pulumi.example.yaml
 infra/bin
+infra/oidc/bin
 
 # Crystal のビルド成果物と依存。
 # bootstrap.zip は backend/build.sh が作り、Pulumi がそのまま Lambda へ渡す

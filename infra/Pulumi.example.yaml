@@ -26,9 +26,9 @@ config:
   vrc-service-status-panel:deliveryZoneId: ""
   vrc-service-status-panel:deliveryHost: status.example.com
 
-  # バケット名。既定のままでよければ書かなくてよい
-  vrc-service-status-panel:publicBucket: status-public
-  vrc-service-status-panel:stateBucket: status-state
+  # バケット名。省略するとスタック名から status-public-<スタック名> になる
+  # vrc-service-status-panel:publicBucket: status-public-dev
+  # vrc-service-status-panel:stateBucket: status-state-dev
   vrc-service-status-panel:bucketLocation: apac
 
   # yt-dlp と QuickJS を載せた Layer（仕様書 7.1、7.3）。
@@ -43,14 +43,9 @@ config:
   vrc-service-status-panel:boothProbeItemId: ""
 
   # GitHub Actions からデプロイする場合だけ入れる。
-  # 手元からしか出さないなら、この三つは書かなくてよい
-  vrc-service-status-panel:githubRepository: limit7412/VRCServiceStatusPanel
-  # アカウントに既に GitHub の OIDC プロバイダがあるならその ARN。
-  # 無ければ書かない（新しく作る）
-  # vrc-service-status-panel:githubOidcProviderArn: ""
-  # ロールを引ける JWT の sub。省略すると master への push のみ
-  # vrc-service-status-panel:githubDeploySubjects:
-  #   - repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master
+  # infra/oidc/ を手元から流し、その workloadBoundaryArn の出力を写す。
+  # 手元からしか出さないなら書かなくてよい
+  # vrc-service-status-panel:workloadBoundaryArn: ""
 
   # secret 指定のもの。pulumi config set --secret で入れる
   vrc-service-status-panel:githubDispatchToken:

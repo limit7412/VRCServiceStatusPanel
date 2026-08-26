@@ -19,10 +19,12 @@ config:
     description: 配信ホスト名。Cache Rules の条件に使う（仕様書 6）
   publicBucket:
     type: string
-    default: status-public
+    default: ""
+    description: 配信バケット名。空ならスタック名から status-public-<スタック名>
   stateBucket:
     type: string
-    default: status-state
+    default: ""
+    description: 内部バケット名。空ならスタック名から status-state-<スタック名>
   bucketLocation:
     type: string
     description: バケットの置き場所のヒント。日本向けなので既定は apac
@@ -49,23 +51,9 @@ config:
     description: 失敗時のアラート送信先（仕様書 11.2）
   # ここから下は任意。既定値を置いてあるのは、宣言した設定に既定が無いと
   # 未設定のときに pulumi が止まるためである。空文字を未設定として扱う。
-  githubRepository:
+  workloadBoundaryArn:
     type: string
     default: ""
     description: |
-      GitHub Actions からデプロイするリポジトリ（owner/repo）。
-      設定したときだけ OIDC のロールを作る。手元からしか出さないなら空のまま
-  githubOidcProviderArn:
-    type: string
-    default: ""
-    description: |
-      既にアカウントへ置いてある GitHub の OIDC プロバイダの ARN。
-      空なら新しく作る。プロバイダはアカウントに一つしか置けない
-  githubDeploySubjects:
-    type: array
-    items:
-      type: string
-    default: []
-    description: |
-      ロールを引ける JWT の sub。空なら master への push のみ。
-      例: repo:owner/repo:ref:refs/heads/master
+      実行時ロールに付ける権限境界の ARN。infra/oidc/ の出力を入れる。
+      手元からしかデプロイしないなら空でよい
