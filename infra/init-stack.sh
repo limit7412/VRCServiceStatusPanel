@@ -5,8 +5,12 @@
 # このファイルが無く、無いまま pulumi up を叩くと最初の config.require で止まる。
 # Pulumi の設定は state ではなくこのファイルに入るためである。
 #
-# 本体と infra/oidc/ を同じスタック名で作る。二つがずれると、dev のデプロイロールでは
-# prod を触れないまま CI が AccessDenied で止まる。
+# GitHub Actions からも流すなら、本体と infra/oidc/ を同じスタック名で作る。
+# 二つがずれると、dev のデプロイロールでは prod を触れないまま CI が
+# AccessDenied で止まる。手元からだけ流すなら infra/oidc/ は作らない。
+#
+# 二度目以降に流すと、いま入っている値を既定として見せる。Enter で通せば
+# そのまま残る。空で答えても消えないので、消すときは pulumi config rm を使う。
 #
 # 使い方:
 #   infra/init-stack.sh dev
@@ -62,7 +66,12 @@ fi
 # 同じ警告を出し続ける無限ループにならないようにする。
 abort_on_eof() {
     printf '\n' >&2
-    echo "入力が尽きたので中断する。作りかけのスタックは pulumi stack rm $stack で消せる" >&2
+    echo "入力が尽きたので中断する。" >&2
+    echo "作りかけのスタックを消すなら、作った分だけ次を実行する" >&2
+    echo "  pulumi -C $here stack rm $stack" >&2
+    if [ "$use_ci" = yes ]; then
+        echo "  pulumi -C $here/oidc stack rm $stack" >&2
+    fi
     exit 1
 }
 
@@ -94,9 +103,23 @@ ask() {
     return 0
 }
 
+# いま設定に入っている値。無ければ空を返す。
+#
+# 二度目以降の実行で、入っている値を既定として見せるために使う。
+# 見せずに聞くと、Enter で通したときに何が残ったのか分からない。
+# 空で答えても消えはしない。消したいときは pulumi config rm を使う。
+current_config() {
+    local dir="$1" key="$2"
+
+    pulumi -C "$dir" config get --stack "$stack" "$key" 2> /dev/null || true
+}
+
 # 省略できない値。空で返ってきたら聞き直す。
 set_required() {
-    local dir="$1" key="$2" label="$3" default="${4:-}"
+    local dir="$1" key="$2" label="$3" default="${4:-}" existing=""
+
+    existing=$(current_config "$dir" "$key")
+    [ -z "$existing" ] || default="$existing"
 
     while :; do
         ask "$label" "$default" || abort_on_eof
@@ -109,7 +132,10 @@ set_required() {
 
 # 省略できる値。空なら設定へ書かない。
 set_optional() {
-    local dir="$1" key="$2" label="$3" default="${4:-}"
+    local dir="$1" key="$2" label="$3" default="${4:-}" existing=""
+
+    existing=$(current_config "$dir" "$key")
+    [ -z "$existing" ] || default="$existing"
 
     ask "$label" "$default" || abort_on_eof
     if [ -z "$ANSWER" ]; then
@@ -119,13 +145,31 @@ set_optional() {
     pulumi -C "$dir" config set --stack "$stack" "$key" "$ANSWER"
 }
 
+# 設定にその値が入っているか。中身は取り出さない。
+#
+# 秘密の値について「入っているか」だけを知りたいときに使う。
+# current_config は復号した平文を返すので、こちらでは呼ばない。
+has_config() {
+    local dir="$1" key="$2"
+
+    pulumi -C "$dir" config get --stack "$stack" "$key" > /dev/null 2>&1
+}
+
 # 秘密の値。打っている最中も画面に出さず、標準入力から渡して暗号文として記録する。
+#
+# 二度目以降は Enter で今の値のままにできる。既定として見せることはしない。
+# 見せれば画面に出てしまい、隠して聞いた意味が無くなる。
 set_secret() {
-    local dir="$1" key="$2" label="$3"
+    local dir="$1" key="$2" label="$3" keep=""
+
+    if has_config "$dir" "$key"; then
+        keep="$label（Enter で今の値のまま）"
+    fi
 
     while :; do
-        ask "$label" "" hidden || abort_on_eof
+        ask "${keep:-$label}" "" hidden || abort_on_eof
         [ -n "$ANSWER" ] && break
+        [ -z "$keep" ] || return 0
         echo "  ここは省略できない" >&2
     done
 
@@ -175,13 +219,24 @@ create_stack() {
     pulumi -C "$dir" stack select --create "$stack" --secrets-provider passphrase > /dev/null
 }
 
+# infra/oidc/ は CI の入口である。手元からだけ流すなら要らない。
+# 作らせると、使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになる。
+# 本体の workloadBoundaryArn は省略できるので、無くても手元からは流せる。
+use_ci=no
+ask "GitHub Actions からもデプロイするか（y/n）" "y" || abort_on_eof
+case "$ANSWER" in
+    y | Y | yes | Yes) use_ci=yes ;;
+    *) use_ci=no ;;
+esac
+
+echo
 echo "=== $stack を作る ==="
 create_stack "$here"
-create_stack "$here/oidc"
+[ "$use_ci" = no ] || create_stack "$here/oidc"
 
 ask "AWS のリージョン（仕様書 5.1）" "ap-northeast-1" || abort_on_eof
 pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
-pulumi -C "$here/oidc" config set --stack "$stack" aws:region "$ANSWER"
+[ "$use_ci" = no ] || pulumi -C "$here/oidc" config set --stack "$stack" aws:region "$ANSWER"
 
 echo
 echo "--- Cloudflare（仕様書 6） ---"
@@ -204,32 +259,39 @@ set_layer
 set_secret "$here" githubDispatchToken "Layer 再ビルドを起動する GitHub のトークン"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
-echo
-echo "--- GitHub Actions からの入口（仕様書 9.1） ---"
-set_required "$here/oidc" githubRepository "デプロイを許すリポジトリ" "limit7412/VRCServiceStatusPanel"
-set_optional "$here/oidc" githubOidcProviderArn "既にある OIDC プロバイダの ARN（無ければ空のまま）"
+if [ "$use_ci" = yes ]; then
+    echo
+    echo "--- GitHub Actions からの入口（仕様書 9.1） ---"
+    set_required "$here/oidc" githubRepository "デプロイを許すリポジトリ" "limit7412/VRCServiceStatusPanel"
+    set_optional "$here/oidc" githubOidcProviderArn "既にある OIDC プロバイダの ARN（無ければ空のまま）"
+fi
 
 # 案内は絶対パスで出す。README の手順は infra/ から実行するので、
 # infra/oidc のような相対パスを出すと、そこからは infra/infra/oidc を指してしまう。
 echo
 echo "=== ここまでで出来たもの ==="
 echo "  $here/Pulumi.$stack.yaml"
-echo "  $here/oidc/Pulumi.$stack.yaml"
+[ "$use_ci" = no ] || echo "  $here/oidc/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
-echo "  1. 二つの Pulumi.$stack.yaml を commit する（#12）"
-echo "  2. 入口と権限境界を作る"
-echo "       pulumi -C $here/oidc up"
-echo "  3. その workloadBoundaryArn を本体へ入れる"
-echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
-echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
-echo "  4. Layer を発行して本体を流す"
+echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
+echo "  2. Layer を発行して本体を流す"
 echo "       $here/deploy.sh --ytdlp <版>"
-echo "  5. GitHub Actions から流すなら、次の五つを GitHub の Secrets へ登録する"
-echo "       AWS_DEPLOY_ROLE_ARN"
-echo "         pulumi -C $here/oidc stack output githubDeployRoleArn"
-echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
-echo "       PULUMI_STATE_ACCESS_KEY_ID      状態の置き場所（R2）の鍵"
-echo "       PULUMI_STATE_SECRET_ACCESS_KEY  同上"
-echo "       CLOUDFLARE_API_TOKEN            Cloudflare の API トークン"
-echo "     どれが何に使われるかは README の「ワークフローでの受け取り」にある"
+
+if [ "$use_ci" = yes ]; then
+    echo
+    echo "GitHub Actions から流すには、2 の前に次も行う"
+    echo "  a. 入口と権限境界を作る"
+    echo "       pulumi -C $here/oidc up"
+    echo "  b. その workloadBoundaryArn を本体へ入れる"
+    echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
+    echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
+    echo "  c. 次の五つを GitHub の Secrets へ登録する"
+    echo "       AWS_DEPLOY_ROLE_ARN"
+    echo "         pulumi -C $here/oidc stack output githubDeployRoleArn"
+    echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
+    echo "       PULUMI_STATE_ACCESS_KEY_ID      状態の置き場所（R2）の鍵"
+    echo "       PULUMI_STATE_SECRET_ACCESS_KEY  同上"
+    echo "       CLOUDFLARE_API_TOKEN            Cloudflare の API トークン"
+    echo "     どれが何に使われるかは README の「ワークフローでの受け取り」にある"
+fi
