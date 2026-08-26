@@ -80,19 +80,22 @@ R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そ�
 ### Cloudflare の API トークン
 
 「My Profile → API Tokens → Create Token → Create Custom Token」で作る。
-必要な権限は五つある。
+必要な権限は四つある。
 
 | スコープ | 権限 | 何のため |
 | --- | --- | --- |
 | Account | Workers R2 Storage : Edit | バケットの作成、削除、設定の変更 |
 | Account | Account API Tokens : Edit | R2 のデータ用トークンを発行する |
 | Account | Account Rulesets : Edit | Cache Rules |
-| Account | Account Filter Lists : Edit | Cache Rules |
-| Zone | Cache Rules : Edit | Cache Rules |
+| Zone | Cache Settings : Edit | Cache Rules |
 
-Cache Rules の三つは
-[公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)が
-挙げている組み合わせである。Account Filter Lists まで要るかは確かめていない。
+**画面に「Cache Rules」という項目は無い。** Cache Rules を触る権限の名前は
+`Cache Settings` である。ドキュメントの本文は製品名で書かれているが、
+権限の一覧は別の名前で並んでいる。
+
+[公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)は
+`Account Filter Lists : Edit` も挙げている。これはルールがリストを参照する場合のもので、
+ここで作るルールは参照していない。入れずに始めて、`pulumi up` が 403 を返したら足す。
 
 リソースの指定は絞る。Zone は配信ドメインのゾーンひとつ、Account も対象のアカウント
 だけにする。
