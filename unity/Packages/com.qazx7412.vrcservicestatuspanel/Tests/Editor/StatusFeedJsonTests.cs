@@ -140,12 +140,29 @@ namespace VRCServiceStatusPanel.Tests
         [Test]
         public void ReadUnixSeconds_KeepsATimeWellInsideWhatDoubleHolds()
         {
-            // 2^53 の一つ下。ここまでは double がそのまま持てる。
+            // 2^53 の一つ下。ここまでは隣り合う整数を区別できる。
             Assert.That(
                 StatusFeedJson.ReadUnixSeconds(
                     StatusFeedJson.ParseObject(@"{""generated_unix"": 9007199254740991}"),
                     "generated_unix"),
                 Is.EqualTo(9007199254740991L));
+        }
+
+        [Test]
+        public void ReadUnixSeconds_RefusesATimeWhereNeighbouringIntegersMerge()
+        {
+            // 2^53+1 は 2^53 へ丸められる。2^53 を通すと、入力がどちらだったのか
+            // 区別できないまま、入力と違う値を返すことになる。
+            Assert.That(
+                StatusFeedJson.ReadUnixSeconds(
+                    StatusFeedJson.ParseObject(@"{""generated_unix"": 9007199254740993}"),
+                    "generated_unix"),
+                Is.EqualTo(0L));
+            Assert.That(
+                StatusFeedJson.ReadUnixSeconds(
+                    StatusFeedJson.ParseObject(@"{""generated_unix"": -9007199254740993}"),
+                    "generated_unix"),
+                Is.EqualTo(0L));
         }
 
         [Test]
