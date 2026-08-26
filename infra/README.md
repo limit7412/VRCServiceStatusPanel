@@ -357,25 +357,32 @@ export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
 標準入力から渡すので、コマンドラインにも履歴にも残らない。何を聞かれるかは
 `Pulumi.example.yaml` に並べてある。
 
-出来上がるのは次の二つで、どちらも commit する（#12）。
+出来上がった `Pulumi.dev.yaml` は commit する（#12）。続きはスクリプトが最後に
+案内する。
 
 ```
-infra/Pulumi.dev.yaml
-infra/oidc/Pulumi.dev.yaml
-```
-
-続きはスクリプトが最後に案内する。`infra/oidc/` を流し、その
-`workloadBoundaryArn` を本体へ入れ、Layer の版を渡して本体を流す。
-
-```
-pulumi -C oidc up
-pulumi config set --stack dev workloadBoundaryArn $(pulumi -C oidc stack output workloadBoundaryArn)
-
 # ARN はまだ無いので、初回は必ず版を渡す
 ./deploy.sh --ytdlp 2025.09.26
 
+git add Pulumi.dev.yaml
+```
+
+#### GitHub Actions からも流す場合
+
+`infra/oidc/Pulumi.dev.yaml` も出来ているので、こちらも commit する。
+`deploy.sh` の前に、入口と権限境界を作って、その出力を本体へ入れる。
+
+```
+# infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない
+npm ci --prefix oidc
+pulumi -C oidc up
+
+pulumi config set --stack dev workloadBoundaryArn $(pulumi -C oidc stack output workloadBoundaryArn)
+
 git add Pulumi.dev.yaml oidc/Pulumi.dev.yaml
 ```
+
+Secrets へ登録するものは「ワークフローでの受け取り」にある。
 
 ### スクリプトが何をしているか
 

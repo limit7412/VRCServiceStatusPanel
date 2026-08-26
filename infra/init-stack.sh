@@ -234,7 +234,13 @@ echo "=== $stack を作る ==="
 create_stack "$here"
 [ "$use_ci" = no ] || create_stack "$here/oidc"
 
-ask "AWS のリージョン（仕様書 5.1）" "ap-northeast-1" || abort_on_eof
+# 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
+# 別のリージョンで作ってあると、AWS のリソースが置き換わり、
+# 発行済みの Layer とも食い違う。
+region_default=$(current_config "$here" aws:region)
+[ -n "$region_default" ] || region_default="ap-northeast-1"
+
+ask "AWS のリージョン（仕様書 5.1）" "$region_default" || abort_on_eof
 pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
 [ "$use_ci" = no ] || pulumi -C "$here/oidc" config set --stack "$stack" aws:region "$ANSWER"
 
@@ -282,7 +288,9 @@ if [ "$use_ci" = yes ]; then
     echo
     echo "GitHub Actions から流すには、2 の前に次も行う"
     echo "  a. 入口と権限境界を作る"
+    echo "       npm ci --prefix $here/oidc"
     echo "       pulumi -C $here/oidc up"
+    echo "     infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない"
     echo "  b. その workloadBoundaryArn を本体へ入れる"
     echo "       pulumi -C $here config set --stack $stack workloadBoundaryArn \\"
     echo "         \"\$(pulumi -C $here/oidc stack output workloadBoundaryArn)\""
