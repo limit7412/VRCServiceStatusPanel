@@ -228,10 +228,53 @@ const FUNCTIONS: FunctionSpec[] = [
 // OIDC のロールは任意なので、作られなければ未定義のまま出力する。
 let githubDeployRoleArn: pulumi.Output<string> | undefined;
 
+// 実行時のロールに付ける権限境界。
+//
+// 境界は上限であって付与ではない。ここに無いものは、ロールのポリシーで
+// 許しても効かない。デプロイロールが乗っ取られて実行ロールへ強い権限を
+// 足しても、この上限を超えられない。
+//
+// これが無いと次の順で昇格できる。
+//   1. デプロイロールで実行ロールへ任意のポリシーを足す
+//   2. lambda:UpdateFunctionCode でコードを差し替える
+//   3. 次の起動でその権限のまま動く
+const awsAccountId = aws.getCallerIdentityOutput({}, { provider: awsProvider }).accountId;
+
+const workloadBoundary = new aws.iam.Policy(
+    "workload-boundary",
+    {
+        name: `${prefix}-workload-boundary`,
+        description: "集約サーバーの実行時ロールが超えられない上限",
+        policy: awsAccountId.apply((account) =>
+            JSON.stringify({
+                Version: "2012-10-17",
+                Statement: [
+                    {
+                        // 記録を書く。ロググループ自体は作らせない
+                        Sid: "WriteOwnLogs",
+                        Effect: "Allow",
+                        Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                        Resource: `arn:aws:logs:${awsRegion}:${account}:log-group:/aws/lambda/${prefix}-*:*`,
+                    },
+                    {
+                        // Scheduler がこのスタックの関数を呼ぶ
+                        Sid: "InvokeOwnFunctions",
+                        Effect: "Allow",
+                        Action: "lambda:InvokeFunction",
+                        Resource: `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`,
+                    },
+                ],
+            }),
+        ),
+    },
+    onAws,
+);
+
 const lambdaRole = new aws.iam.Role(
     "lambda",
     {
         name: `${prefix}-lambda`,
+        permissionsBoundary: workloadBoundary.arn,
         assumeRolePolicy: JSON.stringify({
             Version: "2012-10-17",
             Statement: [
@@ -252,6 +295,7 @@ const schedulerRole = new aws.iam.Role(
     "scheduler",
     {
         name: `${prefix}-scheduler`,
+        permissionsBoundary: workloadBoundary.arn,
         assumeRolePolicy: JSON.stringify({
             Version: "2012-10-17",
             Statement: [
@@ -393,8 +437,6 @@ new aws.iam.RolePolicy(
 const githubRepository = config.get("githubRepository") || undefined;
 
 if (githubRepository !== undefined) {
-    const identity = aws.getCallerIdentityOutput({}, { provider: awsProvider });
-
     // GitHub の OIDC プロバイダはアカウントに一つしか置けない。
     // 他のリポジトリのために既に作ってあるなら、その ARN を設定で渡す。
     const existingProviderArn = config.get("githubOidcProviderArn") || undefined;
@@ -463,8 +505,8 @@ if (githubRepository !== undefined) {
             name: "deploy",
             role: deployRole.id,
             policy: pulumi
-                .all([identity.accountId, deployRole.arn, pulumi.output(oidcProviderArn)])
-                .apply(([account, roleArn, providerArn]) => {
+                .all([awsAccountId, deployRole.arn, pulumi.output(oidcProviderArn), workloadBoundary.arn])
+                .apply(([account, roleArn, providerArn, boundaryArn]) => {
                     const fn = `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`;
                     const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:vrc-service-status-panel-*`;
                     const role = `arn:aws:iam::${account}:role/vrc-service-status-panel-*`;
@@ -506,25 +548,76 @@ if (githubRepository !== undefined) {
                                 Resource: layer,
                             },
                             {
-                                // 実行ロールと Scheduler のロールを作り、関数へ渡す
-                                Sid: "Roles",
+                                // 読み取りと受け渡し。境界の有無に関わらず要る
+                                Sid: "ReadRoles",
                                 Effect: "Allow",
                                 Action: [
-                                    "iam:CreateRole",
-                                    "iam:DeleteRole",
                                     "iam:GetRole",
+                                    "iam:GetRolePolicy",
                                     "iam:ListRolePolicies",
                                     "iam:ListAttachedRolePolicies",
                                     "iam:ListRoleTags",
                                     "iam:PassRole",
                                     "iam:TagRole",
                                     "iam:UntagRole",
-                                    "iam:UpdateAssumeRolePolicy",
-                                    "iam:PutRolePolicy",
-                                    "iam:GetRolePolicy",
-                                    "iam:DeleteRolePolicy",
                                 ],
                                 Resource: role,
+                            },
+                            {
+                                // 実行ロールと Scheduler のロールを作り、書き換える。
+                                //
+                                // 境界が付いているロールにしか手を出せないようにする。
+                                // 境界の無いロールを作られると、そこへ任意の権限を足して
+                                // lambda:UpdateFunctionCode で乗っ取れてしまう。
+                                Sid: "WriteBoundedRoles",
+                                Effect: "Allow",
+                                Action: [
+                                    "iam:CreateRole",
+                                    "iam:DeleteRole",
+                                    "iam:UpdateAssumeRolePolicy",
+                                    "iam:PutRolePolicy",
+                                    "iam:DeleteRolePolicy",
+                                    "iam:AttachRolePolicy",
+                                    "iam:DetachRolePolicy",
+                                    "iam:PutRolePermissionsBoundary",
+                                ],
+                                Resource: role,
+                                Condition: {
+                                    StringEquals: { "iam:PermissionsBoundary": boundaryArn },
+                                },
+                            },
+                            {
+                                // 境界そのものは読むだけ。書き換えられると上限を広げられる。
+                                // 境界を変えるときは手元から pulumi up する。
+                                Sid: "ReadBoundary",
+                                Effect: "Allow",
+                                Action: [
+                                    "iam:GetPolicy",
+                                    "iam:GetPolicyVersion",
+                                    "iam:ListPolicyVersions",
+                                ],
+                                Resource: boundaryArn,
+                            },
+                            {
+                                // 境界を外す道を塞ぐ。
+                                // Deny は Allow に優先するので、上の Condition を
+                                // 満たしていても通らない。
+                                Sid: "DenyBoundaryRemoval",
+                                Effect: "Deny",
+                                Action: "iam:DeleteRolePermissionsBoundary",
+                                Resource: role,
+                            },
+                            {
+                                // 境界の中身を書き換える道も塞ぐ
+                                Sid: "DenyBoundaryEdit",
+                                Effect: "Deny",
+                                Action: [
+                                    "iam:CreatePolicyVersion",
+                                    "iam:DeletePolicy",
+                                    "iam:DeletePolicyVersion",
+                                    "iam:SetDefaultPolicyVersion",
+                                ],
+                                Resource: boundaryArn,
                             },
                             {
                                 Sid: "LogGroups",
@@ -586,9 +679,11 @@ if (githubRepository !== undefined) {
                                 Effect: "Deny",
                                 Action: [
                                     "iam:AttachRolePolicy",
+                                    "iam:DetachRolePolicy",
                                     "iam:DeleteRole",
                                     "iam:DeleteRolePolicy",
                                     "iam:PutRolePolicy",
+                                    "iam:PutRolePermissionsBoundary",
                                     "iam:UpdateAssumeRolePolicy",
                                 ],
                                 Resource: roleArn,
