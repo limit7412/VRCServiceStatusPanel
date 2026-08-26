@@ -525,6 +525,8 @@ if (githubRepository !== undefined) {
                                     "lambda:GetFunction",
                                     "lambda:GetFunctionConfiguration",
                                     "lambda:GetFunctionCodeSigningConfig",
+                                    // 同時実行は指定していないが、差分を見るときに読まれる
+                                    "lambda:GetFunctionConcurrency",
                                     "lambda:GetPolicy",
                                     "lambda:ListVersionsByFunction",
                                     "lambda:ListTags",
@@ -595,6 +597,8 @@ if (githubRepository !== undefined) {
                                     "iam:GetPolicy",
                                     "iam:GetPolicyVersion",
                                     "iam:ListPolicyVersions",
+                                    // タグを書いていなくても差分を見るときに読まれる
+                                    "iam:ListPolicyTags",
                                 ],
                                 Resource: boundaryArn,
                             },

@@ -215,6 +215,12 @@ permissions:
   id-token: write   # OIDC のトークンを発行させる。既定では付かない
   contents: read
 
+env:
+  # まっさらなランナーには pulumi の資格情報ファイルが無い。
+  # 指定しないと既定の Pulumi Cloud を見に行って認証で止まる。
+  # pulumi login を別に走らせる代わりに、これで置き場所を指す
+  PULUMI_BACKEND_URL: s3://<状態用バケット>?endpoint=https://<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
+
 steps:
   - id: aws
     uses: aws-actions/configure-aws-credentials@v4
@@ -222,6 +228,11 @@ steps:
       role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
       aws-region: ap-northeast-1
       output-credentials: true
+      # ジョブの環境へ AWS_* を書かせない。
+      # 既定では書かれるので、AWS_SESSION_TOKEN が後続へ残る。
+      # 下で AWS_ACCESS_KEY_ID と AWS_SECRET_ACCESS_KEY だけを R2 のものへ
+      # 差し替えると、R2 への署名に AWS のセッショントークンが混ざって失敗する
+      output-env-credentials: false
 
   - run: npx pulumi up --yes --stack prod
     working-directory: infra
@@ -236,6 +247,9 @@ steps:
       DEPLOY_AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
+
+`output-env-credentials: false` が使えない版なら、pulumi のステップで
+`AWS_SESSION_TOKEN: ""` を明示しても同じことになる。
 
 デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
 
