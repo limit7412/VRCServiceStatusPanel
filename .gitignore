@@ -2,6 +2,11 @@
 node_modules
 jspm_packages
 
+# Pulumi へ移す前に使っていた環境変数のファイル。
+# 参照はしなくなったが、鍵を入れたまま残っている作業ツリーがありうる。
+# 無視を外すと未追跡として現れ、git add . で鍵ごと commit できてしまう
+env.yml
+
 # Pulumi。スタックごとの値は Secrets から組み立てる（infra/Pulumi.example.yaml）
 infra/Pulumi.*.yaml
 !infra/Pulumi.example.yaml

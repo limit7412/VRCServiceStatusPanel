@@ -23,6 +23,38 @@ const ytdlpLayerArn = config.require("ytdlpLayerArn");
 const ytdlpLayerVersion = config.require("ytdlpLayerVersion");
 
 // ---------------------------------------------------------------------------
+// AWS プロバイダ
+// ---------------------------------------------------------------------------
+
+// 状態を R2 へ置くと、そのバックエンドが AWS_ACCESS_KEY_ID と
+// AWS_SECRET_ACCESS_KEY から R2 の鍵を読む。AWS プロバイダの既定の探索順は
+// この環境変数を共有プロファイルより先に見るため、そのままでは Lambda の
+// 操作にも R2 の鍵が使われて認証に失敗する。
+//
+// DEPLOY_AWS_* を AWS プロバイダから見た AWS_* へ写して切り分ける。
+// 写しは元の変数がある場合だけ効くので、R2 バックエンドを使わない環境では
+// 何も変わらず、aws configure の資格情報がそのまま使われる。
+//
+// 明示したプロバイダはスタック設定の aws:region を自動では読まないため、
+// ここで取り出して渡す。既定は仕様書 5.1 の東京である。
+const awsRegion = new pulumi.Config("aws").get("region") ?? "ap-northeast-1";
+
+const awsProvider = new aws.Provider(
+    "aws",
+    { region: awsRegion },
+    {
+        envVarMappings: {
+            DEPLOY_AWS_ACCESS_KEY_ID: "AWS_ACCESS_KEY_ID",
+            DEPLOY_AWS_SECRET_ACCESS_KEY: "AWS_SECRET_ACCESS_KEY",
+            DEPLOY_AWS_SESSION_TOKEN: "AWS_SESSION_TOKEN",
+            DEPLOY_AWS_PROFILE: "AWS_PROFILE",
+        },
+    },
+);
+
+const onAws = { provider: awsProvider };
+
+// ---------------------------------------------------------------------------
 // 配信と内部の保存先（仕様書 6）
 // ---------------------------------------------------------------------------
 
@@ -83,8 +115,7 @@ const cacheRuleset = new cloudflare.Ruleset("delivery-cache", {
 // Cloudflare プロバイダは同じ Terraform プロバイダを包んだものなので、
 // 同じ挙動になる。配信そのものが止まる箇所であり、載せる利より害が大きい。
 //
-// 当面はダッシュボードから publicBucketName のバケットへ deliveryHost を
-// 繋ぐ。手順は infra/README.md に書いてある。
+// 当面はダッシュボードから繋ぐ。手順は infra/README.md にある。
 // 不具合が直れば、ここに R2CustomDomain を足すだけで済む。
 
 // ---------------------------------------------------------------------------
@@ -131,143 +162,210 @@ const r2SecretAccessKey = pulumi.secret(
 );
 const r2Endpoint = `https://${cloudflareAccountId}.r2.cloudflarestorage.com`;
 
+// 仕様書 11.7 が挙げる環境変数。関数はどれも同じものを受け取る。
+// main.cr は欠けていれば起動時に落とす。
+const environment = {
+    ENV: stack,
+    R2_ENDPOINT: r2Endpoint,
+    R2_PUBLIC_BUCKET: publicBucket.name,
+    R2_STATE_BUCKET: stateBucket.name,
+    R2_ACCESS_KEY_ID: r2AccessKeyId,
+    R2_SECRET_ACCESS_KEY: r2SecretAccessKey,
+    YOUTUBE_PROBE_VIDEO_ID: config.require("youtubeProbeVideoId"),
+    BOOTH_PROBE_ITEM_ID: config.require("boothProbeItemId"),
+    YTDLP_LAYER_VERSION: ytdlpLayerVersion,
+    GITHUB_DISPATCH_TOKEN: config.requireSecret("githubDispatchToken"),
+    ALERT_WEBHOOK_URL: config.requireSecret("alertWebhookUrl"),
+};
+
 // ---------------------------------------------------------------------------
 // 集約サーバー（仕様書 5.1）
 // ---------------------------------------------------------------------------
 
-const lambdaRole = new aws.iam.Role("lambda", {
-    name: `${prefix}-lambda`,
-    assumeRolePolicy: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-            {
-                Effect: "Allow",
-                Principal: { Service: "lambda.amazonaws.com" },
-                Action: "sts:AssumeRole",
-            },
-        ],
-    }),
-});
+/**
+ * 関数ひとつ分の指定。
+ *
+ * handler は `_HANDLER` として関数へ渡り、backend/src/main.cr の
+ * `Runtime::Lambda.handler` の名前と一致したものが動く。
+ * 名前がずれると関数は起動時に落ちるので、両方を揃えること。
+ */
+interface FunctionSpec {
+    /** handler 名。main.cr の HANDLERS と揃える */
+    handler: string;
+    description: string;
+    /** 起動間隔。省略すると定期起動しない */
+    schedule?: string;
+    memorySize: number;
+    /** 秒 */
+    timeout: number;
+}
 
-// ロググループを先に作る。Lambda に任せると保持期間が無期限になり、
-// 60 秒ごとの記録が消えずに溜まり続ける。
-const logGroup = new aws.cloudwatch.LogGroup("lambda", {
-    name: `/aws/lambda/${prefix}-refresh`,
-    retentionInDays: 14,
-});
+// 関数を増やすときはここへ足し、main.cr にも同じ名前の handler を足す。
+// バイナリは一つで、handler の文字列だけが違う。
+const FUNCTIONS: FunctionSpec[] = [
+    {
+        handler: "refresh",
+        description: "上流を取得して配信 JSON を書き出す",
+        // 60 秒間隔で起動する（仕様書 5.1）
+        schedule: "rate(1 minute)",
+        // yt-dlp を動かす余裕を見込む（仕様書 5.1）
+        memorySize: 512,
+        timeout: 40,
+    },
+];
 
-const lambdaLogPolicy = new aws.iam.RolePolicy("lambda-logs", {
-    name: "logs",
-    role: lambdaRole.id,
-    policy: logGroup.arn.apply((arn) =>
-        JSON.stringify({
+const lambdaRole = new aws.iam.Role(
+    "lambda",
+    {
+        name: `${prefix}-lambda`,
+        assumeRolePolicy: JSON.stringify({
             Version: "2012-10-17",
             Statement: [
                 {
                     Effect: "Allow",
-                    Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
-                    Resource: `${arn}:*`,
+                    Principal: { Service: "lambda.amazonaws.com" },
+                    Action: "sts:AssumeRole",
                 },
             ],
         }),
-    ),
-});
+    },
+    onAws,
+);
+
+// EventBridge Scheduler は自前のロールで対象を呼ぶ。
+// EventBridge のルールと違い、関数側のリソースポリシーでは足りない。
+const schedulerRole = new aws.iam.Role(
+    "scheduler",
+    {
+        name: `${prefix}-scheduler`,
+        assumeRolePolicy: JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+                {
+                    Effect: "Allow",
+                    Principal: { Service: "scheduler.amazonaws.com" },
+                    Action: "sts:AssumeRole",
+                },
+            ],
+        }),
+    },
+    onAws,
+);
 
 // backend/build.sh が作った zip をそのまま渡す。
 //
 // ディレクトリから AssetArchive を組むと実行権限が落ち、provided ランタイムが
 // bootstrap を起動できない。出来上がった zip を渡せば、モードは zip の中の
-// 記録がそのまま使われる。
-const refresh = new aws.lambda.Function(
-    "refresh",
-    {
-        name: `${prefix}-refresh`,
-        role: lambdaRole.arn,
-        code: new pulumi.asset.FileArchive("../backend/bootstrap.zip"),
-        // provided ランタイムが動かすのは zip 直下の bootstrap で、
-        // この文字列は _HANDLER として渡るだけである。
-        handler: "bootstrap",
-        runtime: "provided.al2023",
-        architectures: ["arm64"],
-        // yt-dlp を動かす余裕を見込む（仕様書 5.1）。
-        memorySize: 512,
-        timeout: 40,
-        layers: [ytdlpLayerArn],
-        loggingConfig: {
-            logFormat: "Text",
-            logGroup: logGroup.name,
+// 記録がそのまま使われる。関数が増えても同じ zip を使い回す。
+const code = new pulumi.asset.FileArchive("../backend/bootstrap.zip");
+
+const logGroups: aws.cloudwatch.LogGroup[] = [];
+const functions: aws.lambda.Function[] = [];
+
+for (const spec of FUNCTIONS) {
+    // ロググループを先に作る。Lambda に任せると保持期間が無期限になり、
+    // 60 秒ごとの記録が消えずに溜まり続ける。
+    const logGroup = new aws.cloudwatch.LogGroup(
+        spec.handler,
+        {
+            name: `/aws/lambda/${prefix}-${spec.handler}`,
+            retentionInDays: 14,
         },
-        environment: {
-            // 仕様書 11.7 が挙げる環境変数。main.cr は欠けていれば起動時に落とす。
-            variables: {
-                ENV: stack,
-                R2_ENDPOINT: r2Endpoint,
-                R2_PUBLIC_BUCKET: publicBucket.name,
-                R2_STATE_BUCKET: stateBucket.name,
-                R2_ACCESS_KEY_ID: r2AccessKeyId,
-                R2_SECRET_ACCESS_KEY: r2SecretAccessKey,
-                YOUTUBE_PROBE_VIDEO_ID: config.require("youtubeProbeVideoId"),
-                BOOTH_PROBE_ITEM_ID: config.require("boothProbeItemId"),
-                YTDLP_LAYER_VERSION: ytdlpLayerVersion,
-                GITHUB_DISPATCH_TOKEN: config.requireSecret("githubDispatchToken"),
-                ALERT_WEBHOOK_URL: config.requireSecret("alertWebhookUrl"),
+        onAws,
+    );
+    logGroups.push(logGroup);
+
+    const fn = new aws.lambda.Function(
+        spec.handler,
+        {
+            name: `${prefix}-${spec.handler}`,
+            description: spec.description,
+            role: lambdaRole.arn,
+            code,
+            // provided ランタイムが動かすのは zip 直下の bootstrap で、
+            // この文字列は _HANDLER として渡る。
+            handler: spec.handler,
+            runtime: "provided.al2023",
+            architectures: ["arm64"],
+            memorySize: spec.memorySize,
+            timeout: spec.timeout,
+            layers: [ytdlpLayerArn],
+            loggingConfig: {
+                logFormat: "Text",
+                logGroup: logGroup.name,
+            },
+            environment: { variables: environment },
+        },
+        { ...onAws, dependsOn: [logGroup] },
+    );
+    functions.push(fn);
+
+    if (spec.schedule === undefined) {
+        continue;
+    }
+
+    new aws.scheduler.Schedule(
+        spec.handler,
+        {
+            name: `${prefix}-${spec.handler}`,
+            description: spec.description,
+            scheduleExpression: spec.schedule,
+            // 揺らぎを入れない。決めた間隔で動かしたい。
+            flexibleTimeWindow: { mode: "OFF" },
+            target: {
+                arn: fn.arn,
+                roleArn: schedulerRole.arn,
+                // 失敗しても再試行しない（仕様書 5.3）。次の起動に任せる。
+                retryPolicy: { maximumRetryAttempts: 0 },
             },
         },
+        onAws,
+    );
+}
+
+// 権限は関数をすべて作ってからまとめて与える。
+// 関数ごとに作ると、関数を足すたびにポリシーも増える。
+new aws.iam.RolePolicy(
+    "lambda-logs",
+    {
+        name: "logs",
+        role: lambdaRole.id,
+        policy: pulumi.all(logGroups.map((group) => group.arn)).apply((arns) =>
+            JSON.stringify({
+                Version: "2012-10-17",
+                Statement: [
+                    {
+                        Effect: "Allow",
+                        Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                        Resource: arns.map((arn) => `${arn}:*`),
+                    },
+                ],
+            }),
+        ),
     },
-    { dependsOn: [lambdaLogPolicy] },
+    onAws,
 );
 
-// ---------------------------------------------------------------------------
-// 起動（仕様書 5.1）
-// ---------------------------------------------------------------------------
-
-// EventBridge Scheduler は自前のロールで対象を呼ぶ。
-// EventBridge のルールと違い、関数側のリソースポリシーでは足りない。
-const schedulerRole = new aws.iam.Role("scheduler", {
-    name: `${prefix}-scheduler`,
-    assumeRolePolicy: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-            {
-                Effect: "Allow",
-                Principal: { Service: "scheduler.amazonaws.com" },
-                Action: "sts:AssumeRole",
-            },
-        ],
-    }),
-});
-
-new aws.iam.RolePolicy("scheduler-invoke", {
-    name: "invoke",
-    role: schedulerRole.id,
-    policy: refresh.arn.apply((arn) =>
-        JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-                {
-                    Effect: "Allow",
-                    Action: "lambda:InvokeFunction",
-                    Resource: arn,
-                },
-            ],
-        }),
-    ),
-});
-
-// 60 秒間隔で起動する（仕様書 5.1）。
-// EventBridge Scheduler を使うのは、最小間隔が 1 分で仕様と一致するためである。
-new aws.scheduler.Schedule("refresh", {
-    name: `${prefix}-refresh`,
-    scheduleExpression: "rate(1 minute)",
-    // 揺らぎを入れない。60 秒ごとに揃えて動かしたい。
-    flexibleTimeWindow: { mode: "OFF" },
-    target: {
-        arn: refresh.arn,
-        roleArn: schedulerRole.arn,
-        // 失敗しても再試行しない（仕様書 5.3）。次の 60 秒に任せる。
-        retryPolicy: { maximumRetryAttempts: 0 },
+new aws.iam.RolePolicy(
+    "scheduler-invoke",
+    {
+        name: "invoke",
+        role: schedulerRole.id,
+        policy: pulumi.all(functions.map((fn) => fn.arn)).apply((arns) =>
+            JSON.stringify({
+                Version: "2012-10-17",
+                Statement: [
+                    {
+                        Effect: "Allow",
+                        Action: "lambda:InvokeFunction",
+                        Resource: arns,
+                    },
+                ],
+            }),
+        ),
     },
-});
+    onAws,
+);
 
 // ---------------------------------------------------------------------------
 // 出力
@@ -276,8 +374,8 @@ new aws.scheduler.Schedule("refresh", {
 export const publicBucketOut = publicBucket.name;
 export const stateBucketOut = stateBucket.name;
 export const r2EndpointOut = r2Endpoint;
-export const functionName = refresh.name;
-export const logGroupName = logGroup.name;
+export const functionNames = pulumi.all(functions.map((fn) => fn.name));
+export const logGroupNames = pulumi.all(logGroups.map((group) => group.name));
 export const cacheRulesetId = cacheRuleset.id;
 // カスタムドメインを手で繋ぐときの相手。
 export const deliveryUrl = `https://${deliveryHost}/v1/status.json`;

@@ -11,8 +11,8 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 
 | 対象 | リソース | 仕様書 |
 | --- | --- | --- |
-| 配信バケット `status-public` | `cloudflare.R2Bucket` | 6 |
-| 内部バケット `status-state` | `cloudflare.R2Bucket` | 6 |
+| 配信バケット（既定 `status-public`） | `cloudflare.R2Bucket` | 6 |
+| 内部バケット（既定 `status-state`） | `cloudflare.R2Bucket` | 6 |
 | `/v1/` 以下の Cache Rules | `cloudflare.Ruleset` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
@@ -20,6 +20,21 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
 
 カスタムドメインは作らない。理由は下の「手で行う作業」にある。
+
+## 関数を増やすとき
+
+関数は `index.ts` の `FUNCTIONS` に並べる。バイナリは一つで、`handler` の
+文字列だけが違う。この文字列が `_HANDLER` として渡り、`backend/src/main.cr` の
+`Runtime::Lambda.handler` の名前と一致したものが動く。
+
+増やすときは次の三つを揃える。
+
+1. `index.ts` の `FUNCTIONS` に足す
+2. `backend/src/main.cr` に同じ名前の `handler` を足す
+3. `backend/src/main.cr` の `HANDLERS` に名前を足す
+
+名前がずれると、その関数は起動時に `UnknownHandler` で落ちる。
+黙って何もしない状態にはならない。
 
 ## 用意するもの
 
@@ -35,8 +50,8 @@ R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そ�
 R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 
 ```
-export AWS_ACCESS_KEY_ID=<R2のアクセスキーID>
-export AWS_SECRET_ACCESS_KEY=<R2のシークレット>
+export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
+export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
 pulumi login 's3://<状態用バケット>?endpoint=<アカウントID>.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto'
 ```
 
@@ -45,6 +60,24 @@ pulumi login 's3://<状態用バケット>?endpoint=<アカウントID>.r2.cloud
 
 鍵は state の中で暗号化される。DIY バックエンドではパスフレーズから鍵を導くので、
 `PULUMI_CONFIG_PASSPHRASE` を無くすと state を読めなくなる。控えておくこと。
+
+### AWS の資格情報を分ける
+
+上の `AWS_ACCESS_KEY_ID` と `AWS_SECRET_ACCESS_KEY` は R2 のものである。
+AWS プロバイダの既定の探索順はこの環境変数を共有プロファイルより先に見るため、
+そのままでは Lambda の操作にも R2 の鍵が使われて認証に失敗する。
+
+AWS 側は `DEPLOY_AWS_*` で渡す。`index.ts` がこれを AWS プロバイダから見た
+`AWS_*` へ写しており、写しは元の変数がある場合だけ効く。
+
+```
+export DEPLOY_AWS_ACCESS_KEY_ID=<AWSのアクセスキーID>
+export DEPLOY_AWS_SECRET_ACCESS_KEY=<AWSのシークレット>
+# 一時的な資格情報なら DEPLOY_AWS_SESSION_TOKEN も
+# プロファイルを使うなら DEPLOY_AWS_PROFILE
+```
+
+状態を R2 へ置かない場合はどれも要らない。`AWS_*` がそのまま使われる。
 
 ## デプロイ
 
@@ -83,8 +116,12 @@ Layer を発行し直したときは `ytdlpLayerArn` と `ytdlpLayerVersion` の
 
 ## 手で行う作業
 
-**カスタムドメインの接続。** ダッシュボードで `status-public` のバケットに
-配信ホスト名を繋ぐ。R2 → バケットを選ぶ → Settings → Custom Domains → Add。
+**カスタムドメインの接続。** ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
+R2 → バケットを選ぶ → Settings → Custom Domains → Add。
+
+繋ぐ先のバケット名は `pulumi stack output publicBucketOut` で確かめる。
+`publicBucket` を既定から変えている場合、`status-public` は別のバケットか、
+そもそも存在しない。
 
 Pulumi に載せていないのは、`cloudflare_r2_custom_domain` に、作成の約一分後に
 `enabled` が `false` へ戻る不具合があるためである

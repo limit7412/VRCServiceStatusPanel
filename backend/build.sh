@@ -36,8 +36,10 @@ done
 # 現行イメージには同梱されているが、将来外れてもリンクエラーにならないよう
 # apk add で明示的に入れておく。
 #
-# chmod はコンテナ内(root)で実行する。Linux では生成物が root 所有になり、
-# コンテナ外の実行ユーザーでは chmod できない。
+# chmod と chown はコンテナ内(root)で実行する。
+# Linux ではコンテナが root として bind mount 上へ書くため、生成物が root 所有に
+# なる。所有者でなければ chmod も touch -t も通らず、この先で止まってしまう。
+# 実行したユーザーへ所有を戻しておく。
 echo "bootstrap を静的ビルドする（crystal $CRYSTAL_VERSION / linux/arm64）"
 docker run --rm --platform linux/arm64 \
     -v "$here":/work -w /work \
@@ -45,7 +47,8 @@ docker run --rm --platform linux/arm64 \
     sh -c "apk add --no-cache openssl-libs-static zlib-static libevent-static \
         && shards install --production \
         && crystal build --release --link-flags -static -o bootstrap src/main.cr \
-        && chmod +x bootstrap"
+        && chmod +x bootstrap \
+        && chown $(id -u):$(id -g) bootstrap"
 
 # 中身が同じなら同じ zip になるよう時刻を固定する。
 # デプロイのたびに中身の変わらない版を作らないため。
