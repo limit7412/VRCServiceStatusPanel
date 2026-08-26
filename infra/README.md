@@ -79,28 +79,34 @@ R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そ�
 
 ### Cloudflare の API トークン
 
-「My Profile → API Tokens → Create Token → Create Custom Token」で作る。
-必要な権限は四つある。
+ダッシュボードの「My Profile → API Tokens」から作る。
 
-| スコープ | 権限 | 何のため |
+**権限ポリシー**を四つ足す。ポリシーごとに、まず対象を選ぶドロップダウン
+（`アカウント全体`、`指定ドメイン` など）があり、その下で権限を選ぶ。
+公式ドキュメントが Account / Zone と呼ぶ区別が、ここでは対象の選択にあたる。
+
+| 対象 | 権限 | 何のため |
 | --- | --- | --- |
-| Account | Workers R2 Storage : Edit | バケットの作成、削除、設定の変更 |
-| Account | Account API Tokens : Edit | R2 のデータ用トークンを発行する |
-| Account | Account Rulesets : Edit | Cache Rules |
-| Zone | Cache Settings : Edit | Cache Rules |
+| アカウント全体 | Workers R2 Storage | バケットの作成、削除、設定の変更 |
+| アカウント全体 | Account API Tokens | R2 のデータ用トークンを発行する |
+| アカウント全体 | Account Rulesets | Cache Rules |
+| 指定ドメイン（配信ドメイン） | Cache Settings | Cache Rules |
 
-**画面に「Cache Rules」という項目は無い。** Cache Rules を触る権限の名前は
+どれも Read と Edit（Write）の両方を入れる。この画面は読み取りと書き込みを
+別々の権限として扱っており、Edit だけでは読めない。
+
+R2 は `アカウント全体` にする。`R2 バケット` を選ぶとバケット単位に絞れるが、
+それはバケットの中身を触る権限であって、バケット自体は作れない。
+
+**「Cache Rules」という項目は無い。** Cache Rules を触る権限の名前は
 `Cache Settings` である。ドキュメントの本文は製品名で書かれているが、
 権限の一覧は別の名前で並んでいる。
 
 [公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)は
-`Account Filter Lists : Edit` も挙げている。これはルールがリストを参照する場合のもので、
+`Account Filter Lists` も挙げている。これはルールがリストを参照する場合のもので、
 ここで作るルールは参照していない。入れずに始めて、`pulumi up` が 403 を返したら足す。
 
-リソースの指定は絞る。Zone は配信ドメインのゾーンひとつ、Account も対象のアカウント
-だけにする。
-
-**Account API Tokens : Edit の重さは把握しておくこと。** これはトークンを作る権限で
+**Account API Tokens の重さは把握しておくこと。** これはトークンを作る権限で
 あり、持たせた相手はアカウント内の任意の権限を持つトークンを発行できる。実質的に
 管理者相当である。R2 のデータ用トークンを Pulumi に発行させる以上は避けられないが、
 [IP 制限や TTL](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/)
