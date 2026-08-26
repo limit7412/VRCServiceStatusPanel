@@ -14,6 +14,10 @@ description: GitHub Actions の入口と実行時ロールの上限。手元か�
 #
 # エンドポイントのホスト名に入っているのは Cloudflare のアカウント ID で、
 # Pulumi.<スタック名>.yaml の cloudflareAccountId と同じ値である。
+#
+# fork して自分のアカウントへ出すときは、まずここを書き換える。
+# この URL はスタック設定より先に読まれるので、cloudflareAccountId を
+# 直しただけでは作者のアカウントへ繋ぎに行って認証で止まる。
 backend:
   url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://32cd31ff8a5c721c0583f57a83cb731e.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
 

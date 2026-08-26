@@ -48,6 +48,20 @@ Lambda の関数名は 64 文字までである。`qazx7412-vrc-service-status-p
 Layer だけはこの規則の外にある。手で発行する不変の成果物で、dev と prod が
 同じものを指すためである（`qazx7412-vrc-service-status-panel-ytdlp`）。
 
+**一度出したあとで名前を変えると、作り直しになる。** バケットもロールも関数も、
+名前は置き換えでしか変えられない。バケットには `protect: true` を付けてあるので、
+置き換えは削除の段階で止まる。中身とカスタムドメインの繋ぎ先も移らない。
+
+出したあとで変えたくなったら、次の順で行う。
+
+1. `pulumi state unprotect` で保護を外す
+2. 中身を新しいバケットへ写す
+3. `pulumi up` で置き換える
+4. カスタムドメインを新しいバケットへ繋ぎ直す
+5. `protect: true` を戻す
+
+配信が止まる作業である。名前は最初に決めておくほうがよい。
+
 ## ファイルの並び
 
 `infra/` の中身は `src/` に分けてある。`index.ts` はそれらを繋いで
@@ -176,6 +190,12 @@ backend:
 `Pulumi.<スタック名>.yaml` の設定はバックエンドが決まってからでないと読めないので、
 置き場所を書く先にはならない。`endpoint` にはスキームを付ける。ホスト名だけだと
 接続先の URL として解決されない。
+
+**fork して自分のアカウントへ出すときは、まずここを書き換える。** バケット名も
+エンドポイントのアカウント ID も作者のものである。`cloudflareAccountId` を
+自分のものに直しても、この URL はスタック設定より先に読まれるため、
+書き換えないかぎり作者のアカウントへ繋ぎに行って認証で止まる。
+`infra/` と `infra/oidc/` の両方にある。
 
 **`pulumi login` は要らない。** 手元でも CI でも、要るのは R2 の鍵だけである。
 
@@ -454,6 +474,8 @@ steps:
       # 差し替えると、R2 への署名に AWS のセッショントークンが混ざって失敗する
       output-env-credentials: false
 
+  # スタック名は infra/oidc/ を流したときのものと揃える。
+  # dev のデプロイロールは prod の関数にもロールにも手が届かない
   - run: npx pulumi up --yes --stack prod
     working-directory: infra
     env:
@@ -472,6 +494,12 @@ steps:
 
 `output-env-credentials: false` が使えない版なら、pulumi のステップで
 `AWS_SESSION_TOKEN: ""` を明示しても同じことになる。
+
+**この例は `prod` を更新する。** 動かすには `infra/oidc/` を `prod` のスタックで
+流し、`prod` のデプロイロールと境界を作っておく必要がある。上の手順は例として
+`dev` を使っているので、CI から出す環境の分は別に作る。デプロイロールが許すのは
+自分と同じスタック名の接頭辞だけで、`dev` のロールで `prod` を触ると
+AccessDenied になる。
 
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
 置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
