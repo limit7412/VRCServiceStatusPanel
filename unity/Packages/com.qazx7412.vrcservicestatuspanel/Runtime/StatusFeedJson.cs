@@ -86,23 +86,24 @@ namespace VRCServiceStatusPanel
         }
 
         /// <summary>
-        /// 整数として受け取れる値か。
+        /// long の上限。long.MaxValue を double にするとこの値（2^63）へ丸められ、
+        /// long には収まらなくなる。上限はこれ「未満」で見る。
+        ///
+        /// long.MinValue のほうは -2^63 がそのまま double で表せるので、
+        /// 下限は以上で見てよい。int は上下ともそのまま表せる。
+        /// </summary>
+        private const double LongUpperBound = 9223372036854775808.0;
+
+        /// <summary>
+        /// 小数を含まない値か。
         ///
         /// 小数を弾くのは、vが1.5でもintへ落とすと1になり、対応版として
-        /// 通ってしまうためである（仕様書 8.2）。桁が大きすぎるものも弾く。
-        /// Udonは既定でオーバーフローを検査するので、そのまま変換すると例外になり、
-        /// パネルが前回値ごと消える。
-        ///
+        /// 通ってしまうためである（仕様書 8.2）。
         /// NaNと無限大も剰余がNaNになるため、ここで落ちる。
         /// </summary>
-        private static bool IsWhole(double value, double min, double max)
+        private static bool IsWhole(double value)
         {
-            if (value % 1.0 != 0.0)
-            {
-                return false;
-            }
-
-            return value >= min && value <= max;
+            return value % 1.0 == 0.0;
         }
 
         /// <summary>
@@ -129,8 +130,10 @@ namespace VRCServiceStatusPanel
                 return fallback;
             }
 
+            // 桁が大きすぎるものも弾く。Udonは既定でオーバーフローを検査するので、
+            // そのまま変換すると例外になり、パネルが前回値ごと消える。
             double value = token.Double;
-            if (!IsWhole(value, int.MinValue, int.MaxValue))
+            if (!IsWhole(value) || value < int.MinValue || value > int.MaxValue)
             {
                 return fallback;
             }
@@ -162,7 +165,7 @@ namespace VRCServiceStatusPanel
             }
 
             double value = token.Double;
-            if (!IsWhole(value, long.MinValue, long.MaxValue))
+            if (!IsWhole(value) || value < long.MinValue || value >= LongUpperBound)
             {
                 return 0;
             }

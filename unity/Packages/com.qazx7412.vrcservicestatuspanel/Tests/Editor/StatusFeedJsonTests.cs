@@ -121,6 +121,18 @@ namespace VRCServiceStatusPanel.Tests
         }
 
         [Test]
+        public void ReadUnixSeconds_RefusesATimeAtTheEdgeOfWhatLongHolds()
+        {
+            // 2^63。long.MaxValue を double にするとこの値へ丸められるので、
+            // 上限を以下で見ていると通してしまい、変換で落ちる。
+            Assert.That(
+                StatusFeedJson.ReadUnixSeconds(
+                    StatusFeedJson.ParseObject(@"{""generated_unix"": 9223372036854775808}"),
+                    "generated_unix"),
+                Is.EqualTo(0L));
+        }
+
+        [Test]
         public void ReadBool_ReadsStaleAndFallsBackToFalse()
         {
             Assert.That(StatusFeedJson.ReadBool(Feed(), "stale"), Is.False);
