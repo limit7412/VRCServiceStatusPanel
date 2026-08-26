@@ -4,7 +4,10 @@
 # 本体と同じ名前のスタックを両方に作るので、こちらだけを別に用意しなくてよい。
 # 出来上がったファイルは commit する。
 #
-#   export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
+#   # 値を export の右辺に書かない。シェルの履歴に平文で残り、
+#   # commit 済みの設定ファイルと合わされば secret を全部復号できる
+#   read -rsp 'PULUMI_CONFIG_PASSPHRASE: ' PULUMI_CONFIG_PASSPHRASE && echo
+#   export PULUMI_CONFIG_PASSPHRASE
 #   infra/init-stack.sh dev
 #
 # 手で入れる場合は次の形になる。

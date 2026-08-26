@@ -4,7 +4,10 @@
 # ここに並んでいるものを一つずつ聞き、secret 指定のものは暗号文として記録する。
 # 出来上がったファイルは commit する。
 #
-#   export PULUMI_CONFIG_PASSPHRASE=<控えを残したパスフレーズ>
+#   # 値を export の右辺に書かない。シェルの履歴に平文で残り、
+#   # commit 済みの設定ファイルと合わされば secret を全部復号できる
+#   read -rsp 'PULUMI_CONFIG_PASSPHRASE: ' PULUMI_CONFIG_PASSPHRASE && echo
+#   export PULUMI_CONFIG_PASSPHRASE
 #   infra/init-stack.sh dev
 #
 # 手で入れる場合は次の形になる。--secret を付けないと平文で記録される。
