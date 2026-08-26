@@ -10,6 +10,9 @@ import { prefix, ytdlpLayerArn } from "./settings";
 //
 // 関数の一覧は src/functions.ts にある。ここはそれを AWS のリソースへ落とす。
 
+/** Lambda の関数名の上限 */
+const MAX_FUNCTION_NAME = 64;
+
 /** 関数へ渡す環境変数。仕様書 11.7 の一式で、どの関数も同じものを受け取る */
 export type Environment = Record<string, pulumi.Input<string>>;
 
@@ -30,6 +33,16 @@ export function createFunctions(environment: Environment): Compute {
     const functions: aws.lambda.Function[] = [];
 
     for (const spec of FUNCTIONS) {
+        // handler 名が長いと関数名が上限を超える。
+        // スタック名は settings.ts で絞ってあるが、こちらは足す人次第である。
+        const functionName = `${prefix}-${spec.handler}`;
+        if (functionName.length > MAX_FUNCTION_NAME) {
+            throw new Error(
+                `関数名 "${functionName}" が長い（${functionName.length} 文字）。` +
+                    `handler 名を ${MAX_FUNCTION_NAME - prefix.length - 1} 文字までにする`,
+            );
+        }
+
         // ロググループを先に作る。Lambda に任せると保持期間が無期限になり、
         // 60 秒ごとの記録が消えずに溜まり続ける。
         const logGroup = new aws.cloudwatch.LogGroup(
@@ -45,7 +58,7 @@ export function createFunctions(environment: Environment): Compute {
         const fn = new aws.lambda.Function(
             spec.handler,
             {
-                name: `${prefix}-${spec.handler}`,
+                name: functionName,
                 description: spec.description,
                 role: lambdaRole.arn,
                 code,

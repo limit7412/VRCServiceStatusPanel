@@ -5,7 +5,37 @@ import * as pulumi from "@pulumi/pulumi";
 
 const config = new pulumi.Config();
 
-export const stack = pulumi.getStack();
+/** スタック名の上限。下の checkStackName に導き方を書いてある */
+const MAX_STACK_NAME = 16;
+
+/**
+ * スタック名を物理名に使えるか確かめる。
+ *
+ * Pulumi のスタック名はここより緩く、大文字も `_` も長い名前も通る。
+ * そのまま物理名にすると、R2 は `_` を受け付けず、AWS と R2 は長さで弾く。
+ * どちらも実際に作りに行くまで分からないので、ここで止める。
+ *
+ * 16 文字は `qazx7412-vrc-service-status-panel-<スタック名>-github-deploy` から
+ * 逆算した値である。IAM ロール名の上限が 64 文字で、頭と接尾で 48 文字を使う。
+ * このロールは infra/oidc/ が作るが、スタック名は両方で揃えるため上限も揃える。
+ */
+function checkStackName(name: string): string {
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
+        throw new Error(
+            `スタック名 "${name}" は物理名に使えない。` +
+                "小文字、数字、ハイフンだけで、先頭と末尾は小文字か数字にする",
+        );
+    }
+    if (name.length > MAX_STACK_NAME) {
+        throw new Error(
+            `スタック名 "${name}" が長い（${name.length} 文字）。` +
+                `${MAX_STACK_NAME} 文字までにする`,
+        );
+    }
+    return name;
+}
+
+export const stack = checkStackName(pulumi.getStack());
 
 /**
  * リソース名の頭。

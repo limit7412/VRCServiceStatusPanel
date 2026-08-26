@@ -12,9 +12,39 @@ import * as pulumi from "@pulumi/pulumi";
 
 const config = new pulumi.Config();
 
+// スタック名の上限。
+//
+// ここで作る `<頭>-<スタック名>-github-deploy` がいちばん厳しい。
+// IAM ロール名の上限が 64 文字で、頭と接尾で 48 文字を使う。
+// 本体（infra/src/settings.ts）とも揃えてある。
+const MAX_STACK_NAME = 16;
+
+/**
+ * スタック名を物理名に使えるか確かめる。
+ *
+ * Pulumi のスタック名はここより緩く、大文字も `_` も長い名前も通る。
+ * そのまま物理名にすると AWS が長さで弾くが、実際に作りに行くまで
+ * 分からないので、ここで止める。
+ */
+function checkStackName(name: string): string {
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
+        throw new Error(
+            `スタック名 "${name}" は物理名に使えない。` +
+                "小文字、数字、ハイフンだけで、先頭と末尾は小文字か数字にする",
+        );
+    }
+    if (name.length > MAX_STACK_NAME) {
+        throw new Error(
+            `スタック名 "${name}" が長い（${name.length} 文字）。` +
+                `${MAX_STACK_NAME} 文字までにする`,
+        );
+    }
+    return name;
+}
+
 // 権限を渡す相手は本体スタックである。スタック名を揃えて運用する。
 // 揃えたくない場合だけ targetStack で明示する。
-const targetStack = config.get("targetStack") || pulumi.getStack();
+const targetStack = checkStackName(config.get("targetStack") || pulumi.getStack());
 const prefix = `qazx7412-vrc-service-status-panel-${targetStack}`;
 
 const awsRegion = new pulumi.Config("aws").get("region") ?? "ap-northeast-1";
@@ -177,8 +207,10 @@ new aws.iam.RolePolicy(
                                 "lambda:GetFunction",
                                 "lambda:GetFunctionConfiguration",
                                 "lambda:GetFunctionCodeSigningConfig",
-                                // 同時実行は指定していないが、差分を見るときに読まれる
+                                // 同時実行もランタイムの更新方式も指定していないが、
+                                // 差分を見るときに読まれる
                                 "lambda:GetFunctionConcurrency",
+                                "lambda:GetRuntimeManagementConfig",
                                 "lambda:GetPolicy",
                                 "lambda:ListVersionsByFunction",
                                 "lambda:ListTags",

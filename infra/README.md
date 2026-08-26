@@ -42,8 +42,15 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 
 スタック名まで含めるので、同じアカウントに dev と prod を並べても衝突しない。
 
-Lambda の関数名は 64 文字までである。`qazx7412-vrc-service-status-panel-production-`
-の時点で 44 文字を使うので、handler 名に使えるのは 20 文字ほどになる。
+**スタック名は小文字、数字、ハイフンだけ、16 文字までにする。** Pulumi のスタック名は
+これより緩く、大文字も `_` も長い名前も通るが、そのまま物理名にすると R2 は `_` を
+受け付けず、AWS と R2 は長さで弾く。外れていれば `pulumi up` の最初で止まる。
+
+16 文字は `qazx7412-vrc-service-status-panel-<スタック名>-github-deploy` から
+逆算した値である。IAM ロール名の上限が 64 文字で、頭と接尾で 48 文字を使う。
+
+handler 名にも同じ事情がある。関数名の上限は 64 文字で、`dev` なら 26 文字ほど残る。
+外れていればこちらも `pulumi up` の最初で止まる。
 
 Layer だけはこの規則の外にある。手で発行する不変の成果物で、dev と prod が
 同じものを指すためである（`qazx7412-vrc-service-status-panel-ytdlp`）。
@@ -324,9 +331,14 @@ git add Pulumi.dev.yaml
 
 手で並べると次の四つになる。詰まったときはこの順で追う。
 
+**どれも `infra/` から実行する。** 3 と 4 が `Pulumi.yaml` を要るためで、
+そのぶん 1 と 2 は `../backend/...` を指す。
+
 ```
+cd infra
+
 # 1. バイナリを作る（docker が要る）
-backend/build.sh
+../backend/build.sh
 
 # 2. Layer を発行し、ARN を控える（仕様書 7.1、7.3）
 #
@@ -336,7 +348,7 @@ backend/build.sh
 #    --region は aws:region と同じ値にする。Layer は関数と同じリージョンに
 #    無いと結べない。CLI の既定リージョンに任せると、未設定なら止まり、
 #    別のリージョンなら pulumi up まで気づけない。
-backend/layer/build.sh 2025.09.26
+../backend/layer/build.sh 2025.09.26 "" "$PWD/ytdlp-layer.zip"
 AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID" \
 AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY" \
 AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN" \
