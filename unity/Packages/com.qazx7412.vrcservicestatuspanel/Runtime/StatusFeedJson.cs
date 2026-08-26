@@ -86,16 +86,20 @@ namespace VRCServiceStatusPanel
         }
 
         /// <summary>
-        /// long の上限。long.MaxValue を double にするとこの値（2^63）へ丸められ、
-        /// long には収まらなくなる。上限はこれ「未満」で見る。
+        /// doubleが整数を正確に表せる限界（2^53）。
         ///
-        /// long.MinValue のほうは -2^63 がそのまま double で表せるので、
-        /// 下限は以上で見てよい。int は上下ともそのまま表せる。
+        /// これを超えた値は、解析した時点で入力とは別の値になっている。
+        /// 9223372036854775809 は -2^63 へ、9223372036854775808 も 2^63 へ丸められ、
+        /// 元の値には戻せない。境界をいくら細かく見ても、丸めた結果を見ているだけである。
+        /// この線で切れば、どちらの側の丸めもまとめて落ちる。
+        ///
+        /// 配信JSONに入る数値はレベル、スキーマ版、epoch秒だけで、
+        /// epoch秒がこの線に届くのは二億年以上先である。
         /// </summary>
-        private const double LongUpperBound = 9223372036854775808.0;
+        private const double ExactIntegerLimit = 9007199254740992.0;
 
         /// <summary>
-        /// 小数を含まない値か。
+        /// 整数としてそのまま受け取れる値か。
         ///
         /// 小数を弾くのは、vが1.5でもintへ落とすと1になり、対応版として
         /// 通ってしまうためである（仕様書 8.2）。
@@ -103,7 +107,12 @@ namespace VRCServiceStatusPanel
         /// </summary>
         private static bool IsWhole(double value)
         {
-            return value % 1.0 == 0.0;
+            if (value % 1.0 != 0.0)
+            {
+                return false;
+            }
+
+            return value >= -ExactIntegerLimit && value <= ExactIntegerLimit;
         }
 
         /// <summary>
@@ -165,7 +174,7 @@ namespace VRCServiceStatusPanel
             }
 
             double value = token.Double;
-            if (!IsWhole(value) || value < long.MinValue || value >= LongUpperBound)
+            if (!IsWhole(value))
             {
                 return 0;
             }
