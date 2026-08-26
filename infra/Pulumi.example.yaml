@@ -42,6 +42,16 @@ config:
   vrc-service-status-panel:youtubeProbeVideoId: ""
   vrc-service-status-panel:boothProbeItemId: ""
 
+  # GitHub Actions からデプロイする場合だけ入れる。
+  # 手元からしか出さないなら、この三つは書かなくてよい
+  vrc-service-status-panel:githubRepository: limit7412/VRCServiceStatusPanel
+  # アカウントに既に GitHub の OIDC プロバイダがあるならその ARN。
+  # 無ければ書かない（新しく作る）
+  # vrc-service-status-panel:githubOidcProviderArn: ""
+  # ロールを引ける JWT の sub。省略すると master への push のみ
+  # vrc-service-status-panel:githubDeploySubjects:
+  #   - repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master
+
   # secret 指定のもの。pulumi config set --secret で入れる
   vrc-service-status-panel:githubDispatchToken:
     secure: pulumi config set --secret で入れる

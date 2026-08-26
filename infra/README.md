@@ -18,6 +18,7 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
+| GitHub Actions 用の OIDC とロール（任意） | `aws.iam.OpenIdConnectProvider` / `aws.iam.Role` | — |
 
 カスタムドメインは作らない。理由は下の「手で行う作業」にある。
 
@@ -42,6 +43,9 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 - AWS の資格情報（`aws configure` などで解決できる状態）
 - Cloudflare の API トークン。R2 の編集、ゾーンの Cache Rules の編集、トークンの発行の三つが要る
 - 状態の置き場所にする R2 バケット（下記）
+
+GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く必要はない。
+OIDC のロールを作る（「GitHub Actions から AWS へ入る」を参照）。
 
 R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そのまま Lambda へ渡す。
 
@@ -126,6 +130,90 @@ pulumi up
 Layer を発行し直したときは `ytdlpLayerArn` と `ytdlpLayerVersion` の両方を
 入れ替えてから `pulumi up` する。片方だけだと、実行時の版の比較が
 食い違いを出し続ける（#8）。
+
+## GitHub Actions から AWS へ入る
+
+`githubRepository` を設定すると、OIDC のプロバイダとデプロイ用のロールを作る。
+長い寿命の鍵を Secrets へ置かずに済む。設定しなければ何も作らない。
+
+```
+pulumi config set githubRepository limit7412/VRCServiceStatusPanel
+```
+
+アカウントに GitHub の OIDC プロバイダを既に置いてある場合は、その ARN を渡す。
+プロバイダはアカウントに一つしか置けない。
+
+```
+pulumi config set githubOidcProviderArn arn:aws:iam::<アカウント>:oidc-provider/token.actions.githubusercontent.com
+```
+
+### 順番
+
+ロールは、そのロールを作る `pulumi up` より後にしか存在しない。
+最初の一回は手元の資格情報で実行する。以降は CI から引ける。
+
+```
+pulumi up                              # 手元で一度
+pulumi stack output githubDeployRoleArnOut
+```
+
+### 誰が引けるか
+
+既定は master への push に限る。広げるときは `githubDeploySubjects` に並べる。
+
+```
+pulumi config set --path githubDeploySubjects[0] 'repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master'
+pulumi config set --path githubDeploySubjects[1] 'repo:limit7412/VRCServiceStatusPanel:environment:prod'
+```
+
+`sub` を絞らないと、同じ発行者の JWT を持つ任意のリポジトリからロールを引ける。
+GitHub Actions の OIDC でいちばん間違えやすい箇所である。
+
+### ワークフローでの受け取り
+
+CI では `AWS_*` の取り合いが起きる。Pulumi の状態は R2 にあり、そのバックエンドが
+`AWS_*` から R2 の鍵を読む。一方 `configure-aws-credentials` も既定では `AWS_*` を
+書く。両方を `AWS_*` に置くことはできない。
+
+`output-credentials: true` で受け取り、AWS 側は `DEPLOY_AWS_*` へ入れる。
+
+```yaml
+permissions:
+  id-token: write   # OIDC のトークンを発行させる。既定では付かない
+  contents: read
+
+steps:
+  - id: aws
+    uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+      aws-region: ap-northeast-1
+      output-credentials: true
+
+  - run: npx pulumi up --yes --stack prod
+    working-directory: infra
+    env:
+      # Pulumi の状態の置き場所（R2）
+      AWS_ACCESS_KEY_ID: ${{ secrets.PULUMI_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+      # デプロイ先（AWS）。index.ts がこれを AWS プロバイダの AWS_* へ写す
+      DEPLOY_AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+      DEPLOY_AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+      DEPLOY_AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
+
+### ロールの権限
+
+このスタックが触る範囲だけを与えてある。名前の頭で絞っているので、同じアカウントの
+他のリソースへは届かない。
+
+ただし `vrc-service-status-panel-*` にはこのロール自身も含まれるため、権限を書き換えて
+広げられてしまう。それを塞ぐ Deny を入れてある。読み取りは残してあり、Pulumi が
+毎回このロールの差分を見られる。**このロール自体を変えるときは手元から `pulumi up` する。**
 
 ## 手で行う作業
 

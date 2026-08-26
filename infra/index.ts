@@ -218,6 +218,9 @@ const FUNCTIONS: FunctionSpec[] = [
     },
 ];
 
+// OIDC のロールは任意なので、作られなければ未定義のまま出力する。
+let githubDeployRoleArn: pulumi.Output<string> | undefined;
+
 const lambdaRole = new aws.iam.Role(
     "lambda",
     {
@@ -372,6 +375,213 @@ new aws.iam.RolePolicy(
 );
 
 // ---------------------------------------------------------------------------
+// GitHub Actions から AWS へ入るための OIDC（任意）
+// ---------------------------------------------------------------------------
+
+// githubRepository を設定したときだけ作る。
+// 手元からしかデプロイしない構成では要らない。
+//
+// 空文字も未設定として扱う。Pulumi.yaml の宣言に既定値を置いており、
+// 設定しなければ空文字で解決されるためである。
+const githubRepository = config.get("githubRepository") || undefined;
+
+if (githubRepository !== undefined) {
+    const identity = aws.getCallerIdentityOutput({}, { provider: awsProvider });
+
+    // GitHub の OIDC プロバイダはアカウントに一つしか置けない。
+    // 他のリポジトリのために既に作ってあるなら、その ARN を設定で渡す。
+    const existingProviderArn = config.get("githubOidcProviderArn") || undefined;
+
+    const oidcProviderArn =
+        existingProviderArn ??
+        new aws.iam.OpenIdConnectProvider(
+            "github",
+            {
+                url: "https://token.actions.githubusercontent.com",
+                // OIDC で受け取った JWT の aud に入る値。
+                clientIdLists: ["sts.amazonaws.com"],
+                // thumbprintLists は渡さない。GitHub を含むいくつかの発行者について、
+                // AWS は自前の信頼された CA で検証し、指紋を見ない。
+                // 一度渡すと外しても設定に残り続けるので、初めから置かない。
+            },
+            onAws,
+        ).arn;
+
+    // 誰がこのロールを使えるか。既定は master への push に限る。
+    //
+    // sub を絞らないと、同じ発行者の JWT を持つ任意のリポジトリから
+    // このロールを引ける。GitHub Actions の OIDC でいちばん間違えやすい箇所である。
+    const configured = config.getObject<string[]>("githubDeploySubjects");
+    const subjects = configured !== undefined && configured.length > 0 ? configured : [
+        `repo:${githubRepository}:ref:refs/heads/master`,
+    ];
+
+    const deployRole = new aws.iam.Role(
+        "github-deploy",
+        {
+            name: `${prefix}-github-deploy`,
+            description: `${githubRepository} の GitHub Actions からデプロイする`,
+            assumeRolePolicy: pulumi.all([oidcProviderArn]).apply(([arn]) =>
+                JSON.stringify({
+                    Version: "2012-10-17",
+                    Statement: [
+                        {
+                            Effect: "Allow",
+                            Principal: { Federated: arn },
+                            Action: "sts:AssumeRoleWithWebIdentity",
+                            Condition: {
+                                StringEquals: {
+                                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                                },
+                                StringLike: {
+                                    "token.actions.githubusercontent.com:sub": subjects,
+                                },
+                            },
+                        },
+                    ],
+                }),
+            ),
+        },
+        onAws,
+    );
+
+    // このスタックが触る範囲だけを与える。
+    //
+    // 名前の頭で絞っているので、同じアカウントの他のリソースへは届かない。
+    // ただし deployRole 自身もその範囲に入るため、権限を書き換えて広げられる。
+    // それを塞ぐ Deny を最後に置いてある。
+    new aws.iam.RolePolicy(
+        "github-deploy",
+        {
+            name: "deploy",
+            role: deployRole.id,
+            policy: pulumi
+                .all([identity.accountId, deployRole.arn])
+                .apply(([account, roleArn]) => {
+                    const fn = `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`;
+                    const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:vrc-service-status-panel-*`;
+                    const role = `arn:aws:iam::${account}:role/vrc-service-status-panel-*`;
+                    const logs = `arn:aws:logs:${awsRegion}:${account}:log-group:/aws/lambda/${prefix}-*`;
+                    const schedule = `arn:aws:scheduler:${awsRegion}:${account}:schedule/default/${prefix}-*`;
+
+                    return JSON.stringify({
+                        Version: "2012-10-17",
+                        Statement: [
+                            {
+                                Sid: "Functions",
+                                Effect: "Allow",
+                                Action: [
+                                    "lambda:CreateFunction",
+                                    "lambda:DeleteFunction",
+                                    "lambda:GetFunction",
+                                    "lambda:GetFunctionConfiguration",
+                                    "lambda:GetFunctionCodeSigningConfig",
+                                    "lambda:GetPolicy",
+                                    "lambda:ListVersionsByFunction",
+                                    "lambda:ListTags",
+                                    "lambda:TagResource",
+                                    "lambda:UntagResource",
+                                    "lambda:UpdateFunctionCode",
+                                    "lambda:UpdateFunctionConfiguration",
+                                ],
+                                Resource: fn,
+                            },
+                            {
+                                // Layer の発行と、関数へ結ぶときの参照（仕様書 7.1、7.3）
+                                Sid: "Layers",
+                                Effect: "Allow",
+                                Action: [
+                                    "lambda:PublishLayerVersion",
+                                    "lambda:DeleteLayerVersion",
+                                    "lambda:GetLayerVersion",
+                                    "lambda:ListLayerVersions",
+                                ],
+                                Resource: layer,
+                            },
+                            {
+                                // 実行ロールと Scheduler のロールを作り、関数へ渡す
+                                Sid: "Roles",
+                                Effect: "Allow",
+                                Action: [
+                                    "iam:CreateRole",
+                                    "iam:DeleteRole",
+                                    "iam:GetRole",
+                                    "iam:ListRolePolicies",
+                                    "iam:ListAttachedRolePolicies",
+                                    "iam:ListRoleTags",
+                                    "iam:PassRole",
+                                    "iam:TagRole",
+                                    "iam:UntagRole",
+                                    "iam:UpdateAssumeRolePolicy",
+                                    "iam:PutRolePolicy",
+                                    "iam:GetRolePolicy",
+                                    "iam:DeleteRolePolicy",
+                                ],
+                                Resource: role,
+                            },
+                            {
+                                Sid: "LogGroups",
+                                Effect: "Allow",
+                                Action: [
+                                    "logs:CreateLogGroup",
+                                    "logs:DeleteLogGroup",
+                                    "logs:PutRetentionPolicy",
+                                    "logs:DeleteRetentionPolicy",
+                                    "logs:ListTagsForResource",
+                                    "logs:TagResource",
+                                    "logs:UntagResource",
+                                ],
+                                Resource: logs,
+                            },
+                            {
+                                // 一覧はリソース単位で絞れない
+                                Sid: "DescribeLogGroups",
+                                Effect: "Allow",
+                                Action: "logs:DescribeLogGroups",
+                                Resource: "*",
+                            },
+                            {
+                                Sid: "Schedules",
+                                Effect: "Allow",
+                                Action: [
+                                    "scheduler:CreateSchedule",
+                                    "scheduler:DeleteSchedule",
+                                    "scheduler:GetSchedule",
+                                    "scheduler:UpdateSchedule",
+                                    "scheduler:ListTagsForResource",
+                                    "scheduler:TagResource",
+                                    "scheduler:UntagResource",
+                                ],
+                                Resource: schedule,
+                            },
+                            {
+                                // 自分の権限は書き換えさせない。
+                                // 読み取りは残す。Pulumi が毎回このロールの差分を見るため、
+                                // GetRole まで塞ぐと CI からの pulumi up が通らなくなる。
+                                //
+                                // このロール自体を変えるときは、手元から pulumi up する。
+                                Sid: "DenySelfEscalation",
+                                Effect: "Deny",
+                                Action: [
+                                    "iam:AttachRolePolicy",
+                                    "iam:DeleteRole",
+                                    "iam:DeleteRolePolicy",
+                                    "iam:PutRolePolicy",
+                                    "iam:UpdateAssumeRolePolicy",
+                                ],
+                                Resource: roleArn,
+                            },
+                        ],
+                    });
+                }),
+        },
+        onAws,
+    );
+
+    githubDeployRoleArn = deployRole.arn;
+}
+
+// ---------------------------------------------------------------------------
 // 出力
 // ---------------------------------------------------------------------------
 
@@ -381,5 +591,7 @@ export const r2EndpointOut = r2Endpoint;
 export const functionNames = pulumi.all(functions.map((fn) => fn.name));
 export const logGroupNames = pulumi.all(logGroups.map((group) => group.name));
 export const cacheRulesetId = cacheRuleset.id;
+// GitHub Actions の configure-aws-credentials に渡す（README を参照）。
+export const githubDeployRoleArnOut = githubDeployRoleArn;
 // カスタムドメインを手で繋ぐときの相手。
 export const deliveryUrl = `https://${deliveryHost}/v1/status.json`;

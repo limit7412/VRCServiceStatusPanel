@@ -47,3 +47,25 @@ config:
     type: string
     secret: true
     description: 失敗時のアラート送信先（仕様書 11.2）
+  # ここから下は任意。既定値を置いてあるのは、宣言した設定に既定が無いと
+  # 未設定のときに pulumi が止まるためである。空文字を未設定として扱う。
+  githubRepository:
+    type: string
+    default: ""
+    description: |
+      GitHub Actions からデプロイするリポジトリ（owner/repo）。
+      設定したときだけ OIDC のロールを作る。手元からしか出さないなら空のまま
+  githubOidcProviderArn:
+    type: string
+    default: ""
+    description: |
+      既にアカウントへ置いてある GitHub の OIDC プロバイダの ARN。
+      空なら新しく作る。プロバイダはアカウントに一つしか置けない
+  githubDeploySubjects:
+    type: array
+    items:
+      type: string
+    default: []
+    description: |
+      ロールを引ける JWT の sub。空なら master への push のみ。
+      例: repo:owner/repo:ref:refs/heads/master
