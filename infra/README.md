@@ -16,8 +16,9 @@ GitHub Actions が AWS へ入るための OIDC プロバイダ、デプロイロ
 同じプログラムに置くと、CI が自分を縛っている境界を書き換えられることになり、
 境界も入口も意味を失う。
 
-このプログラムから見えるのは、権限境界の ARN を設定 `workloadBoundaryArn` で
-受け取ることだけである。
+このプログラムから見えるのは、権限境界の名前を設定 `workloadBoundaryName` で
+受け取ることだけである。ARN ではなく名前なのは、ARN にアカウント ID が入り、
+設定ファイルを commit するからである（#26）。
 
 ## 名前の付け方
 
@@ -375,9 +376,10 @@ Pulumi と無関係なコードへは渡さない。
 `deploy.sh` の前に `init-stack.sh` を流し直す。
 
 設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として
-`ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、短いパスフレーズの入れ替えを
-案内するのも `init-stack.sh` の中にある。`deploy.sh` だけを流すと、設定ファイルに
-トークンの暗号文が残ったままになる。
+`ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、`workloadBoundaryArn` を
+`workloadBoundaryName` へ移すのも、短いパスフレーズの入れ替えを案内するのも
+`init-stack.sh` の中にある。`deploy.sh` だけを流すと、設定ファイルにトークンの
+暗号文が残り、アカウント ID も入ったままになる。
 
 ```
 printf 'PULUMI_CONFIG_PASSPHRASE: '; read -rs PULUMI_CONFIG_PASSPHRASE && echo
@@ -453,12 +455,13 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
 権限境界の ARN が要る。入れないと実行ロールに境界が付かず、手元からは通っても
 CI からは `CreateRole` で止まる。
 
-`init-stack.sh` が「GitHub Actions からの入口」で聞く。既定はいま繋がっている
-AWS アカウントから組み立てたものなので、Enter で通せば入る。飛ばしていたら後から足す。
+`init-stack.sh` が「GitHub Actions からの入口」で聞く。いま繋がっている AWS
+アカウントに境界が実在するときだけ既定として出るので、Enter で通せば入る。
+飛ばしていたら後から足す。
 
 ```
-pulumi config set --stack dev workloadBoundaryArn \
-  arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary
+pulumi config set --stack dev workloadBoundaryName \
+  qazx7412-vrc-service-status-panel-workload-boundary
 
 git add Pulumi.dev.yaml
 ```
@@ -533,11 +536,11 @@ AWS CLI で作ってあり、権限の一覧も作り直す手順も `docs/aws-o
 
 ### 本体へ渡すもの
 
-境界の ARN を設定に入れる。
+境界の名前を設定に入れる。ARN は `src/roles.ts` がその場のアカウントから組む。
 
 ```
-pulumi config set workloadBoundaryArn \
-  arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary
+pulumi config set workloadBoundaryName \
+  qazx7412-vrc-service-status-panel-workload-boundary
 ```
 
 これを入れないと、実行ロールに境界が付かない。手元から流す分にはそれでも通るが、
@@ -654,8 +657,8 @@ Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore
 `docs/aws-oidc.md` に一覧がある。名前の頭で絞ってあり、同じアカウントの他のリソースへは
 届かない。このロール自身の権限を書き換える操作は Deny してあるので、CI からは変えられない。
 
-実行ロールに付く権限境界も同じ文書にある。`src/roles.ts` が設定の `workloadBoundaryArn`
-を渡すだけで、境界そのものはここに無い。
+実行ロールに付く権限境界も同じ文書にある。`src/roles.ts` は設定の
+`workloadBoundaryName` から ARN を組んで渡すだけで、境界そのものはここに無い。
 
 ## 手で行う作業
 

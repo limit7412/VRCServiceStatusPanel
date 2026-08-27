@@ -333,6 +333,23 @@ drop_config "$here" ytdlpLayerArn "Layer は pulumi up が作るので、ARN を
 drop_config "$here" cloudflare:apiToken "CLOUDFLARE_API_TOKEN で渡す。commit 済みの履歴に暗号文が残っているなら、トークンを作り直すこと"
 rename_config "$here" ytdlpLayerVersion ytdlpVersion
 
+# 権限境界を ARN ではなく名前で持つように変えた（#26）。
+#
+# rename_config では写せない。旧い側は ARN で、新しい側は名前だからである。
+# arn:<パーティション>:iam::<アカウントID>:policy/ から後ろを取る。パスを挟んだ
+# ポリシーでも残りをそのまま名前として扱う。ARN でない値なら何も削らない。
+if has_config "$here" workloadBoundaryArn; then
+    boundary_was=$(current_config "$here" workloadBoundaryArn)
+    boundary_now="${boundary_was#arn:*:iam::*:policy/}"
+
+    if [ -n "$boundary_now" ] && [ -z "$(current_config "$here" workloadBoundaryName)" ]; then
+        pulumi -C "$here" config set --stack "$stack" workloadBoundaryName "$boundary_now"
+        echo "  workloadBoundaryArn を workloadBoundaryName へ移した（$boundary_now）"
+    fi
+
+    pulumi -C "$here" config rm --stack "$stack" workloadBoundaryArn > /dev/null
+fi
+
 # 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
 # 別のリージョンで作ってあると、AWS のリソースが置き換わり、
 # 発行済みの Layer とも食い違う。
@@ -367,35 +384,38 @@ echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
 set_required "$here" ytdlpVersion "Layer に載せる yt-dlp の版（VRChat の /config の youtubedl_version に合わせる）"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
-# CI から流すかどうかは、権限境界の ARN を入れるかどうかで決まる。
+# CI から流すかどうかは、権限境界を入れるかどうかで決まる。
 # 入れれば実行時ロールに境界が付き、デプロイロールがそのロールを作れる。
 # 入れなければ手元からしか流せない。
 #
 # 境界は Pulumi ではなく AWS CLI で作ってある（docs/aws-oidc.md）。
-# 既定はいま繋がっているアカウントから組み立てる。ARN にはアカウント ID が
-# 入るので、public のこのリポジトリには書かない。
+# 設定に入れるのは名前だけで、ARN は roles.ts が組み立てる。ARN にはアカウント
+# ID が入り、この設定ファイルは commit され、リポジトリは public だからである（#26）。
 #
 # 実在を確かめてからでないと既定にしない。ask は空の答えを既定で埋めるので、
 # 無いものを既定に出すと、Enter で通しただけで存在しない境界を指すことになる。
 # fork 先のように境界をまだ作っていないアカウントでは、そのまま流すと
 # 最初の CreateRole が落ちる。無ければ既定を空にして、Enter で飛ばせるようにする。
 #
+# 確かめるほうには ARN が要るので、その場のアカウントから組んで問い合わせる。
+# 組んだ ARN は設定へは入れない。
+#
 # aws が無いときも、資格情報が通らないときも、同じく既定が空になるだけである。
-# その場合は ARN を手で貼る。
+# その場合は名前を手で入れる。
 boundary_default=""
 boundary_name=qazx7412-vrc-service-status-panel-workload-boundary
 account=$(aws_deploy sts get-caller-identity --query Account --output text || true)
 if [ -n "$account" ] && [ "$account" != "None" ]; then
-    candidate="arn:aws:iam::$account:policy/$boundary_name"
-    if aws_deploy iam get-policy --policy-arn "$candidate" > /dev/null; then
-        boundary_default="$candidate"
+    if aws_deploy iam get-policy \
+        --policy-arn "arn:aws:iam::$account:policy/$boundary_name" > /dev/null; then
+        boundary_default="$boundary_name"
     fi
 fi
 
 echo
 echo "--- GitHub Actions からの入口（仕様書 9.1） ---"
-set_optional "$here" workloadBoundaryArn \
-    "実行時ロールの権限境界の ARN（CI から流さないなら空のまま）" "$boundary_default"
+set_optional "$here" workloadBoundaryName \
+    "実行時ロールの権限境界の名前（CI から流さないなら空のまま）" "$boundary_default"
 
 # 案内は絶対パスで出す。README の手順は infra/ から実行するので、
 # 相対パスを出すと、そこからは infra/infra を指してしまう。
@@ -418,10 +438,10 @@ echo "$deploy_line"
 
 # 境界を入れていないスタックは手元専用である。CI 向けの案内は出さない。
 #
-# ここは has_config では見分けられない。workloadBoundaryArn は Pulumi.yaml に
+# ここは has_config では見分けられない。workloadBoundaryName は Pulumi.yaml に
 # default: "" 付きで宣言してあるので、設定へ入れていなくても config get は
 # その既定を返して成功する。入っているかどうかは値の中身で見る。
-if [ -n "$(current_config "$here" workloadBoundaryArn)" ]; then
+if [ -n "$(current_config "$here" workloadBoundaryName)" ]; then
     echo "  3. 次の五つが GitHub の Secrets にあるか確かめる"
     echo "       AWS_DEPLOY_ROLE_ARN             デプロイロールの ARN（docs/aws-oidc.md）"
     echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"

@@ -15,9 +15,10 @@ OIDC で短命の資格情報を受け取るので、長い寿命の AWS の鍵�
 aws sts get-caller-identity --query Account --output text
 ```
 
-**一箇所だけ抜けている。** `workloadBoundaryArn` に入れる境界の ARN は
-`Pulumi.<スタック名>.yaml` へ平文で入り、そのファイルは commit する（#12）。
-そこにはアカウント ID がそのまま載る。設定から外す案は #26 にある。
+**設定ファイルにも書かない。** スタックの設定が持つのは境界の名前だけで、
+ARN は `infra/src/roles.ts` がその場のアカウントから組む（#26）。
+`Pulumi.<スタック名>.yaml` は commit するので、ここに ARN を置くと
+アカウント ID がそのまま載ることになる。
 
 `ap-northeast-1` と `limit7412/VRCServiceStatusPanel` のほうは伏せ字ではなく、
 いま動いているものの実際の値である。
@@ -355,9 +356,14 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 ```
 
 境界を付けるのは Pulumi の側である。
-`infra/src/roles.ts` が `permissionsBoundary` に設定の `workloadBoundaryArn` を渡す。
+設定 `workloadBoundaryName` に境界の名前を入れると、`infra/src/roles.ts` が
+`aws.getCallerIdentityOutput()` で引いたアカウント ID と組み合わせて ARN にし、
+`permissionsBoundary` へ渡す。
 この値を入れ忘れると境界の付かないロールを作ろうとし、`CreateBoundedRoles` の条件を
 満たさないため CI が `AccessDenied` で止まる。
+
+引く先はデプロイ先と同じアカウントに限る。別のアカウントの境界を指す道は無い。
+必要になったら、そのときに設定を ARN へ戻すことになる。
 
 なお、関数の環境変数に入る R2 の鍵はこの境界の外にある。
 コードを差し替えられればその鍵は使われる。
@@ -494,12 +500,15 @@ GitHub の Secrets に `AWS_DEPLOY_ROLE_ARN` としてロールの ARN を登録
 gh secret set AWS_DEPLOY_ROLE_ARN
 ```
 
-境界の ARN は Secrets ではなく Pulumi の設定に入れる。
+境界は Secrets ではなく Pulumi の設定に入れる。入れるのは名前だけである。
 
 ```
-pulumi -C infra config set --stack <スタック名> workloadBoundaryArn \
-  arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary
+pulumi -C infra config set --stack <スタック名> workloadBoundaryName \
+  qazx7412-vrc-service-status-panel-workload-boundary
 ```
+
+`infra/init-stack.sh` を流すなら、この設定も聞かれる。
+アカウントに境界が実在するときだけ既定として出るので、Enter で通せばよい。
 
 ワークフローでの受け取り方は `infra/README.md` の「ワークフローでの受け取り」にある。
 `permissions` に `id-token: write` を入れないと、OIDC のトークンがそもそも発行されない。

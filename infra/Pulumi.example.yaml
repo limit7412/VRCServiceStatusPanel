@@ -49,9 +49,10 @@ config:
   vrc-service-status-panel:boothProbeItemId: ""
 
   # GitHub Actions からデプロイする場合だけ入れる。
-  # CLI で作った権限境界の ARN（docs/aws-oidc.md）。
+  # CLI で作った権限境界の名前（docs/aws-oidc.md）。
+  # ARN ではなく名前なのは、ARN にアカウント ID が入るためである（#26）。
   # 手元からしか出さないなら書かなくてよい
-  # vrc-service-status-panel:workloadBoundaryArn: "arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary"
+  # vrc-service-status-panel:workloadBoundaryName: qazx7412-vrc-service-status-panel-workload-boundary
 
   # secret 指定のもの。pulumi config set --secret で入れる
   vrc-service-status-panel:alertWebhookUrl:
