@@ -67,13 +67,19 @@ fi
 # 覚えられない長さを下限にするだけでよい。
 MIN_PASSPHRASE=32
 
-# Pulumi は環境変数でもファイルでも末尾の改行を落とすので、
-# $(cat) で読んだ長さがそのまま鍵の材料の長さになる。
+# 鍵の材料になる文字列を、Pulumi と同じ形で取り出す。
+#
+# 環境変数はそのまま使われる（pkg/secrets/passphrase/manager.go の readPassphrase）。
+# ファイルのほうは strings.TrimSpace を通してから使われる。$(cat) が落とすのは
+# 末尾の改行だけなので、CRLF のファイルだと CR が残り、ここでの長さが Pulumi の
+# 見る長さより一文字多くなる。下限をすり抜けられるので、前後の空白を自分で落とす。
 phrase=""
 if [ -n "${PULUMI_CONFIG_PASSPHRASE:-}" ]; then
     phrase="$PULUMI_CONFIG_PASSPHRASE"
 elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ] && [ -f "${PULUMI_CONFIG_PASSPHRASE_FILE}" ]; then
     phrase=$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")
+    phrase="${phrase#"${phrase%%[![:space:]]*}"}"
+    phrase="${phrase%"${phrase##*[![:space:]]}"}"
 else
     echo "PULUMI_CONFIG_PASSPHRASE が要る。これを失うと secret を読めなくなるので、控えを残すこと" >&2
     exit 1

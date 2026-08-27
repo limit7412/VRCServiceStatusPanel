@@ -468,6 +468,9 @@ Secrets へ登録するものは「ワークフローでの受け取り」にあ
 ```
 cd infra
 
+# トークンは export せずにこの三つへ渡す（「デプロイ」を参照）
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+
 # 1. バイナリを作る（docker が要る）
 ../backend/build.sh
 
@@ -477,7 +480,7 @@ cd infra
 ../backend/layer/build.sh "$(pulumi config get ytdlpVersion)" "" ../backend/ytdlp-layer.zip
 
 # 3. 反映する
-pulumi up
+CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up
 ```
 
 `pulumi up` は `../backend/bootstrap.zip` と `../backend/ytdlp-layer.zip` を
@@ -498,11 +501,12 @@ Layer の発行は 3 の中で起きる。zip が前回と同じなら新しい�
 
 ```
 # 既存の ruleset の ID を調べる
-curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+curl -s -H "Authorization: Bearer $cloudflare_token" \
   "https://api.cloudflare.com/client/v4/zones/<ゾーンID>/rulesets/phases/http_request_cache_settings/entrypoint" \
   | jq -r '.result.id, (.result.rules[] | .expression)'
 
-pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
+CLOUDFLARE_API_TOKEN="$cloudflare_token" \
+  pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
 ```
 
 取り込んだあと、既存の規則も `src/delivery.ts` に書き写す。書き漏らすと次の `pulumi up`
