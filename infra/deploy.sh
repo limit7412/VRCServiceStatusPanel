@@ -77,6 +77,15 @@ if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
     exit 1
 fi
 
+# 受け取ったらすぐ環境から外し、pulumi へ渡すときだけ戻す。
+#
+# export したまま進むと、npm ci が動かす依存パッケージのインストールスクリプトや、
+# build.sh が起こす docker、layer/build.sh の curl まで、このトークンを見られる。
+# README が「実質的に管理者相当」と書いている資格情報なので、Pulumi と無関係な
+# コードへ渡す理由が無い。
+cloudflare_token="$CLOUDFLARE_API_TOKEN"
+unset CLOUDFLARE_API_TOKEN
+
 cd "$here"
 
 stack=$(pulumi stack --show-name 2>/dev/null || true)
@@ -121,7 +130,7 @@ echo "==> Layer の zip を用意する（yt-dlp $want_version）"
 "$repo/backend/layer/build.sh" "$want_version" "" "$repo/backend/ytdlp-layer.zip"
 
 echo "==> pulumi up"
-pulumi up "${pulumi_args[@]+"${pulumi_args[@]}"}"
+CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up "${pulumi_args[@]+"${pulumi_args[@]}"}"
 
 cat <<EOF
 

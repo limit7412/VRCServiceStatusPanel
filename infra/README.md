@@ -367,6 +367,12 @@ infra/deploy.sh --ytdlp 2025.09.26  # yt-dlp の版を入れ替えてから流�
 `CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流す前に環境変数へ入れる（#24）。
 `deploy.sh` は最初に見て、無ければそこで止まる。
 
+受け取ったあとは環境から外し、`pulumi up` へ渡すときだけ戻す。
+export したまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
+`build.sh` が起こす docker まで、このトークンを見られることになる。
+「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、
+Pulumi と無関係なコードへは渡さない。
+
 `--ytdlp` は `ytdlpVersion` を書き換えるだけである。Layer そのものは Pulumi が
 持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
 

@@ -84,6 +84,12 @@ if [ "${#phrase}" -lt "$MIN_PASSPHRASE" ]; then
     echo "  設定ファイルは commit され、このリポジトリは public である（#24）" >&2
     echo "  覚えずに済ませる。次のように作って、パスワードマネージャへ入れる" >&2
     echo "    openssl rand -base64 32" >&2
+    echo >&2
+    echo "  既にこのパスフレーズでスタックを作ってあるなら、先に入れ替える。" >&2
+    echo "  古いほうを PULUMI_CONFIG_PASSPHRASE に入れたまま次を実行すると、" >&2
+    echo "  新しいパスフレーズを聞かれ、設定と state が入れ替わったもので暗号化し直される。" >&2
+    echo "    pulumi -C \"$here\" stack change-secrets-provider passphrase --stack $stack" >&2
+    echo "  そのあと新しいほうを PULUMI_CONFIG_PASSPHRASE に入れて、ここへ戻る。" >&2
     exit 1
 fi
 
