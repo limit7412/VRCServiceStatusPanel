@@ -244,14 +244,27 @@ CI はトークンを持たない。GitHub Actions の OIDC を Pulumi Cloud の
 入っていたので、そこを書き換えないと作者のアカウントへ繋ぎに行っていた。
 いまはその一歩が消えている。
 
-CI からも流すなら、書き換える先が一つある。`docs/aws-oidc.md` のロールと境界を
-自分のアカウントに作り直す。信頼ポリシーの `sub` は元のリポジトリを指しているので、
-fork の Actions ではそのままロールを引けない。
+CI からも流すなら、書き換える先が二つある。
+
+一つは AWS 側で、`docs/aws-oidc.md` のロールと境界を自分のアカウントに作り直す。
+信頼ポリシーの `sub` は元のリポジトリを指しているので、fork の Actions では
+そのままロールを引けない。
+
+もう一つは Pulumi Cloud 側で、ワークフローの `pulumi/auth-actions` に渡す
+`organization` と `scope` を自分のものにする（「ワークフローでの受け取り」）。
+自分の組織に OIDC issuer を登録しても、要求するトークンが作者のものを指したままでは
+交換が通らない。
 
 **state の中の secret は預けない。** `--secrets-provider passphrase` を続けるので、
 Pulumi Cloud にあるのは `PULUMI_CONFIG_PASSPHRASE` で暗号化した暗号文だけである。
 Pulumi Cloud の鍵管理には切り替えない。パスフレーズを無くすと state を読めなくなる
 のは、置き場所を変えても同じである。控えておくこと。
+
+**スタックを手で作るなら `--secrets-provider passphrase` を省かないこと。**
+Pulumi Cloud での既定はサービス側の鍵管理であり、DIY バックエンドのころの
+既定（passphrase）とは違う。`PULUMI_CONFIG_PASSPHRASE` を渡しても provider は
+切り替わらないので、省くと secret の鍵まで預けることになる。
+`init-stack.sh` は `stack select --create` に付けて渡している。
 
 **`src/delivery.ts` が作る内部バケットは state とは別物である。**
 `qazx7412-vrc-service-status-panel-<スタック名>-state` のほうは集約サーバーが使うもので
@@ -551,6 +564,13 @@ CI はトークンを一つも持たずに Pulumi Cloud へ入る。
 AWS 側も OIDC で入る。`AWS_*` の取り合いはもう起きないので、
 `configure-aws-credentials` にはジョブの環境へ普通に書かせてよい。
 
+**資格情報を出す前に `npm ci` を済ませる。** どちらのアクションも、以降のステップから
+見える環境変数に資格情報を置く。`npm ci` をあとに回すと、依存パッケージの
+インストールスクリプトからデプロイロールの一時資格情報と `PULUMI_ACCESS_TOKEN` が
+読める。手元の `deploy.sh` が Cloudflare のトークンを `npm ci` の前で外しているのと
+同じ理由である。Pulumi CLI を入れる `pulumi/actions` も資格情報を要らないので、
+先へ寄せてある。
+
 ```yaml
 permissions:
   id-token: write   # OIDC のトークンを発行させる。既定では付かない
@@ -570,20 +590,8 @@ steps:
       platforms: arm64
   - run: backend/build.sh
 
-  - uses: aws-actions/configure-aws-credentials@v4
-    with:
-      role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-      aws-region: ap-northeast-1
-
-  # Pulumi Cloud へは OIDC で入る。PULUMI_ACCESS_TOKEN を Secrets へ置かない。
-  # 無料の Individual で使えるのは personal トークンだけである。
-  # organization は個人アカウントでも必須で、値は自分のユーザー名になる。
-  - uses: pulumi/auth-actions@v2
-    with:
-      organization: limit7412
-      requested-token-type: urn:pulumi:token-type:access_token:personal
-      scope: user:limit7412
-
+  # 依存の取得は資格情報を出す前に済ませる。
+  # あとに回すと、install スクリプトから AWS と Pulumi Cloud の資格情報が読める
   - run: npm ci
     working-directory: infra
 
@@ -592,13 +600,29 @@ steps:
   # get.pulumi.com のスクリプトで入れてもよい
   - uses: pulumi/actions@v6
 
+  - uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+      aws-region: ap-northeast-1
+
+  # Pulumi Cloud へは OIDC で入る。PULUMI_ACCESS_TOKEN を Secrets へ置かない。
+  # 無料の Individual で使えるのは personal トークンだけである。
+  # organization は個人アカウントでも必須で、値は自分のユーザー名になる。
+  # fork するならこの二つを自分のものに書き換える
+  - uses: pulumi/auth-actions@v2
+    with:
+      organization: limit7412
+      requested-token-type: urn:pulumi:token-type:access_token:personal
+      scope: user:limit7412
+
   # Layer の zip も .gitignore の対象で、checkout には入っていない。
   # src/layer.ts が FileArchive として開くので、bootstrap.zip と同じく
   # 無いと pulumi up はファイル未検出で止まる。
   #
   # 版は流す相手のスタックから読む。ここで別のスタックの版を渡すと、
   # 中身と description と YTDLP_VERSION が食い違う。
-  # config get は Pulumi CLI が要るので、このステップは上より後に置く。
+  # config get は Pulumi CLI と Pulumi Cloud への資格情報を要るので、
+  # このステップは pulumi/actions と auth-actions の後に置く。
   - run: |
       backend/layer/build.sh \
         "$(pulumi -C infra config get --stack prod ytdlpVersion)" \
