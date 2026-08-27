@@ -42,9 +42,9 @@ config:
   # vrc-service-status-panel:stateBucket: qazx7412-vrc-service-status-panel-dev-state
   vrc-service-status-panel:bucketLocation: apac
 
-  # yt-dlp と QuickJS を載せた Layer（仕様書 7.1、7.3）。
-  # backend/layer/build.sh で zip を作り、publish-layer-version で発行した
-  # 結果の ARN と、そこに入れた yt-dlp の版を入れる
+  # Layer に載せる yt-dlp の版（仕様書 7.1、7.3）。
+  # VRChat の /config の youtubedl_version に合わせる。
+  # Layer そのものは pulumi up が作るので、ARN は持たない（#21）
   vrc-service-status-panel:ytdlpVersion: ""
 
   # 合成監視の対象（仕様書 3.3）。
