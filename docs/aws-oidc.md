@@ -20,9 +20,9 @@ ARN は `infra/src/roles.ts` がその場のアカウントから組む（#26）
 `Pulumi.<スタック名>.yaml` は commit するので、ここに ARN を置くと
 アカウント ID がそのまま載ることになる。
 
-`ap-northeast-1` と `limit7412/VRCServiceStatusPanel` のほうは伏せ字ではなく、
-いま動いているものの実際の値である。
-**fork したり別のリージョンへ出したりするなら、この二つも書き換える。**
+`arn:aws:` の `aws`、`ap-northeast-1`、`limit7412/VRCServiceStatusPanel` は
+伏せ字ではなく、いま動いているものの実際の値である。
+**fork したり、別のリージョンやパーティションへ出したりするなら、この三つも書き換える。**
 リージョンは Lambda、Logs、Scheduler の ARN に入っており、スタックの `aws:region` と
 揃っていないとデプロイが `AccessDenied` になる。
 リポジトリは信頼ポリシーの `sub` に入っており、揃っていないとロールを引けない。
@@ -380,11 +380,16 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 | 「デプロイロールの権限」のポリシー全文 | `deploy-policy.json` |
 | 「実行時ロールの権限境界」のポリシー | `boundary.json` |
 
-保存する前に、置き換えるところが三つある。
+保存する前に、置き換えるところが四つある。
 
 - `<アカウントID>` を自分の AWS アカウント ID にする
 - `ap-northeast-1` を、そのスタックの `aws:region` と同じリージョンにする
 - 信頼ポリシーの `repo:limit7412/VRCServiceStatusPanel` を、自分の `owner/repo` にする
+- `arn:aws:` を、出す先のパーティションにする（`aws-cn`、`aws-us-gov`）
+
+パーティションは商用の `aws` のままでよいことがほとんどである。
+`infra/src/roles.ts` は境界の ARN を組むときに `aws.getPartition()` から取るので、
+そちらは書き換えなくても揃う。
 
 置き換え忘れはどれも実行時まで表に出ない。
 リージョンがずれていれば CI の `CreateFunction` が `AccessDenied` になり、
