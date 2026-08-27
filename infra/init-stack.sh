@@ -64,14 +64,27 @@ fi
 # 入力が尽きたら止める。省略ではなく中断だからである。
 # 省略できない値を聞いている途中で Ctrl-D を押されたときに、
 # 同じ警告を出し続ける無限ループにならないようにする。
+# この実行で新しく作ったスタック。中断したときの案内に使う。
+# 元からあったスタックを「作りかけ」として案内すると、
+# 案内どおりに消したときに以前からある設定ごと消えてしまう。
+created_main=no
+created_oidc=no
+
+# Layer の ARN と版がそろっているか。最後の案内を分けるために使う。
+layer_ready=no
+
 abort_on_eof() {
     printf '\n' >&2
     echo "入力が尽きたので中断する。" >&2
-    echo "作りかけのスタックを消すなら、作った分だけ次を実行する" >&2
-    echo "  pulumi -C \"$here\" stack rm $stack" >&2
-    if [ "$use_ci" = yes ]; then
-        echo "  pulumi -C \"$here/oidc\" stack rm $stack" >&2
+
+    if [ "$created_main" = no ] && [ "$created_oidc" = no ]; then
+        echo "この実行で作ったスタックは無いので、消すものも無い" >&2
+        exit 1
     fi
+
+    echo "この実行で作ったスタックを消すなら、次を実行する" >&2
+    [ "$created_main" = no ] || echo "  pulumi -C \"$here\" stack rm $stack" >&2
+    [ "$created_oidc" = no ] || echo "  pulumi -C \"$here/oidc\" stack rm $stack" >&2
     exit 1
 }
 
@@ -180,13 +193,16 @@ set_secret() {
 # 片方だけだと、deploy.sh の事前確認は ARN しか見ないので通ってしまい、
 # settings.ts が両方を require しているため pulumi up で止まる。
 set_layer() {
-    local arn="" version=""
+    local arn="" version="" arn_default="" version_default=""
+
+    arn_default=$(current_config "$here" ytdlpLayerArn)
+    version_default=$(current_config "$here" ytdlpLayerVersion)
 
     while :; do
-        ask "yt-dlp Layer の ARN（未発行なら空のまま）" || abort_on_eof
+        ask "yt-dlp Layer の ARN（未発行なら空のまま）" "$arn_default" || abort_on_eof
         arn="$ANSWER"
 
-        ask "その Layer に入れた yt-dlp の版（同上）" || abort_on_eof
+        ask "その Layer に入れた yt-dlp の版（同上）" "$version_default" || abort_on_eof
         version="$ANSWER"
 
         if [ -n "$arn" ] && [ -z "$version" ]; then
@@ -210,21 +226,37 @@ set_layer() {
 
     pulumi -C "$here" config set --stack "$stack" ytdlpLayerArn "$arn"
     pulumi -C "$here" config set --stack "$stack" ytdlpLayerVersion "$version"
+    layer_ready=yes
 }
 
+# スタックを選ぶ。無ければ作る。
+# 新しく作ったときだけ 0 を返す。元からあった場合は 1 を返し、
+# 中断時の削除案内から外す。
 create_stack() {
     local dir="$1"
 
-    # 既にあれば作らない。二度目以降は値の入れ直しになる。
+    if pulumi -C "$dir" stack select "$stack" > /dev/null 2>&1; then
+        return 1
+    fi
+
     pulumi -C "$dir" stack select --create "$stack" --secrets-provider passphrase > /dev/null
+    return 0
 }
 
 # infra/oidc/ は CI の入口である。手元からだけ流すなら要らない。
 # 作らせると、使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになる。
 # 本体の workloadBoundaryArn は省略できるので、無くても手元からは流せる。
+# 既定は、いま入っている設定から決める。
+# 手元からだけとして作ったスタックへ二度目を流したとき、Enter で通しただけで
+# CI 利用へ切り替わり、要らない OIDC のスタックができてしまうのを避ける。
+ci_default=y
+if has_config "$here" cloudflareAccountId && ! has_config "$here/oidc" githubRepository; then
+    ci_default=n
+fi
+
 use_ci=""
 while [ -z "$use_ci" ]; do
-    ask "GitHub Actions からもデプロイするか（y/n）" "y" || abort_on_eof
+    ask "GitHub Actions からもデプロイするか（y/n）" "$ci_default" || abort_on_eof
 
     # 打ち間違いを no として飲み込まない。飲み込むと、CI を使うつもりでも
     # スタックも質問も案内も黙って省かれる。
@@ -239,8 +271,11 @@ done
 
 echo
 echo "=== $stack を作る ==="
-create_stack "$here"
-[ "$use_ci" = no ] || create_stack "$here/oidc"
+create_stack "$here" && created_main=yes
+
+if [ "$use_ci" = yes ]; then
+    create_stack "$here/oidc" && created_oidc=yes
+fi
 
 # 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
 # 別のリージョンで作ってあると、AWS のリソースが置き換わり、
@@ -289,10 +324,19 @@ echo "  $here/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
 
+# Layer が既にそろっているなら、--ytdlp は付けない。
+# 付けると新しい版を発行し、いま入れた ARN と版を上書きしてしまう。
+deploy_line="       \"$here/deploy.sh\" --ytdlp <版>"
+deploy_label="Layer を発行して本体を流す"
+if [ "$layer_ready" = yes ]; then
+    deploy_line="       \"$here/deploy.sh\""
+    deploy_label="本体を流す（Layer は入れた ARN をそのまま使う）"
+fi
+
 if [ "$use_ci" = no ]; then
     echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
-    echo "  2. Layer を発行して本体を流す"
-    echo "       \"$here/deploy.sh\" --ytdlp <版>"
+    echo "  2. $deploy_label"
+    echo "$deploy_line"
 else
     echo "  1. 入口と権限境界を作る"
     echo "       npm ci --prefix \"$here/oidc\""
@@ -305,8 +349,8 @@ else
     echo "     commit は 2 のあとにする。境界を入れる前の設定を commit すると、"
     echo "     CI はそれを checkout して境界の付いていないロールを作ろうとし、"
     echo "     DenyBoundaryRemoval で止まる"
-    echo "  4. Layer を発行して本体を流す"
-    echo "       \"$here/deploy.sh\" --ytdlp <版>"
+    echo "  4. $deploy_label"
+    echo "$deploy_line"
     echo "  5. 次の五つを GitHub の Secrets へ登録する"
     echo "       AWS_DEPLOY_ROLE_ARN"
     echo "         pulumi -C \"$here/oidc\" stack output githubDeployRoleArn"
