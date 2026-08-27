@@ -89,6 +89,10 @@ if [ "${#phrase}" -lt "$MIN_PASSPHRASE" ]; then
     echo "  古いほうを PULUMI_CONFIG_PASSPHRASE に入れたまま次を実行すると、" >&2
     echo "  新しいパスフレーズを聞かれ、設定と state が入れ替わったもので暗号化し直される。" >&2
     echo "    pulumi -C \"$here\" stack change-secrets-provider passphrase --stack $stack" >&2
+    echo "  GitHub Actions からも流しているなら、infra/oidc/ 側も同じ古いパスフレーズで" >&2
+    echo "  作ってあるので、環境変数を切り替える前にこちらも入れ替える。忘れると、" >&2
+    echo "  次に infra/oidc/ を流したときに state を復号できない。" >&2
+    echo "    pulumi -C \"$here/oidc\" stack change-secrets-provider passphrase --stack $stack" >&2
     echo "  そのあと新しいほうを PULUMI_CONFIG_PASSPHRASE に入れて、ここへ戻る。" >&2
     exit 1
 fi
