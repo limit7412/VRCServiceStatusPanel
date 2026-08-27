@@ -15,6 +15,10 @@ OIDC で短命の資格情報を受け取るので、長い寿命の AWS の鍵�
 aws sts get-caller-identity --query Account --output text
 ```
 
+**一箇所だけ抜けている。** `workloadBoundaryArn` に入れる境界の ARN は
+`Pulumi.<スタック名>.yaml` へ平文で入り、そのファイルは commit する（#12）。
+そこにはアカウント ID がそのまま載る。設定から外す案は #26 にある。
+
 `ap-northeast-1` と `limit7412/VRCServiceStatusPanel` のほうは伏せ字ではなく、
 いま動いているものの実際の値である。
 **fork したり別のリージョンへ出したりするなら、この二つも書き換える。**
