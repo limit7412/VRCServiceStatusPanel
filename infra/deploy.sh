@@ -12,6 +12,8 @@
 #   infra/deploy.sh --ytdlp 2025.09.26     yt-dlp の版を入れ替えてから流す
 #   infra/deploy.sh --yes                  以降の引数は pulumi up へ渡る
 #
+# 相手のスタックは pulumi stack select で先に決める。--stack は受け付けない。
+#
 # R2 をバックエンドにしている場合、AWS の鍵は DEPLOY_AWS_* で渡す
 # （infra/README.md の「AWS の資格情報を分ける」）。
 
@@ -36,6 +38,14 @@ while [ $# -gt 0 ]; do
         -h | --help)
             awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
             exit 0
+            ;;
+        # --stack を通すと、pulumi up だけがそちらを見て、設定の読み書きは
+        # 選ばれているスタックを見る。dev の版で作った zip を prod の Layer として
+        # 発行しながら、description と YTDLP_VERSION には prod の版が入る、
+        # という食い違いになる。相手は一つに決める。
+        --stack | --stack=* | -s | -s?*)
+            echo "--stack は受け付けない。pulumi stack select <名前> で先に決める" >&2
+            exit 2
             ;;
         *)
             pulumi_args+=("$1")

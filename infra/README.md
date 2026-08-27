@@ -570,6 +570,22 @@ steps:
   # get.pulumi.com のスクリプトで入れてもよい
   - uses: pulumi/actions@v6
 
+  # Layer の zip も .gitignore の対象で、checkout には入っていない。
+  # src/layer.ts が FileArchive として開くので、bootstrap.zip と同じく
+  # 無いと pulumi up はファイル未検出で止まる。
+  #
+  # 版は流す相手のスタックから読む。ここで別のスタックの版を渡すと、
+  # 中身と description と YTDLP_VERSION が食い違う。
+  # config get は Pulumi CLI が要るので、このステップは上より後に置く。
+  - run: |
+      backend/layer/build.sh \
+        "$(pulumi -C infra config get --stack prod ytdlpVersion)" \
+        "" backend/ytdlp-layer.zip
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.PULUMI_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+
   # スタック名は infra/oidc/ を流したときのものと揃える。
   # dev のデプロイロールは prod の関数にもロールにも手が届かない
   - run: pulumi up --yes --stack prod
@@ -597,15 +613,24 @@ steps:
 自分と同じスタック名の接頭辞だけで、`dev` のロールで `prod` を触ると
 AccessDenied になる。
 
+**既にこの構成で CI を回している場合は、`infra/oidc/` を先に流す。** 以前の
+デプロイロールは Layer の読み取りしか許していないので、本体だけを新しくすると、
+最初の `PublishLayerVersion` で `AccessDenied` になる。`infra/oidc/` は CI から
+更新できない設計なので、手元から流す。
+
+```
+npm ci --prefix infra/oidc
+pulumi -C infra/oidc up --stack prod
+```
+
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
 置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
 どちらも checkout した時点でそろっている。**そろっていないのはバイナリだけ**で、
 これは `.gitignore` の対象なので毎回作る。
 
-Layer の zip だけはバイナリと同じ扱いになる。`.gitignore` の対象なので、
-ワークフローでも `pulumi up` の前に `backend/layer/build.sh` を流す必要がある
-（仕様書 7.1、7.3）。発行そのものは `pulumi up` の中で起きるので、デプロイロールには
-Layer の発行と削除も与えてある。
+Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore` の対象なので、
+`pulumi up` の前に作る（仕様書 7.1、7.3）。発行そのものは `pulumi up` の中で起きるので、
+デプロイロールには Layer の発行と削除も与えてある。
 
 デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
 
