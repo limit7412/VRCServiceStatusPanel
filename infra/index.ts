@@ -21,7 +21,7 @@ import {
 // 中身は src/ にある。
 //
 //   settings.ts     スタックごとの設定
-//   providers.ts    AWS プロバイダ（R2 バックエンドとの鍵の取り合いを解く）
+//   providers.ts    AWS プロバイダ（リージョンを固定する）
 //   delivery.ts     R2 のバケットと Cache Rules（仕様書 6）
 //   layer.ts        yt-dlp と QuickJS の Layer（仕様書 7.1、7.3）
 //   credentials.ts  R2 の S3 互換トークンと、そこから導く鍵（仕様書 9）

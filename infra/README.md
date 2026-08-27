@@ -150,10 +150,9 @@ Admin Read & Write と Object Read & Write の二つである。どちらも読�
 
 ## 用意するもの
 
-- Pulumi CLI
+- Pulumi CLI と Pulumi Cloud のアカウント（無料の Individual で足りる）
 - AWS の資格情報（`aws configure` などで解決できる状態）
 - Cloudflare の API トークン（下記）
-- 状態の置き場所にする R2 バケット（下記）
 
 GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く必要はない。
 OIDC のロールを CLI で作り、その ARN を Secrets へ入れる（`docs/aws-oidc.md`）。
@@ -202,63 +201,62 @@ R2 は `アカウント全体` にする。`R2 バケット` を選ぶとバケ�
 
 ## 状態の置き場所
 
-R2 に置ける。S3 互換の DIY バックエンドとして扱う。
+Pulumi Cloud に置く（#23）。
 
-置き場所は `Pulumi.yaml` の `backend.url` で固定してある。バケットは
-`qazx7412-vrc-service-status-panel-pulumi-state` である。
+置き場所は `Pulumi.yaml` の `backend.url` で固定してある。
 
 ```yaml
 backend:
-  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://32cd31ff8a5c721c0583f57a83cb731e.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
+  url: https://api.pulumi.com
 ```
 
 ここで固定するのは、バックエンドがスタックより先に決まるためである。
 `Pulumi.<スタック名>.yaml` の設定はバックエンドが決まってからでないと読めないので、
-置き場所を書く先にはならない。`endpoint` にはスキームを付ける。ホスト名だけだと
-接続先の URL として解決されない。
+置き場所を書く先にはならない。
 
-**fork して自分のアカウントへ出すときは、まずここを書き換える。** バケット名も
-エンドポイントのアカウント ID も作者のものである。`cloudflareAccountId` を
-自分のものに直しても、この URL はスタック設定より先に読まれるため、
-書き換えないかぎり作者のアカウントへ繋ぎに行って認証で止まる。
+**`pulumi login` の先より、ここが優先される。** 別の場所へログインしていても、
+このプロジェクトを流すかぎり Pulumi Cloud へ向かう。Pulumi CLI 3.259.0 で、
+`pulumi login file://...` したあとに `pulumi stack ls` がそちらを見に行かないことを
+確かめた。`backend.url` を書かないプロジェクトでは、ログイン先がそのまま使われる。
 
-CI からも流すなら、書き換える先はもう一つある。`docs/aws-oidc.md` のロールと境界を
+**ただし環境変数 `PULUMI_BACKEND_URL` はこれを上書きする。** 同じ確認で、
+`PULUMI_BACKEND_URL` を渡すと `backend.url` を無視して指した先が使われた。
+意図せず別の state を触らないよう、この変数はシェルに残さないこと。
+
+ここを消すと、手元のログイン先しだいで別のバックエンドへ出てしまう。
+fork した人が file バックエンドのまま流すこともできてしまう。
+
+**手元では `pulumi login` する。**
+
+```
+pulumi login
+```
+
+ブラウザが開いてトークンを受け取る。以後は資格情報がローカルに残るので、
+デプロイのたびに繰り返す必要はない。
+
+CI はトークンを持たない。GitHub Actions の OIDC を Pulumi Cloud のアクセス
+トークンへ交換する（「ワークフローでの受け取り」）。長い寿命の鍵が Secrets に
+増えないのがこの方式を採った理由である。
+
+**fork して自分のアカウントへ出すときは、`pulumi login` した先が自分の組織に
+なっていればよい。** 以前は `backend.url` に作者のバケットとアカウント ID が
+入っていたので、そこを書き換えないと作者のアカウントへ繋ぎに行っていた。
+いまはその一歩が消えている。
+
+CI からも流すなら、書き換える先が一つある。`docs/aws-oidc.md` のロールと境界を
 自分のアカウントに作り直す。信頼ポリシーの `sub` は元のリポジトリを指しているので、
 fork の Actions ではそのままロールを引けない。
 
-**`pulumi login` は要らない。** 手元でも CI でも、要るのは R2 の鍵だけである。
+**state の中の secret は預けない。** `--secrets-provider passphrase` を続けるので、
+Pulumi Cloud にあるのは `PULUMI_CONFIG_PASSPHRASE` で暗号化した暗号文だけである。
+Pulumi Cloud の鍵管理には切り替えない。パスフレーズを無くすと state を読めなくなる
+のは、置き場所を変えても同じである。控えておくこと。
 
-```
-export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
-# シークレットのほうは履歴に残さない
-printf 'AWS_SECRET_ACCESS_KEY: '
-read -rs AWS_SECRET_ACCESS_KEY && echo
-export AWS_SECRET_ACCESS_KEY
-# 一時的な AWS の資格情報を使っていたシェルなら、これを消す。
-# 残っていると R2 への署名に AWS のセッショントークンが混ざって認証に失敗する
-unset AWS_SESSION_TOKEN
-```
-
-バケットは先に手で作っておく。Pulumi の DIY バックエンドはバケットを作らず、
-既にあるものを指すだけである。トークンを絞るときの候補にも、作ってからでないと
-出てこない。順番は、バケット、トークン、`pulumi up` になる。
-
-このバケットだけは Pulumi の管理外に置く。自分の状態を自分で管理させると、
-作る前に置き場所が要ることになる。場所はどこでもよい。中身は state の JSON だけである。
-
-**`src/delivery.ts` が作る内部バケットとは別物である。**
-`qazx7412-vrc-service-status-panel-<スタック名>-state` のほうは集約サーバーが使うもので（仕様書 6）、
-Pulumi が管理する。名前を分けてあるのはそのためで、同じにすると Pulumi が
-自分の state の入っているバケットを作ろうとして衝突する。
-
-鍵も手で作る。上の API トークンとは別物で、こちらは R2 のページから発行する。
-「R2 object storage → Account Details → API Tokens → Manage → Create Account API token」。
-権限は **Object Read & Write**、スコープは状態用バケットひとつに絞る。
-Object 系のトークンは S3 互換 API でしか使えないが、DIY バックエンドが叩くのは
-そちらなので足りる。Secret Access Key は作成直後の一度しか表示されない。
-
-鍵は state の中で暗号化される。DIY バックエンドではパスフレーズから鍵を導くので、
-`PULUMI_CONFIG_PASSPHRASE` を無くすと state を読めなくなる。控えておくこと。
+**`src/delivery.ts` が作る内部バケットは state とは別物である。**
+`qazx7412-vrc-service-status-panel-<スタック名>-state` のほうは集約サーバーが使うもので
+（仕様書 6）、Pulumi が管理する。名前に `state` が入っているのは、集約サーバーが
+合成監視の履歴と前回値を置く先だからで、Pulumi の state とは関係が無い。
 
 ### パスフレーズの作り方
 
@@ -281,31 +279,15 @@ Pulumi の鍵導出は PBKDF2-SHA256 を 100 万回まわして AES-256-GCM の�
 文字種の規則は置いていない。規則を足すほど、生成した値が落ちて人が考えた値が通る、
 という逆転が起きるためである。長さだけを見る。
 
-### AWS の資格情報を分ける
+### AWS の資格情報
 
-上の `AWS_ACCESS_KEY_ID` と `AWS_SECRET_ACCESS_KEY` は R2 のものである。
-AWS プロバイダの既定の探索順はこの環境変数を共有プロファイルより先に見るため、
-そのままでは Lambda の操作にも R2 の鍵が使われて認証に失敗する。
+`AWS_*` をそのまま使う。`aws configure` のプロファイルも普通に使える。
 
-AWS 側は `DEPLOY_AWS_*` で渡す。`src/providers.ts` がこれを AWS プロバイダから見た
-`AWS_*` へ写しており、写しは元の変数がある場合だけ効く。
-
-```
-export DEPLOY_AWS_ACCESS_KEY_ID=<AWSのアクセスキーID>
-export DEPLOY_AWS_SECRET_ACCESS_KEY=<AWSのシークレット>
-# 一時的な資格情報なら DEPLOY_AWS_SESSION_TOKEN も
-```
-
-**プロファイルでは代わりにならない。** `AWS_PROFILE` を渡しても
-`AWS_ACCESS_KEY_ID` は R2 のまま残り、環境変数のほうが先に見られる。
-R2 をバックエンドにするなら、AWS 側は鍵で渡すことになる。
-
-状態を R2 へ置かない場合はどれも要らない。`AWS_*` がそのまま使われ、
-プロファイルも普通に使える。
-
-写し替えが効くのは Pulumi の AWS プロバイダだけである。
-同じシェルで `aws` コマンドを叩くときは、その場で `AWS_*` へ移す
-（下のデプロイ手順を参照）。
+かつては AWS 側の鍵を `DEPLOY_AWS_*` で渡し、`src/providers.ts` が `envVarMappings`
+で写していた。state を R2 へ置いていたころ、そのバックエンドが `AWS_ACCESS_KEY_ID` と
+`AWS_SECRET_ACCESS_KEY` から R2 の鍵を読むため、AWS の操作と食い違ったからである。
+state が Pulumi Cloud へ移ってバックエンドがこの変数を見なくなったので、
+切り分けも写し替えも要らなくなった（#23）。
 
 ## 設定の置き場所
 
@@ -373,6 +355,14 @@ Pulumi と無関係なコードへは渡さない。
 
 ### この変更より前に作ったスタック
 
+**状態の置き場所が R2 から Pulumi Cloud へ変わった（#23）。**
+R2 に state を持つスタックは、`pulumi login` した先から見えない。
+移送するなら、古い `backend.url` を指した作業ツリーで `pulumi stack export` して
+`pulumi stack import` で入れ直すことになる。
+
+このリポジトリではその手間は要らない。`Pulumi.<スタック名>.yaml` はまだ commit されて
+おらず（#12）、`pulumi up` も流れていないので、移す state が無い。
+
 `deploy.sh` の前に `init-stack.sh` を流し直す。
 
 設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として
@@ -407,6 +397,9 @@ commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` �
 ```
 cd infra
 npm ci
+
+# 状態は Pulumi Cloud にある。初回だけログインする（#23）
+pulumi login
 
 # パスフレーズは覚えずに作る（「パスフレーズの作り方」を参照）。
 #   openssl rand -base64 32
@@ -551,11 +544,12 @@ CI からは通らない。デプロイロールは境界の付いたロール�
 
 ### ワークフローでの受け取り
 
-CI では `AWS_*` の取り合いが起きる。Pulumi の状態は R2 にあり、そのバックエンドが
-`AWS_*` から R2 の鍵を読む。一方 `configure-aws-credentials` も既定では `AWS_*` を
-書く。両方を `AWS_*` に置くことはできない。
+CI はトークンを一つも持たずに Pulumi Cloud へ入る。
+`pulumi/auth-actions` が GitHub Actions の OIDC トークンをアクセストークンへ
+交換し、以降のステップから見える `PULUMI_ACCESS_TOKEN` に入れる。
 
-`output-credentials: true` で受け取り、AWS 側は `DEPLOY_AWS_*` へ入れる。
+AWS 側も OIDC で入る。`AWS_*` の取り合いはもう起きないので、
+`configure-aws-credentials` にはジョブの環境へ普通に書かせてよい。
 
 ```yaml
 permissions:
@@ -576,17 +570,19 @@ steps:
       platforms: arm64
   - run: backend/build.sh
 
-  - id: aws
-    uses: aws-actions/configure-aws-credentials@v4
+  - uses: aws-actions/configure-aws-credentials@v4
     with:
       role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
       aws-region: ap-northeast-1
-      output-credentials: true
-      # ジョブの環境へ AWS_* を書かせない。
-      # 既定では書かれるので、AWS_SESSION_TOKEN が後続へ残る。
-      # 下で AWS_ACCESS_KEY_ID と AWS_SECRET_ACCESS_KEY だけを R2 のものへ
-      # 差し替えると、R2 への署名に AWS のセッショントークンが混ざって失敗する
-      output-env-credentials: false
+
+  # Pulumi Cloud へは OIDC で入る。PULUMI_ACCESS_TOKEN を Secrets へ置かない。
+  # 無料の Individual で使えるのは personal トークンだけである。
+  # organization は個人アカウントでも必須で、値は自分のユーザー名になる。
+  - uses: pulumi/auth-actions@v2
+    with:
+      organization: limit7412
+      requested-token-type: urn:pulumi:token-type:access_token:personal
+      scope: user:limit7412
 
   - run: npm ci
     working-directory: infra
@@ -608,29 +604,29 @@ steps:
         "$(pulumi -C infra config get --stack prod ytdlpVersion)" \
         "" backend/ytdlp-layer.zip
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.PULUMI_STATE_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
 
   # スタック名は commit してある Pulumi.<スタック名>.yaml のものにする
   - run: pulumi up --yes --stack prod
     working-directory: infra
     env:
-      # Pulumi の状態の置き場所（R2）
-      AWS_ACCESS_KEY_ID: ${{ secrets.PULUMI_STATE_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
       # 設定は checkout した Pulumi.prod.yaml から読まれる。
       # 暗号文で入っている値を開けるのに要る（「設定の置き場所」を参照）
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-      # デプロイ先（AWS）。src/providers.ts がこれを AWS プロバイダの AWS_* へ写す
-      DEPLOY_AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
-      DEPLOY_AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
-      DEPLOY_AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
 
-`output-env-credentials: false` が使えない版なら、pulumi のステップで
-`AWS_SESSION_TOKEN: ""` を明示しても同じことになる。
+Secrets に置くのは三つだけである。
+
+| 名前 | 何に使う |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | 引くロールを指す（`docs/aws-oidc.md`） |
+| `PULUMI_CONFIG_PASSPHRASE` | `Pulumi.<スタック名>.yaml` の暗号文を開ける |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare プロバイダ |
+
+**Pulumi Cloud 側の下ごしらえが一つ要る。** GitHub Actions を OIDC issuer として
+登録する。登録しないと `pulumi/auth-actions` の交換が通らない。
+手順は[公式の案内](https://www.pulumi.com/docs/administration/access-identity/oidc-issuers/github/)にある。
 
 **この例は `prod` を更新する。** 動かすには `prod` のスタックを作り、その
 `Pulumi.prod.yaml` を commit しておく必要がある。デプロイロールは `dev` と `prod` の
@@ -661,6 +657,13 @@ Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore
 `workloadBoundaryName` から ARN を組んで渡すだけで、境界そのものはここに無い。
 
 ## 手で行う作業
+
+**Pulumi Cloud に GitHub Actions を OIDC issuer として登録する。**
+CI からデプロイする場合だけ要る。登録しないと `pulumi/auth-actions` の交換が通らず、
+ワークフローが Pulumi Cloud へ入れない。手順は
+[公式の案内](https://www.pulumi.com/docs/administration/access-identity/oidc-issuers/github/)にある。
+
+手元から流すだけなら要らない。`pulumi login` で足りる。
 
 **カスタムドメインの接続。** ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
