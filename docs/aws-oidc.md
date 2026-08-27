@@ -381,13 +381,39 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 リポジトリがずれていれば `configure-aws-credentials` が
 `Not authorized to perform sts:AssumeRoleWithWebIdentity` で止まる。
 
-境界を先に作る。デプロイロールのポリシーが境界の ARN を参照している。
+順番は、プロバイダ、境界、ロール、ロールのポリシーになる。
+信頼ポリシーがプロバイダの ARN を、デプロイポリシーが境界の ARN を参照するので、
+参照される側から作る。
+
+**1. OIDC プロバイダ。** まず在るかどうかを見る。
+
+```
+aws iam list-open-id-connect-providers
+```
+
+`token.actions.githubusercontent.com` で終わる ARN が出れば、それを使う。作らない。
+アカウントに一つしか置けず、他のリポジトリも使っている可能性がある。
+
+出なければ作る。
+
+```
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+```
+
+飛ばすと、次の `create-role` が信頼ポリシーの `Principal` を解決できず
+`Invalid principal` で止まる。
+
+**2. 権限境界。**
 
 ```
 aws iam create-policy \
   --policy-name qazx7412-vrc-service-status-panel-workload-boundary \
   --policy-document file://boundary.json
 ```
+
+**3. デプロイロール。**
 
 ```
 aws iam create-role \
@@ -396,23 +422,16 @@ aws iam create-role \
   --assume-role-policy-document file://trust.json
 ```
 
-ロールの `--description` に日本語は入らない。
+`--description` に日本語は入らない。
 IAM はここを Latin-1 の範囲に限っており、外れると `ValidationError` で止まる。
+
+**4. ロールのポリシー。**
 
 ```
 aws iam put-role-policy \
   --role-name qazx7412-vrc-service-status-panel-github-deploy \
   --policy-name deploy \
   --policy-document file://deploy-policy.json
-```
-
-OIDC プロバイダは既にあるので作らない。
-無いアカウントで一から作るなら、次を先に流す。
-
-```
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com
 ```
 
 ### 権限を変えるとき
@@ -431,15 +450,8 @@ aws iam update-assume-role-policy \
 境界を変えるときは新しい版を作って既定にする。
 `DenyBoundaryEdit` があるので、CI からは通らない。
 
-```
-aws iam create-policy-version \
-  --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
-  --policy-document file://boundary.json \
-  --set-as-default
-```
-
-**管理ポリシーは版を五つまでしか持てない。** 六つ目の `create-policy-version` は
-`LimitExceeded` で止まるので、先に古い版を消す。
+**先に空きを作る。** 管理ポリシーは版を五つまでしか持てず、埋まっていると
+`create-policy-version` が `LimitExceeded` で止まる。
 既定の版は消せないので、`IsDefaultVersion` が `false` のものから選ぶ。
 
 ```
@@ -448,10 +460,21 @@ aws iam list-policy-versions \
   --query 'Versions[?!IsDefaultVersion].[VersionId,CreateDate]' --output text
 ```
 
+五つ並んでいたら、いちばん古いものを消す。
+
 ```
 aws iam delete-policy-version \
   --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
   --version-id v2
+```
+
+空きができたら新しい版を作る。
+
+```
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
+  --policy-document file://boundary.json \
+  --set-as-default
 ```
 
 **直したら、この文書の JSON も同じ内容に揃える。** ここが実物の記録であり、
