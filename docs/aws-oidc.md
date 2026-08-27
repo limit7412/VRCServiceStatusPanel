@@ -456,15 +456,17 @@ aws iam update-assume-role-policy \
 
 **先に空きを作る。** 管理ポリシーは版を五つまでしか持てず、埋まっていると
 `create-policy-version` が `LimitExceeded` で止まる。
-既定の版は消せないので、`IsDefaultVersion` が `false` のものから選ぶ。
+
+既定の版も一つと数える。数えるほうは既定を含めて出す。
 
 ```
 aws iam list-policy-versions \
   --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
-  --query 'Versions[?!IsDefaultVersion].[VersionId,CreateDate]' --output text
+  --query 'Versions[].[VersionId,IsDefaultVersion,CreateDate]' --output text
 ```
 
-五つ並んでいたら、いちばん古いものを消す。
+五行あれば上限である。消す相手は `IsDefaultVersion` が `False` の行から選ぶ。
+既定の版は消せないので、そこを外していちばん古いものを消す。
 
 ```
 aws iam delete-policy-version \
