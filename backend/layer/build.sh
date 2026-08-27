@@ -11,6 +11,10 @@
 # 版は引数で受け取る。yt-dlp の版は VRChat クライアントの同梱版に合わせるため、
 # ここでは決めない（仕様書 7.3）。
 #
+# 同じ版の zip が既にあれば何もしない。Layer は Pulumi が持つので、
+# pulumi up のたびにこの zip が要る（仕様書 7.3）。版が変わらないかぎり
+# 36 MiB を取り直す意味は無い。
+#
 # 使い方:
 #   backend/layer/build.sh <yt-dlpの版> [QuickJSの版] [出力先]
 #   backend/layer/build.sh 2025.09.26
@@ -33,6 +37,18 @@ if [ -z "$YTDLP_VERSION" ]; then
     echo "usage: $0 <yt-dlp version> [quickjs version] [output zip]" >&2
     echo "  例: $0 2025.09.26" >&2
     exit 2
+fi
+
+# 何で作ったかを zip の隣に書いておき、次はそれと引数を見比べる。
+#
+# 印を書くのは zip を作り終えたあとである。途中で落ちれば印は残らないか
+# 古いままなので、次の実行で作り直しになる。
+stamp="$OUTPUT.version"
+made="$YTDLP_VERSION $QUICKJS_VERSION"
+
+if [ -f "$OUTPUT" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$made" ]; then
+    echo "既にある: $OUTPUT（yt-dlp $YTDLP_VERSION / QuickJS $QUICKJS_VERSION）"
+    exit 0
 fi
 
 for command in curl zip; do
@@ -62,8 +78,9 @@ chmod +x "$work/bin/yt-dlp_linux" "$work/bin/qjs"
 # 発行のたびに中身が同じ Layer を作らないため。
 find "$work" -exec touch -t 200001010000 {} +
 
-rm -f "$OUTPUT"
+rm -f "$OUTPUT" "$stamp"
 (cd "$work" && zip -q -X -r "$OUTPUT" bin)
+printf '%s\n' "$made" > "$stamp"
 
 echo "できあがり: $OUTPUT"
 

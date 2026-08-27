@@ -190,7 +190,9 @@ new aws.iam.RolePolicy(
             .all([awsAccountId, deployRole.arn, workloadBoundary.arn])
             .apply(([account, roleArn, boundaryArn]) => {
                 const fn = `arn:aws:lambda:${awsRegion}:${account}:function:${prefix}-*`;
-                const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:qazx7412-vrc-service-status-panel-*`;
+                // 末尾の * は版の番号まで飲む。発行は版無しの ARN、
+                // 読み取りと削除は版付きの ARN を相手にするためである。
+                const layer = `arn:aws:lambda:${awsRegion}:${account}:layer:${prefix}-*`;
                 const role = `arn:aws:iam::${account}:role/${prefix}-*`;
                 const logs = `arn:aws:logs:${awsRegion}:${account}:log-group:/aws/lambda/${prefix}-*`;
                 const schedule = `arn:aws:scheduler:${awsRegion}:${account}:schedule/default/${prefix}-*`;
@@ -229,14 +231,20 @@ new aws.iam.RolePolicy(
                             Resource: fn,
                         },
                         {
-                            // Layer は関数へ結ぶときに読む（仕様書 7.1、7.3）。
-                            // 発行は手元から行うのでここには要らない。
+                            // Layer は Pulumi が持つので、発行と削除も要る
+                            // （仕様書 7.1、7.3）。中身が変われば新しい版が出来て、
+                            // 関数を新しい ARN へ繋ぎ替えてから古い版が消える。
                             //
-                            // スタック名で絞らないのは、Layer が中身で決まる
-                            // 不変の成果物で、dev と prod で同じものを指すためである。
+                            // 名前にスタック名が入るので、ここも prefix で絞れる。
+                            // dev のデプロイロールから prod の Layer には届かない。
                             Sid: "Layers",
                             Effect: "Allow",
-                            Action: ["lambda:GetLayerVersion", "lambda:ListLayerVersions"],
+                            Action: [
+                                "lambda:DeleteLayerVersion",
+                                "lambda:GetLayerVersion",
+                                "lambda:ListLayerVersions",
+                                "lambda:PublishLayerVersion",
+                            ],
                             Resource: layer,
                         },
                         {

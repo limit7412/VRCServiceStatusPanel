@@ -45,12 +45,9 @@ config:
     type: string
     description: バケットの置き場所のヒント。日本向けなので既定は apac
     default: apac
-  ytdlpLayerArn:
+  ytdlpVersion:
     type: string
-    description: yt-dlp と QuickJS を載せた Layer のバージョン ARN（仕様書 7.1）
-  ytdlpLayerVersion:
-    type: string
-    description: 上の Layer に入れた yt-dlp の版。/config の値と比べる（仕様書 7.3）
+    description: Layer に載せる yt-dlp の版。/config の値と比べる（仕様書 7.3）
   youtubeProbeVideoId:
     type: string
     description: 合成監視に使う固定動画（仕様書 3.3）

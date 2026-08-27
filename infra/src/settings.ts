@@ -66,8 +66,9 @@ export const publicBucketName = config.get("publicBucket") || `${prefix}-public`
 export const stateBucketName = config.get("stateBucket") || `${prefix}-state`;
 export const bucketLocation = config.get("bucketLocation") ?? "apac";
 
-export const ytdlpLayerArn = config.require("ytdlpLayerArn");
-export const ytdlpLayerVersion = config.require("ytdlpLayerVersion");
+// Layer に載せる yt-dlp の版（仕様書 7.3）。
+// backend/layer/build.sh が取ってくる版であり、実行時に /config と比べる相手でもある。
+export const ytdlpVersion = config.require("ytdlpVersion");
 
 export const youtubeProbeVideoId = config.require("youtubeProbeVideoId");
 export const boothProbeItemId = config.require("boothProbeItemId");

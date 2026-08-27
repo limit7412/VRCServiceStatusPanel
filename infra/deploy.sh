@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # 手元からのデプロイをひと通り流す。
 #
-# 手で並べると、バイナリのビルド、Layer の発行、ARN の書き写し、pulumi up の
-# 四つになる。途中で書き写しを挟むため、Layer を作り直したのに ARN を
-# 入れ替え忘れる、という抜け方をする（#8）。ここではその二つを必ず一緒に更新する。
+# 手で並べると、バイナリのビルド、Layer の zip の用意、pulumi up の三つになる。
+# Layer そのものは Pulumi が持つので、発行と関数への反映は up の中で揃う（#8）。
 #
 # commit はしない。出来上がった Pulumi.<スタック名>.yaml をどう残すかは
 # 人が決めることなので、最後に案内するだけにしてある。
 #
 # 使い方:
-#   infra/deploy.sh                        今の設定のまま作り直す
-#   infra/deploy.sh --ytdlp 2025.09.26     Layer をこの版で発行し直してから流す
+#   infra/deploy.sh                        今の設定のまま流す
+#   infra/deploy.sh --ytdlp 2025.09.26     yt-dlp の版を入れ替えてから流す
 #   infra/deploy.sh --yes                  以降の引数は pulumi up へ渡る
 #
 # R2 をバックエンドにしている場合、AWS の鍵は DEPLOY_AWS_* で渡す
@@ -56,6 +55,7 @@ need pulumi
 need npm
 need docker
 need zip
+need curl
 
 cd "$here"
 
@@ -79,57 +79,26 @@ fi
 echo "==> bootstrap.zip を作る"
 "$repo/backend/build.sh"
 
-# Layer は版を指定したときだけ発行し直す。
-#
-# ARN と版は必ず一緒に更新する。片方だけだと、実行時の版の比較が
-# 食い違いを出し続け、note に「VRChat 同梱版と不一致」を出したままになる（#8）。
+# 版を渡されたら、まず設定を書き換える。
+# 以降は設定を唯一の出どころとして扱うので、この一行で up まで揃う。
 if [ -n "$ytdlp_version" ]; then
-    need aws
-
-    # Layer は関数と同じリージョンに無いと結べない。CLI の既定に任せると、
-    # 未設定なら止まり、別のリージョンなら pulumi up まで気づけない。
-    # 既定は src/settings.ts と揃える。
-    region=$(config_get aws:region)
-    region="${region:-ap-northeast-1}"
-
-    echo "==> Layer の zip を作る（yt-dlp $ytdlp_version）"
-    "$repo/backend/layer/build.sh" "$ytdlp_version" "" "$here/ytdlp-layer.zip"
-
-    # aws コマンドは Pulumi の写し替えを知らない。鍵をその場で AWS_* へ移す。
-    # DEPLOY_AWS_* が無い環境（R2 をバックエンドにしていない）では
-    # そのままの AWS_* が使われる。
-    echo "==> Layer を発行する（$region）"
-    layer_arn=$(
-        env \
-            ${DEPLOY_AWS_ACCESS_KEY_ID:+AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID"} \
-            ${DEPLOY_AWS_SECRET_ACCESS_KEY:+AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY"} \
-            ${DEPLOY_AWS_SESSION_TOKEN:+AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN"} \
-            aws lambda publish-layer-version \
-            --region "$region" \
-            --layer-name qazx7412-vrc-service-status-panel-ytdlp \
-            --zip-file "fileb://$here/ytdlp-layer.zip" \
-            --compatible-runtimes provided.al2023 \
-            --compatible-architectures arm64 \
-            --query LayerVersionArn --output text
-    )
-
-    if [ -z "$layer_arn" ] || [ "$layer_arn" = "None" ]; then
-        echo "Layer の ARN を受け取れなかった" >&2
-        exit 1
-    fi
-
-    echo "==> ARN と版を設定へ入れる"
-    echo "    $layer_arn"
-    pulumi config set ytdlpLayerArn "$layer_arn"
-    pulumi config set ytdlpLayerVersion "$ytdlp_version"
-else
-    have_arn=$(config_get ytdlpLayerArn)
-    if [ -z "$have_arn" ]; then
-        echo "ytdlpLayerArn が未設定である。初回は --ytdlp <版> を付けて実行する" >&2
-        exit 1
-    fi
-    echo "==> Layer はそのまま使う（$(config_get ytdlpLayerVersion)）"
+    echo "==> yt-dlp の版を入れ替える（$ytdlp_version）"
+    pulumi config set ytdlpVersion "$ytdlp_version"
 fi
+
+# Layer の zip は毎回用意する。
+#
+# Pulumi が Layer を持つので、up はこのファイルを読んでハッシュを取る。
+# 無いと止まる。build.sh は同じ版の zip が既にあれば何もしないので、
+# 取り直しが走るのは版を変えたときだけである。
+want_version=$(config_get ytdlpVersion)
+if [ -z "$want_version" ]; then
+    echo "ytdlpVersion が未設定である。--ytdlp <版> を付けて実行するか、init-stack.sh で入れる" >&2
+    exit 1
+fi
+
+echo "==> Layer の zip を用意する（yt-dlp $want_version）"
+"$repo/backend/layer/build.sh" "$want_version" "" "$repo/backend/ytdlp-layer.zip"
 
 echo "==> pulumi up"
 pulumi up "${pulumi_args[@]+"${pulumi_args[@]}"}"
