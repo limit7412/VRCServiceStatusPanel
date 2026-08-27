@@ -168,6 +168,21 @@ has_config() {
     pulumi -C "$dir" config get --stack "$stack" "$key" > /dev/null 2>&1
 }
 
+# そのプロジェクトにこのスタックがあるか。
+#
+# stack select は見つからなければ 6 を返すが、見つかると選び直してしまう。
+# ここは既定値を決めるために覗くだけなので、読むだけの stack ls を使う。
+#
+# 一覧は変数へ受けてから読む。pulumi へ直に繋ぐと、grep -q が最初の一致で
+# 抜けたときに SIGPIPE で 141 になり、pipefail がそれを拾ってしまう。
+# 整形に頼らない形で照合するのは、詰めて出力されても通るようにするためである。
+stack_exists() {
+    local dir="$1" listed=""
+
+    listed=$(pulumi -C "$dir" stack ls --json 2> /dev/null) || return 1
+    grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"$stack\"" <<< "$listed"
+}
+
 # 秘密の値。打っている最中も画面に出さず、標準入力から渡して暗号文として記録する。
 #
 # 二度目以降は Enter で今の値のままにできる。既定として見せることはしない。
@@ -254,11 +269,15 @@ create_stack() {
 # infra/oidc/ は CI の入口である。手元からだけ流すなら要らない。
 # 作らせると、使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになる。
 # 本体の workloadBoundaryArn は省略できるので、無くても手元からは流せる。
-# 既定は、いま入っている設定から決める。
+# 既定は、いま在るスタックから決める。
 # 手元からだけとして作ったスタックへ二度目を流したとき、Enter で通しただけで
 # CI 利用へ切り替わり、要らない OIDC のスタックができてしまうのを避ける。
+#
+# 設定キーの有無では見ない。スタックを作った直後から最初の config set までの
+# 間に中断すると、スタックは在るのに設定はまだ無い。そこで再開すると既定が
+# y へ戻り、続きを流しただけのつもりで OIDC まで作ることになる。
 ci_default=y
-if has_config "$here" cloudflareAccountId && ! has_config "$here/oidc" githubRepository; then
+if stack_exists "$here" && ! stack_exists "$here/oidc"; then
     ci_default=n
 fi
 
