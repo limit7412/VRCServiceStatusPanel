@@ -691,12 +691,27 @@ CI からデプロイする場合だけ要る。登録しないと `pulumi/auth-
 CLI にこれを行うコマンドは無い。コンソールか REST API のどちらかになる
 （Pulumi CLI 3.259.0 の `pulumi org` に issuer を扱うサブコマンドが無いことを確かめた）。
 
-コンソールなら Settings → Access Management → OIDC Issuers → Register issuer で、
-名前を決めて URL に発行者を入れる。
+コンソールなら Settings → Access Management → OIDC Issuers → Register issuer。
+四つ聞かれるが、必須は Name と URL だけである。
 
-```
-https://token.actions.githubusercontent.com
-```
+| 欄 | 値 |
+| --- | --- |
+| Name | `github-actions` |
+| URL | `https://token.actions.githubusercontent.com` |
+| Max expiration (seconds) | `3600` |
+| Thumbprint | 空のまま |
+
+`Max expiration` は、交換して渡すアクセストークンの寿命の上限である。
+`pulumi/auth-actions` の `token-expiration` はあくまで要求で、そのまま通すか
+短く切り詰めるかは発行する側が決める。いまのワークフロー例はその入力を渡していないので
+空でも動くが、あとで長い寿命を要求する行が足されたときに、ここで頭打ちにできる。
+このプロジェクトのデプロイは 1 時間もあれば収まる。
+
+**`Thumbprint` は空のままにする。** 空なら Pulumi が発行者から公開鍵を取ってきて持つ。
+手で埋めると、GitHub が証明書を更新したときに交換が通らなくなり、入れ替えるまで
+CI が止まる。しかも Pulumi の `regenerate-thumbprints` は JWKS を静的に設定した
+発行者には使えないので、取り直しの道も塞ぐことになる。
+AWS の OIDC プロバイダに指紋を渡していないのと同じ理由である（`docs/aws-oidc.md`）。
 
 続けて認可ポリシーを一つ足す。無料の Individual で使えるのは personal トークンだけで、
 ワークフローの `pulumi/auth-actions` に渡す値と揃える必要がある。
