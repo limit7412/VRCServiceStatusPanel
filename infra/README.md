@@ -684,10 +684,45 @@ Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore
 
 **Pulumi Cloud に GitHub Actions を OIDC issuer として登録する。**
 CI からデプロイする場合だけ要る。登録しないと `pulumi/auth-actions` の交換が通らず、
-ワークフローが Pulumi Cloud へ入れない。手順は
-[公式の案内](https://www.pulumi.com/docs/administration/access-identity/oidc-issuers/github/)にある。
+ワークフローが Pulumi Cloud へ入れない。
 
 手元から流すだけなら要らない。`pulumi login` で足りる。
+
+CLI にこれを行うコマンドは無い。コンソールか REST API のどちらかになる
+（Pulumi CLI 3.259.0 の `pulumi org` に issuer を扱うサブコマンドが無いことを確かめた）。
+
+コンソールなら Settings → Access Management → OIDC Issuers → Register issuer で、
+名前を決めて URL に発行者を入れる。
+
+```
+https://token.actions.githubusercontent.com
+```
+
+続けて認可ポリシーを一つ足す。無料の Individual で使えるのは personal トークンだけで、
+ワークフローの `pulumi/auth-actions` に渡す値と揃える必要がある。
+
+| 項目 | 値 |
+| --- | --- |
+| Decision | Allow |
+| Token type | Personal |
+| Scope | `user:limit7412` |
+| Audience | `urn:pulumi:org:limit7412` |
+| Subject | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
+
+**Subject は `:*` で終わらせない。** 公式の例は `repo:<owner>/<repo>:*` だが、それだと
+そのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
+AWS 側の信頼ポリシーは `master` への push に絞ってあるので、ここも揃える
+（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
+
+REST API で行うなら次の二つを使う。`<orgName>` は個人アカウントならユーザー名である。
+
+```
+POST /api/orgs/<orgName>/oidc/issuers
+POST /api/orgs/<orgName>/auth/policies/oidcissuers/<issuerId>
+```
+
+fork するなら、この表の `limit7412` と `limit7412/VRCServiceStatusPanel` を
+自分のものに書き換える。ワークフロー側の `organization` と `scope` も同じ値にする。
 
 **カスタムドメインの接続。** ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
