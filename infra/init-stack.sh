@@ -400,14 +400,23 @@ set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 # 確かめるほうには ARN が要るので、その場のアカウントから組んで問い合わせる。
 # 組んだ ARN は設定へは入れない。
 #
+# パーティションも呼び出し元から取る。書き下すと aws-cn や GovCloud で実在する
+# 境界を見つけられず、既定が空のまま Enter で通されて、CI の CreateRole が
+# そこで落ちる。roles.ts が組み立てる ARN と食い違うことにもなる。
+#
+# 呼び出し元の ARN は arn:<パーティション>:iam::<アカウントID>:user/... の形をしており、
+# アカウントも同じ一回で取れる。
+#
 # aws が無いときも、資格情報が通らないときも、同じく既定が空になるだけである。
 # その場合は名前を手で入れる。
 boundary_default=""
 boundary_name=qazx7412-vrc-service-status-panel-workload-boundary
-account=$(aws_deploy sts get-caller-identity --query Account --output text || true)
-if [ -n "$account" ] && [ "$account" != "None" ]; then
-    if aws_deploy iam get-policy \
-        --policy-arn "arn:aws:iam::$account:policy/$boundary_name" > /dev/null; then
+caller_arn=$(aws_deploy sts get-caller-identity --query Arn --output text || true)
+if [ -n "$caller_arn" ] && [ "$caller_arn" != "None" ]; then
+    IFS=: read -r _ partition _ _ account _ <<< "$caller_arn" || true
+
+    if [ -n "${partition:-}" ] && [ -n "${account:-}" ] && aws_deploy iam get-policy \
+        --policy-arn "arn:$partition:iam::$account:policy/$boundary_name" > /dev/null; then
         boundary_default="$boundary_name"
     fi
 fi
