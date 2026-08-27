@@ -417,7 +417,11 @@ echo "  2. $deploy_label"
 echo "$deploy_line"
 
 # 境界を入れていないスタックは手元専用である。CI 向けの案内は出さない。
-if has_config "$here" workloadBoundaryArn; then
+#
+# ここは has_config では見分けられない。workloadBoundaryArn は Pulumi.yaml に
+# default: "" 付きで宣言してあるので、設定へ入れていなくても config get は
+# その既定を返して成功する。入っているかどうかは値の中身で見る。
+if [ -n "$(current_config "$here" workloadBoundaryArn)" ]; then
     echo "  3. 次の五つが GitHub の Secrets にあるか確かめる"
     echo "       AWS_DEPLOY_ROLE_ARN             デプロイロールの ARN（docs/aws-oidc.md）"
     echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
