@@ -14,6 +14,14 @@ on:
   push:
     branches: [master]
   pull_request:
+  # 手で起動できるようにしておく。
+  #
+  # required status check に指定した検査は、チェックランが作られないと
+  # 待ち状態のままになり PR をマージできない。pull_request のイベントから
+  # ワークフローの実行が作られない事象を実際に踏んだ（2026-08-26）。
+  # そのとき push と workflow_dispatch は動いていたので、これがあれば
+  # 対象のブランチを指して手で起動し、必要なチェックランを出せる。
+  workflow_dispatch:
 
 permissions:
   contents: read
