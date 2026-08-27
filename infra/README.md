@@ -77,7 +77,7 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 
 | ファイル | 何があるか |
 | --- | --- |
-| `init-stack.sh` | スタックを作って設定を入れる。最初の一回だけ |
+| `init-stack.sh` | スタックを作って設定を入れる。設定の移行もここで起きる |
 | `deploy.sh` | ビルドから `pulumi up` までをひと通り流す |
 | `index.ts` | 環境変数の組み立てと出力 |
 | `src/settings.ts` | スタックごとの設定 |
@@ -365,6 +365,21 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh --ytdlp 2025.09.26
 
 `CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流すときに渡す（#24）。
 `deploy.sh` は最初に見て、無ければそこで止まる。
+
+**この変更より前に作ったスタックは、`deploy.sh` の前に `init-stack.sh` を流し直す。**
+設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として
+`ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、短いパスフレーズの入れ替えを
+案内するのも `init-stack.sh` の中にある。`deploy.sh` だけを流すと、設定ファイルに
+トークンの暗号文が残ったままになる。
+
+```
+printf 'PULUMI_CONFIG_PASSPHRASE: '; read -rs PULUMI_CONFIG_PASSPHRASE && echo
+export PULUMI_CONFIG_PASSPHRASE
+
+infra/init-stack.sh dev
+```
+
+聞かれる値には、いま入っているものが既定として出る。Enter で通せばそのまま残る。
 
 **`export` しない。** export すると、デプロイが終わったあとも呼び出し元のシェルに残り、
 そこで動かすものすべてへ引き継がれる。この呼び出しにだけ渡せば、そこで終わる。

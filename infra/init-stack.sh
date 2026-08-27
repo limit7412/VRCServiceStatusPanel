@@ -81,6 +81,18 @@ if [ -n "${PULUMI_CONFIG_PASSPHRASE+set}" ]; then
     # 空なら下の長さの検査が 0 文字として弾く。
     phrase="$PULUMI_CONFIG_PASSPHRASE"
 elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
+    # 相対パスは絶対パスへ直して環境変数へ書き戻す。
+    #
+    # pulumi -C は「そのディレクトリで起動したかのように」振る舞うので、相対の
+    # ままだと Pulumi は infra/ や infra/oidc/ から解決する。ここで読むファイルと
+    # 食い違い、無ければスタックの作成が落ち、別の短いファイルがあれば検査した値と
+    # 違う鍵で暗号化される。Pulumi CLI 3.259.0 で、-C の先から解決することを確かめた。
+    case "$PULUMI_CONFIG_PASSPHRASE_FILE" in
+        /*) ;;
+        *) PULUMI_CONFIG_PASSPHRASE_FILE="$PWD/$PULUMI_CONFIG_PASSPHRASE_FILE" ;;
+    esac
+    export PULUMI_CONFIG_PASSPHRASE_FILE
+
     if [ ! -r "$PULUMI_CONFIG_PASSPHRASE_FILE" ]; then
         echo "PULUMI_CONFIG_PASSPHRASE_FILE が読めない: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
         exit 1

@@ -74,7 +74,7 @@ if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
     echo "CLOUDFLARE_API_TOKEN が要る。履歴にも呼び出し元のシェルにも残さないよう、" >&2
     echo "export せずに、この呼び出しにだけ渡す" >&2
     echo "  printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo" >&2
-    echo "  CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" infra/deploy.sh" >&2
+    echo "  CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" \"$here/deploy.sh\"" >&2
     exit 1
 fi
 
