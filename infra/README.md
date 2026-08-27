@@ -7,19 +7,17 @@ AWS と Cloudflare を一つの Pulumi プログラムにまとめている。
 R2 のバケット名も、トークンから導いた鍵も、そのまま Lambda の環境変数になる。
 分けて書くと、その受け渡しを人が写すことになり、鍵を替えたときに写し忘れる。
 
-## 二つのプロジェクト
+## CI の入口はここに無い
 
-| ディレクトリ | 何を持つか | 誰が流すか |
-| --- | --- | --- |
-| `infra/` | 配信経路と集約サーバー。毎回のデプロイで動く | 手元 / CI |
-| `infra/oidc/` | CI の入口と、実行時ロールの上限 | 手元だけ |
+GitHub Actions が AWS へ入るための OIDC プロバイダ、デプロイロール、実行時ロールの
+権限境界は、Pulumi で管理していない。AWS CLI で作り、`docs/aws-oidc.md` に記録してある。
 
-分けてあるのは、`infra/oidc/` が CI の権限そのものを決める場所だからである。
+分けてあるのは、そこが CI の権限そのものを決める場所だからである。
 同じプログラムに置くと、CI が自分を縛っている境界を書き換えられることになり、
 境界も入口も意味を失う。
 
-`infra/oidc/` は普段は動かさない。CI を用意するとき、権限を変えるとき、
-`sub` の条件を足すときにだけ、手元から流す。
+このプログラムから見えるのは、権限境界の ARN を設定 `workloadBoundaryArn` で
+受け取ることだけである。
 
 ## 名前の付け方
 
@@ -33,12 +31,13 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 | `qazx7412-vrc-service-status-panel-dev-public` | 配信バケット |
 | `qazx7412-vrc-service-status-panel-dev-state` | 内部バケット |
 | `qazx7412-vrc-service-status-panel-dev-r2` | R2 のデータ用トークン |
-| `qazx7412-vrc-service-status-panel-dev-github-deploy` | デプロイロール |
-| `qazx7412-vrc-service-status-panel-dev-workload-boundary` | 権限境界 |
 
 頭を作成者の名前から始めるのは、同じ AWS / Cloudflare アカウントに置いた
 他のものと見分けるためである。デプロイロールの権限もこの頭で絞ってあり、
 名前を外れたものへは手が届かない。
+
+デプロイロールと権限境界だけはスタック名を挟まない。リポジトリに対して一つあればよく、
+`dev` と `prod` で同じものを使う（`docs/aws-oidc.md`）。
 
 スタック名まで含めるので、同じアカウントに dev と prod を並べても衝突しない。
 
@@ -46,8 +45,9 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 これより緩く、大文字も `_` も長い名前も通るが、そのまま物理名にすると R2 は `_` を
 受け付けず、AWS と R2 は長さで弾く。外れていれば `pulumi up` の最初で止まる。
 
-16 文字は `qazx7412-vrc-service-status-panel-<スタック名>-github-deploy` から
-逆算した値である。IAM ロール名の上限が 64 文字で、頭と接尾で 48 文字を使う。
+いちばん厳しいのは `qazx7412-vrc-service-status-panel-<スタック名>-scheduler` で、
+IAM ロール名の上限 64 文字のうち頭と接尾で 44 文字を使うため 20 文字まで置ける。
+16 文字にしてあるのは、関数名に余りを残すためである。
 
 handler 名にも同じ事情がある。関数名の上限は 64 文字で、`dev` なら 26 文字ほど残る。
 外れていればこちらも `pulumi up` の最初で止まる。
@@ -88,11 +88,7 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | `src/roles.ts` | 実行時のロール |
 | `src/compute.ts` | Lambda、ロググループ、Scheduler（仕様書 5.1） |
 
-`infra/oidc/` は一つのファイルに収まっているので分けていない。
-
 ## 何を作るか
-
-`infra/`
 
 | 対象 | リソース | 仕様書 |
 | --- | --- | --- |
@@ -105,13 +101,8 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
 
-`infra/oidc/`
-
-| 対象 | リソース | 仕様書 |
-| --- | --- | --- |
-| GitHub Actions 用の OIDC プロバイダ | `aws.iam.OpenIdConnectProvider` | — |
-| デプロイロールとその権限 | `aws.iam.Role` / `aws.iam.RolePolicy` | — |
-| 実行時ロールの権限境界 | `aws.iam.Policy` | — |
+OIDC プロバイダ、デプロイロール、権限境界はここに無い。CLI で作ってあり、
+中身は `docs/aws-oidc.md` にある。
 
 バケット名の既定にスタック名が入るのは、同じアカウントで `dev` と `prod` を
 並べたときに名前がぶつかるためである。決めた名前を使いたければ
@@ -164,8 +155,7 @@ Admin Read & Write と Object Read & Write の二つである。どちらも読�
 - 状態の置き場所にする R2 バケット（下記）
 
 GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く必要はない。
-`infra/oidc/` を手元から一度流し、OIDC のロールを作る
-（「GitHub Actions から AWS へ入る」を参照）。
+OIDC のロールを CLI で作り、その ARN を Secrets へ入れる（`docs/aws-oidc.md`）。
 
 R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そのまま Lambda へ渡す。
 
@@ -213,10 +203,8 @@ R2 は `アカウント全体` にする。`R2 バケット` を選ぶとバケ�
 
 R2 に置ける。S3 互換の DIY バックエンドとして扱う。
 
-置き場所は `Pulumi.yaml` の `backend.url` で固定してある。`infra/` と
-`infra/oidc/` の両方に同じ URL が書いてあり、バケットは
-`qazx7412-vrc-service-status-panel-pulumi-state` ひとつを共有する。
-プロジェクトとスタックで別のパスに入るので、混ざらない。
+置き場所は `Pulumi.yaml` の `backend.url` で固定してある。バケットは
+`qazx7412-vrc-service-status-panel-pulumi-state` である。
 
 ```yaml
 backend:
@@ -232,7 +220,10 @@ backend:
 エンドポイントのアカウント ID も作者のものである。`cloudflareAccountId` を
 自分のものに直しても、この URL はスタック設定より先に読まれるため、
 書き換えないかぎり作者のアカウントへ繋ぎに行って認証で止まる。
-`infra/` と `infra/oidc/` の両方にある。
+
+CI からも流すなら、書き換える先はもう一つある。`docs/aws-oidc.md` のロールと境界を
+自分のアカウントに作り直す。信頼ポリシーの `sub` は元のリポジトリを指しているので、
+fork の Actions ではそのままロールを引けない。
 
 **`pulumi login` は要らない。** 手元でも CI でも、要るのは R2 の鍵だけである。
 
@@ -429,12 +420,6 @@ export PULUMI_CONFIG_PASSPHRASE
 
 ファイルに置いてある場合は `PULUMI_CONFIG_PASSPHRASE_FILE` にその場所を渡してもよい。
 
-最初に GitHub Actions からも流すかを聞く。流すなら、本体と `infra/oidc/` の両方に
-同じ名前のスタックを作る。二つの名前がずれると、`dev` のデプロイロールでは `prod` を
-触れないまま CI が `AccessDenied` で止まる。手元からだけ流すなら `infra/oidc/` は
-作らない。使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになるためで、
-本体の `workloadBoundaryArn` は省略できる。
-
 二度目以降に流すと、いま入っている値を既定として見せる。Enter で通せばそのまま残る。
 秘密の値は見せずに「Enter で今の値のまま」と聞く。空で答えても消えないので、
 消したいときは `pulumi config rm` を使う。
@@ -465,17 +450,17 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
 
 #### GitHub Actions からも流す場合
 
-`infra/oidc/Pulumi.dev.yaml` も出来ているので、こちらも commit する。
-`deploy.sh` の前に、入口と権限境界を作って、その出力を本体へ入れる。
+権限境界の ARN が要る。入れないと実行ロールに境界が付かず、手元からは通っても
+CI からは `CreateRole` で止まる。
+
+`init-stack.sh` が「GitHub Actions からの入口」で聞く。既定はいま繋がっている
+AWS アカウントから組み立てたものなので、Enter で通せば入る。飛ばしていたら後から足す。
 
 ```
-# infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない
-npm ci --prefix oidc
-pulumi -C oidc up
+pulumi config set --stack dev workloadBoundaryArn \
+  arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary
 
-pulumi config set --stack dev workloadBoundaryArn $(pulumi -C oidc stack output workloadBoundaryArn)
-
-git add Pulumi.dev.yaml oidc/Pulumi.dev.yaml
+git add Pulumi.dev.yaml
 ```
 
 Secrets へ登録するものは「ワークフローでの受け取り」にある。
@@ -510,8 +495,8 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up
 
 Layer の発行は 3 の中で起きる。zip が前回と同じなら新しい版は作られない。
 
-`infra/oidc/` はこのスクリプトの対象外である。あちらは CI の権限そのものを
-決める場所で、普段は流さない（「GitHub Actions から AWS へ入る」を参照）。
+OIDC のロールと権限境界はこのスクリプトの対象外である。あちらは CI の権限そのものを
+決める場所で、Pulumi に載せていない（「GitHub Actions から AWS へ入る」を参照）。
 
 ## 前提: ゾーンに既存の Cache Rules が無いこと
 
@@ -539,67 +524,27 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" \
 
 ## GitHub Actions から AWS へ入る
 
-入口は `infra/oidc/` にある。**このプロジェクトは手元からだけ流す。**
-長い寿命の鍵を Secrets へ置かずに済む。CI を使わないなら流さなくてよい。
+入口は Pulumi に無い。OIDC プロバイダ、デプロイロール、実行時ロールの権限境界は
+AWS CLI で作ってあり、権限の一覧も作り直す手順も `docs/aws-oidc.md` にある。
+長い寿命の鍵を Secrets へ置かずに済む。
 
-```
-cd infra/oidc
-npm ci
-pulumi stack init dev            # 本体と同じスタック名にする
-pulumi config set githubRepository limit7412/VRCServiceStatusPanel
-pulumi up
-```
-
-スタック名は本体と揃える。ロール名も境界も本体のスタック名から組み立てており、
-名前が揃っていないと権限の範囲がずれる。揃えられない事情があるときだけ
-`targetStack` に本体のスタック名を入れる。
-
-アカウントに GitHub の OIDC プロバイダを既に置いてある場合は、その ARN を渡す。
-プロバイダはアカウントに一つしか置けない。
-
-```
-pulumi config set githubOidcProviderArn arn:aws:iam::<アカウント>:oidc-provider/token.actions.githubusercontent.com
-```
+ロールはリポジトリに対して一つで、`dev` と `prod` で同じものを使う。
+引けるのは既定で `master` への push に限る。
 
 ### 本体へ渡すもの
 
-`infra/oidc/` の出力を二つ使う。
+境界の ARN を設定に入れる。
 
 ```
-pulumi stack output workloadBoundaryArn   # 本体の設定に入れる
-pulumi stack output githubDeployRoleArn   # GitHub の Secrets に入れる
+pulumi config set workloadBoundaryArn \
+  arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary
 ```
 
-```
-cd ../
-pulumi config set workloadBoundaryArn <上で得たARN>
-```
-
-`workloadBoundaryArn` を入れないと、実行ロールに境界が付かない。手元から流す分には
-それでも通るが、CI からは通らない。デプロイロールは境界の付いたロールしか作れず、
+これを入れないと、実行ロールに境界が付かない。手元から流す分にはそれでも通るが、
+CI からは通らない。デプロイロールは境界の付いたロールしか作れず、
 `CreateRole` がそこで止まる。
 
-### 順番
-
-境界とロールが先である。本体の `pulumi up` は境界の ARN を要求するだけで、
-それを作りはしない。
-
-1. `infra/oidc/` を手元から流す
-2. 出力を本体の `workloadBoundaryArn` と GitHub の Secrets へ写す
-3. 本体を流す（一度目は手元から。以降は CI から引ける）
-
-### 誰が引けるか
-
-既定は master への push に限る。広げるときは `githubDeploySubjects` に並べる。
-これも `infra/oidc/` の設定である。
-
-```
-pulumi config set --path githubDeploySubjects[0] 'repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master'
-pulumi config set --path githubDeploySubjects[1] 'repo:limit7412/VRCServiceStatusPanel:environment:prod'
-```
-
-`sub` を絞らないと、同じ発行者の JWT を持つ任意のリポジトリからロールを引ける。
-GitHub Actions の OIDC でいちばん間違えやすい箇所である。
+ロールの ARN は GitHub の Secrets に `AWS_DEPLOY_ROLE_ARN` として登録する。
 
 ### ワークフローでの受け取り
 
@@ -664,8 +609,7 @@ steps:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
 
-  # スタック名は infra/oidc/ を流したときのものと揃える。
-  # dev のデプロイロールは prod の関数にもロールにも手が届かない
+  # スタック名は commit してある Pulumi.<スタック名>.yaml のものにする
   - run: pulumi up --yes --stack prod
     working-directory: infra
     env:
@@ -685,21 +629,14 @@ steps:
 `output-env-credentials: false` が使えない版なら、pulumi のステップで
 `AWS_SESSION_TOKEN: ""` を明示しても同じことになる。
 
-**この例は `prod` を更新する。** 動かすには `infra/oidc/` を `prod` のスタックで
-流し、`prod` のデプロイロールと境界を作っておく必要がある。上の手順は例として
-`dev` を使っているので、CI から出す環境の分は別に作る。デプロイロールが許すのは
-自分と同じスタック名の接頭辞だけで、`dev` のロールで `prod` を触ると
-AccessDenied になる。
+**この例は `prod` を更新する。** 動かすには `prod` のスタックを作り、その
+`Pulumi.prod.yaml` を commit しておく必要がある。デプロイロールは `dev` と `prod` の
+どちらにも届くので、ロールの側で用意するものは無い。
 
-**既にこの構成で CI を回している場合は、`infra/oidc/` を先に流す。** 以前の
-デプロイロールは Layer の読み取りしか許していないので、本体だけを新しくすると、
-最初の `PublishLayerVersion` で `AccessDenied` になる。`infra/oidc/` は CI から
-更新できない設計なので、手元から流す。
-
-```
-npm ci --prefix infra/oidc
-pulumi -C infra/oidc up --stack prod
-```
+Layer を Pulumi に持たせたことで、デプロイロールには Layer の発行と削除も要る。
+読み取りだけのままだと、最初の `PublishLayerVersion` で `AccessDenied` になる。
+`docs/aws-oidc.md` のポリシーには入れてあり、実物のロールにも反映済みである。
+ロールは CI から更新できない設計なので、権限を変えるときは手元から CLI で流す。
 
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
 置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
@@ -714,47 +651,11 @@ Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore
 
 ### ロールの権限
 
-本体のスタックが触る範囲だけを与えてある。名前の頭で絞っているので、同じアカウントの
-他のリソースへは届かない。スタック名まで含めて絞ってあり、`dev` のデプロイロールから
-`prod` のロールや関数へは手が伸びない。
+`docs/aws-oidc.md` に一覧がある。名前の頭で絞ってあり、同じアカウントの他のリソースへは
+届かない。このロール自身の権限を書き換える操作は Deny してあるので、CI からは変えられない。
 
-ただし `qazx7412-vrc-service-status-panel-<スタック名>-*` にはこのロール自身も含まれるため、
-権限を書き換えて広げられてしまう。それを塞ぐ Deny を入れてある。読み取りは残してある。
-
-OIDC のプロバイダ、デプロイロール、権限境界のどれも本体には無い。CI が流すのは本体
-だけなので、CI からはこれらに触れられない。**変えるときは `infra/oidc/` を手元から流す。**
-
-### 実行時ロールの権限境界
-
-名前で絞るだけでは足りない。`qazx7412-vrc-service-status-panel-<スタック名>-*` には Lambda の
-実行ロールも入るので、次の順で昇格できてしまう。
-
-1. デプロイロールで実行ロールへ任意のポリシーを足す
-2. `lambda:UpdateFunctionCode` でコードを差し替える
-3. 次の Scheduler の起動で、その権限のまま動く
-
-そこで実行ロールと Scheduler のロールに**権限境界**を付けてある。境界は上限であって
-付与ではない。境界に無いものは、ロールのポリシーで許しても効かない。
-
-境界が許すのはこれだけである。
-
-| 何 | 範囲 |
-| --- | --- |
-| `logs:CreateLogStream` / `logs:PutLogEvents` | このスタックのロググループ |
-| `lambda:InvokeFunction` | このスタックの関数 |
-
-デプロイロールの側も合わせてある。
-
-- `iam:CreateRole` と `iam:PutRolePermissionsBoundary` は、要求に入る境界がこの境界と一致する場合だけ許す。境界の無いロールは作れない
-- `iam:PutRolePolicy` などポリシーを足し引きする操作も、相手のロールにこの境界が付いている場合だけ許す
-- `iam:DeleteRole` と `iam:UpdateAssumeRolePolicy` には条件を掛けない。この二つは `iam:PermissionsBoundary` の対象に入っておらず、掛けると Allow が成立しなくなる。境界の無いロールはそもそも作れないので、ここへ届く相手はどれも境界付きである
-- `iam:DeleteRolePermissionsBoundary` を Deny する。境界を外す道を塞ぐ
-- 境界そのもの（`aws.iam.Policy`）は本体に無い。書き換える操作は明示的に Deny してもある
-
-**境界を変えるときは `infra/oidc/` を手元から流す。** デプロイロール自身と同じ扱いである。
-
-なお、関数の環境変数に入る R2 の鍵はこの境界の外にある。コードを差し替えられれば
-その鍵は使われる。境界が抑えるのは AWS 側の権限であって、関数が持つ資格情報ではない。
+実行ロールに付く権限境界も同じ文書にある。`src/roles.ts` が設定の `workloadBoundaryArn`
+を渡すだけで、境界そのものはここに無い。
 
 ## 手で行う作業
 
@@ -780,11 +681,3 @@ npm run typecheck   # tsc --noEmit
 pulumi preview      # 差分を見る
 ```
 
-`infra/oidc/` も同じである。別の Pulumi プロジェクトなので、`npm ci` も
-`pulumi stack` も別に持つ。
-
-```
-cd oidc
-npm ci
-npm run typecheck
-```

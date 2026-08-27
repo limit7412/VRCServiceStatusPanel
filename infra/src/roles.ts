@@ -17,7 +17,7 @@ const assumeRolePolicy = (service: string) =>
 
 // 実行時のロールには権限境界を付ける。境界は上限であって付与ではないので、
 // ここに無いものは、あとで足したポリシーで許しても効かない。
-// 中身は infra/oidc/ にある。
+// 中身は docs/aws-oidc.md にある。
 export const lambdaRole = new aws.iam.Role(
     "lambda",
     {

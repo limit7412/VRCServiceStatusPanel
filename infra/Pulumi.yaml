@@ -64,5 +64,5 @@ config:
     type: string
     default: ""
     description: |
-      実行時ロールに付ける権限境界の ARN。infra/oidc/ の出力を入れる。
+      実行時ロールに付ける権限境界の ARN。CLI で作ってある（docs/aws-oidc.md）。
       手元からしかデプロイしないなら空でよい

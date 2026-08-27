@@ -5,10 +5,6 @@
 # このファイルが無く、無いまま pulumi up を叩くと最初の config.require で止まる。
 # Pulumi の設定は state ではなくこのファイルに入るためである。
 #
-# GitHub Actions からも流すなら、本体と infra/oidc/ を同じスタック名で作る。
-# 二つがずれると、dev のデプロイロールでは prod を触れないまま CI が
-# AccessDenied で止まる。手元からだけ流すなら infra/oidc/ は作らない。
-#
 # 二度目以降に流すと、いま入っている値を既定として見せる。Enter で通せば
 # そのまま残る。空で答えても消えないので、消すときは pulumi config rm を使う。
 #
@@ -18,7 +14,7 @@
 # 値は一つずつ聞く。省略できるものは空のまま Enter で飛ばせる。
 # 秘密の値は標準入力から渡すので、コマンドラインにも履歴にも残らない。
 #
-# 出来上がった二つの Pulumi.<スタック名>.yaml は commit する。--secret で入れた値は
+# 出来上がった Pulumi.<スタック名>.yaml は commit する。--secret で入れた値は
 # 暗号文として記録されるため平文では残らない。復号には PULUMI_CONFIG_PASSPHRASE が要る。
 
 set -euo pipefail
@@ -34,8 +30,8 @@ case "$stack" in
         ;;
 esac
 
-# 名前の規則は infra/src/settings.ts と infra/oidc/index.ts に合わせる。
-# ここで弾かないと、二つのスタックと十四の設定を作ったあと pulumi up が
+# 名前の規則は infra/src/settings.ts に合わせる。
+# ここで弾かないと、スタックと十四の設定を作ったあと pulumi up が
 # 名前の検証で必ず止まる。使えないスタックだけが残る。
 MAX_STACK_NAME=16
 
@@ -84,7 +80,7 @@ elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
     # 相対パスは絶対パスへ直して環境変数へ書き戻す。
     #
     # pulumi -C は「そのディレクトリで起動したかのように」振る舞うので、相対の
-    # ままだと Pulumi は infra/ や infra/oidc/ から解決する。ここで読むファイルと
+    # ままだと Pulumi は infra/ から解決する。ここで読むファイルと
     # 食い違い、無ければスタックの作成が落ち、別の短いファイルがあれば検査した値と
     # 違う鍵で暗号化される。Pulumi CLI 3.259.0 で、-C の先から解決することを確かめた。
     case "$PULUMI_CONFIG_PASSPHRASE_FILE" in
@@ -115,10 +111,6 @@ if [ "${#phrase}" -lt "$MIN_PASSPHRASE" ]; then
     echo "  古いほうを PULUMI_CONFIG_PASSPHRASE に入れたまま次を実行すると、" >&2
     echo "  新しいパスフレーズを聞かれ、設定と state が入れ替わったもので暗号化し直される。" >&2
     echo "    pulumi -C \"$here\" stack change-secrets-provider passphrase --stack $stack" >&2
-    echo "  GitHub Actions からも流しているなら、infra/oidc/ 側も同じ古いパスフレーズで" >&2
-    echo "  作ってあるので、環境変数を切り替える前にこちらも入れ替える。忘れると、" >&2
-    echo "  次に infra/oidc/ を流したときに state を復号できない。" >&2
-    echo "    pulumi -C \"$here/oidc\" stack change-secrets-provider passphrase --stack $stack" >&2
     echo "  そのあと新しいほうを PULUMI_CONFIG_PASSPHRASE に入れて、ここへ戻る。" >&2
     echo >&2
     echo "  古い設定ファイルを commit してあるなら、入れ替えだけでは足りない。" >&2
@@ -135,21 +127,19 @@ fi
 # 元からあったスタックを「作りかけ」として案内すると、
 # 案内どおりに消したときに以前からある設定ごと消えてしまう。
 created_main=no
-created_oidc=no
 
 
 abort_on_eof() {
     printf '\n' >&2
     echo "入力が尽きたので中断する。" >&2
 
-    if [ "$created_main" = no ] && [ "$created_oidc" = no ]; then
+    if [ "$created_main" = no ]; then
         echo "この実行で作ったスタックは無いので、消すものも無い" >&2
         exit 1
     fi
 
     echo "この実行で作ったスタックを消すなら、次を実行する" >&2
-    [ "$created_main" = no ] || echo "  pulumi -C \"$here\" stack rm $stack" >&2
-    [ "$created_oidc" = no ] || echo "  pulumi -C \"$here/oidc\" stack rm $stack" >&2
+    echo "  pulumi -C \"$here\" stack rm $stack" >&2
     exit 1
 }
 
@@ -223,6 +213,24 @@ set_optional() {
     pulumi -C "$dir" config set --stack "$stack" "$key" "$ANSWER"
 }
 
+# AWS の資格情報を移して aws を呼ぶ。出力は標準出力へ、雑音は捨てる。
+#
+# ここまでで AWS_* に入っているのは状態の置き場所（R2）の鍵である。
+# そのままでは AWS へ通らないので、deploy.sh と同じく DEPLOY_AWS_* を移す。
+# 移すのは元の変数がある場合だけで、R2 をバックエンドにしていない環境では
+# もとの AWS_* がそのまま使われる。
+#
+# aws が無ければ 1 を返す。呼び出し側はどちらも「既定が無い」として扱う。
+aws_deploy() {
+    command -v aws > /dev/null 2>&1 || return 1
+
+    env \
+        ${DEPLOY_AWS_ACCESS_KEY_ID:+AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID"} \
+        ${DEPLOY_AWS_SECRET_ACCESS_KEY:+AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY"} \
+        ${DEPLOY_AWS_SESSION_TOKEN:+AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN"} \
+        aws "$@" 2> /dev/null
+}
+
 # 設定にその値が入っているか。中身は取り出さない。
 #
 # 秘密の値について「入っているか」だけを知りたいときに使う。
@@ -231,21 +239,6 @@ has_config() {
     local dir="$1" key="$2"
 
     pulumi -C "$dir" config get --stack "$stack" "$key" > /dev/null 2>&1
-}
-
-# そのプロジェクトにこのスタックがあるか。
-#
-# stack select は見つからなければ 6 を返すが、見つかると選び直してしまう。
-# ここは既定値を決めるために覗くだけなので、読むだけの stack ls を使う。
-#
-# 一覧は変数へ受けてから読む。pulumi へ直に繋ぐと、grep -q が最初の一致で
-# 抜けたときに SIGPIPE で 141 になり、pipefail がそれを拾ってしまう。
-# 整形に頼らない形で照合するのは、詰めて出力されても通るようにするためである。
-stack_exists() {
-    local dir="$1" listed=""
-
-    listed=$(pulumi -C "$dir" stack ls --json 2> /dev/null) || return 1
-    grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"$stack\"" <<< "$listed"
 }
 
 # 秘密の値。打っている最中も画面に出さず、標準入力から渡して暗号文として記録する。
@@ -326,43 +319,9 @@ create_stack() {
     return 0
 }
 
-# infra/oidc/ は CI の入口である。手元からだけ流すなら要らない。
-# 作らせると、使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになる。
-# 本体の workloadBoundaryArn は省略できるので、無くても手元からは流せる。
-# 既定は、いま在るスタックから決める。
-# 手元からだけとして作ったスタックへ二度目を流したとき、Enter で通しただけで
-# CI 利用へ切り替わり、要らない OIDC のスタックができてしまうのを避ける。
-#
-# 設定キーの有無では見ない。スタックを作った直後から最初の config set までの
-# 間に中断すると、スタックは在るのに設定はまだ無い。そこで再開すると既定が
-# y へ戻り、続きを流しただけのつもりで OIDC まで作ることになる。
-ci_default=y
-if stack_exists "$here" && ! stack_exists "$here/oidc"; then
-    ci_default=n
-fi
-
-use_ci=""
-while [ -z "$use_ci" ]; do
-    ask "GitHub Actions からもデプロイするか（y/n）" "$ci_default" || abort_on_eof
-
-    # 打ち間違いを no として飲み込まない。飲み込むと、CI を使うつもりでも
-    # スタックも質問も案内も黙って省かれる。
-    # ${ANSWER,,} は Bash 4 からで、macOS 標準の 3.2 では bad substitution になる。
-    # case のパターンで大文字小文字を吸収する。
-    case "$ANSWER" in
-        [Yy] | [Yy][Ee][Ss]) use_ci=yes ;;
-        [Nn] | [Nn][Oo]) use_ci=no ;;
-        *) echo "  y か n で答える" >&2 ;;
-    esac
-done
-
 echo
 echo "=== $stack を作る ==="
 create_stack "$here" && created_main=yes
-
-if [ "$use_ci" = yes ]; then
-    create_stack "$here/oidc" && created_oidc=yes
-fi
 
 # 使わなくなった設定を落とす。
 #
@@ -380,9 +339,10 @@ rename_config "$here" ytdlpLayerVersion ytdlpVersion
 region_default=$(current_config "$here" aws:region)
 [ -n "$region_default" ] || region_default="ap-northeast-1"
 
-ask "AWS のリージョン（仕様書 5.1）" "$region_default" || abort_on_eof
+# 全スタックで同じにする。デプロイロールと権限境界をスタック間で共有しており、
+# その ARN にはリージョンが一つしか書けない（docs/aws-oidc.md）。
+ask "AWS のリージョン（仕様書 5.1。全スタックで同じにする）" "$region_default" || abort_on_eof
 pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
-[ "$use_ci" = no ] || pulumi -C "$here/oidc" config set --stack "$stack" aws:region "$ANSWER"
 
 echo
 echo "--- Cloudflare（仕様書 6） ---"
@@ -407,19 +367,41 @@ echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
 set_required "$here" ytdlpVersion "Layer に載せる yt-dlp の版（VRChat の /config の youtubedl_version に合わせる）"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
-if [ "$use_ci" = yes ]; then
-    echo
-    echo "--- GitHub Actions からの入口（仕様書 9.1） ---"
-    set_required "$here/oidc" githubRepository "デプロイを許すリポジトリ" "limit7412/VRCServiceStatusPanel"
-    set_optional "$here/oidc" githubOidcProviderArn "既にある OIDC プロバイダの ARN（無ければ空のまま）"
+# CI から流すかどうかは、権限境界の ARN を入れるかどうかで決まる。
+# 入れれば実行時ロールに境界が付き、デプロイロールがそのロールを作れる。
+# 入れなければ手元からしか流せない。
+#
+# 境界は Pulumi ではなく AWS CLI で作ってある（docs/aws-oidc.md）。
+# 既定はいま繋がっているアカウントから組み立てる。ARN にはアカウント ID が
+# 入るので、public のこのリポジトリには書かない。
+#
+# 実在を確かめてからでないと既定にしない。ask は空の答えを既定で埋めるので、
+# 無いものを既定に出すと、Enter で通しただけで存在しない境界を指すことになる。
+# fork 先のように境界をまだ作っていないアカウントでは、そのまま流すと
+# 最初の CreateRole が落ちる。無ければ既定を空にして、Enter で飛ばせるようにする。
+#
+# aws が無いときも、資格情報が通らないときも、同じく既定が空になるだけである。
+# その場合は ARN を手で貼る。
+boundary_default=""
+boundary_name=qazx7412-vrc-service-status-panel-workload-boundary
+account=$(aws_deploy sts get-caller-identity --query Account --output text || true)
+if [ -n "$account" ] && [ "$account" != "None" ]; then
+    candidate="arn:aws:iam::$account:policy/$boundary_name"
+    if aws_deploy iam get-policy --policy-arn "$candidate" > /dev/null; then
+        boundary_default="$candidate"
+    fi
 fi
 
+echo
+echo "--- GitHub Actions からの入口（仕様書 9.1） ---"
+set_optional "$here" workloadBoundaryArn \
+    "実行時ロールの権限境界の ARN（CI から流さないなら空のまま）" "$boundary_default"
+
 # 案内は絶対パスで出す。README の手順は infra/ から実行するので、
-# infra/oidc のような相対パスを出すと、そこからは infra/infra/oidc を指してしまう。
+# 相対パスを出すと、そこからは infra/infra を指してしまう。
 echo
 echo "=== ここまでで出来たもの ==="
 echo "  $here/Pulumi.$stack.yaml"
-[ "$use_ci" = no ] || echo "  $here/oidc/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
 
@@ -430,27 +412,18 @@ deploy_line="       printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token &
        CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" \"$here/deploy.sh\""
 deploy_label="本体を流す（Layer もここで作られる）"
 
-if [ "$use_ci" = no ]; then
-    echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
-    echo "  2. $deploy_label"
-    echo "$deploy_line"
-else
-    echo "  1. 入口と権限境界を作る"
-    echo "       npm ci --prefix \"$here/oidc\""
-    echo "       pulumi -C \"$here/oidc\" up"
-    echo "     infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない"
-    echo "  2. その workloadBoundaryArn を本体へ入れる"
-    echo "       pulumi -C \"$here\" config set --stack $stack workloadBoundaryArn \\"
-    echo "         \"\$(pulumi -C \"$here/oidc\" stack output workloadBoundaryArn)\""
-    echo "  3. 二つの Pulumi.$stack.yaml を commit する（#12）"
-    echo "     commit は 2 のあとにする。境界を入れる前の設定を commit すると、"
-    echo "     CI はそれを checkout して境界の付いていないロールを作ろうとし、"
-    echo "     DenyBoundaryRemoval で止まる"
-    echo "  4. $deploy_label"
-    echo "$deploy_line"
-    echo "  5. 次の五つを GitHub の Secrets へ登録する"
-    echo "       AWS_DEPLOY_ROLE_ARN"
-    echo "         pulumi -C \"$here/oidc\" stack output githubDeployRoleArn"
+echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
+echo "  2. $deploy_label"
+echo "$deploy_line"
+
+# 境界を入れていないスタックは手元専用である。CI 向けの案内は出さない。
+#
+# ここは has_config では見分けられない。workloadBoundaryArn は Pulumi.yaml に
+# default: "" 付きで宣言してあるので、設定へ入れていなくても config get は
+# その既定を返して成功する。入っているかどうかは値の中身で見る。
+if [ -n "$(current_config "$here" workloadBoundaryArn)" ]; then
+    echo "  3. 次の五つが GitHub の Secrets にあるか確かめる"
+    echo "       AWS_DEPLOY_ROLE_ARN             デプロイロールの ARN（docs/aws-oidc.md）"
     echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
     echo "       PULUMI_STATE_ACCESS_KEY_ID      状態の置き場所（R2）の鍵"
     echo "       PULUMI_STATE_SECRET_ACCESS_KEY  同上"

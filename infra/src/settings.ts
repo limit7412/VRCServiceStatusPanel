@@ -15,9 +15,10 @@ const MAX_STACK_NAME = 16;
  * そのまま物理名にすると、R2 は `_` を受け付けず、AWS と R2 は長さで弾く。
  * どちらも実際に作りに行くまで分からないので、ここで止める。
  *
- * 16 文字は `qazx7412-vrc-service-status-panel-<スタック名>-github-deploy` から
- * 逆算した値である。IAM ロール名の上限が 64 文字で、頭と接尾で 48 文字を使う。
- * このロールは infra/oidc/ が作るが、スタック名は両方で揃えるため上限も揃える。
+ * いちばん厳しいのは `qazx7412-vrc-service-status-panel-<スタック名>-scheduler` で、
+ * IAM ロール名の上限 64 文字のうち頭と接尾で 44 文字を使うため 20 文字まで置ける。
+ * 16 文字にしてあるのは、関数名（同じ 64 文字の上限を handler 名と分け合う）に
+ * 余りを残すためである。
  */
 function checkStackName(name: string): string {
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
@@ -75,9 +76,10 @@ export const boothProbeItemId = config.require("boothProbeItemId");
 
 export const alertWebhookUrl = config.requireSecret("alertWebhookUrl");
 
-// 実行時ロールに付ける上限。infra/oidc/ が作り、その出力をここへ入れる。
+// 実行時ロールに付ける上限。AWS CLI で作ってあり、その ARN をここへ入れる
+// （docs/aws-oidc.md）。
 //
-// 上限を決める場所を CI の届かないところへ置きたいので、本体では作らない。
+// 上限を決める場所を CI の届かないところへ置きたいので、ここでは作らない。
 // 同じプログラムに置くと、CI が自分を縛っている上限を書き換えられる。
 //
 // 手元からしかデプロイしないなら空でよい。CI からデプロイする場合は、
