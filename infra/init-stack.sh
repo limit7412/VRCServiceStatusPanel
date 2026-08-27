@@ -275,7 +275,9 @@ rename_config "$here" ytdlpLayerVersion ytdlpVersion
 region_default=$(current_config "$here" aws:region)
 [ -n "$region_default" ] || region_default="ap-northeast-1"
 
-ask "AWS のリージョン（仕様書 5.1）" "$region_default" || abort_on_eof
+# 全スタックで同じにする。デプロイロールと権限境界をスタック間で共有しており、
+# その ARN にはリージョンが一つしか書けない（docs/aws-oidc.md）。
+ask "AWS のリージョン（仕様書 5.1。全スタックで同じにする）" "$region_default" || abort_on_eof
 pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
 
 echo
