@@ -60,9 +60,10 @@ config:
     description: 失敗時のアラート送信先（仕様書 11.2）
   # ここから下は任意。既定値を置いてあるのは、宣言した設定に既定が無いと
   # 未設定のときに pulumi が止まるためである。空文字を未設定として扱う。
-  workloadBoundaryArn:
+  workloadBoundaryName:
     type: string
     default: ""
     description: |
-      実行時ロールに付ける権限境界の ARN。CLI で作ってある（docs/aws-oidc.md）。
+      実行時ロールに付ける権限境界の名前。CLI で作ってある（docs/aws-oidc.md）。
+      ARN ではなく名前を持つのは、ARN にアカウント ID が入るためである（#26）。
       手元からしかデプロイしないなら空でよい

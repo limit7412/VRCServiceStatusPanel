@@ -76,12 +76,15 @@ export const boothProbeItemId = config.require("boothProbeItemId");
 
 export const alertWebhookUrl = config.requireSecret("alertWebhookUrl");
 
-// 実行時ロールに付ける上限。AWS CLI で作ってあり、その ARN をここへ入れる
-// （docs/aws-oidc.md）。
+// 実行時ロールに付ける上限。AWS CLI で作ってあり、中身は docs/aws-oidc.md にある。
 //
 // 上限を決める場所を CI の届かないところへ置きたいので、ここでは作らない。
 // 同じプログラムに置くと、CI が自分を縛っている上限を書き換えられる。
 //
+// 持つのは ARN ではなく名前である。ARN にはアカウント ID が入り、この設定は
+// commit され、リポジトリは public だからである（#26）。ARN は roles.ts が
+// いま繋いでいるアカウントから組む。
+//
 // 手元からしかデプロイしないなら空でよい。CI からデプロイする場合は、
 // デプロイロールが境界付きのロールしか作れないため、空だと CreateRole で止まる。
-export const workloadBoundaryArn = config.get("workloadBoundaryArn") || undefined;
+export const workloadBoundaryName = config.get("workloadBoundaryName") || undefined;
