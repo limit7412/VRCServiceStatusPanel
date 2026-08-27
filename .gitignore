@@ -15,7 +15,6 @@ env.yml
 # スタックごとの値（Pulumi.<スタック名>.yaml）は commit する。
 # secret 指定の値は暗号文で入るので平文では残らない（infra/README.md）
 infra/bin
-infra/oidc/bin
 
 # Crystal のビルド成果物と依存。
 # bootstrap.zip は backend/build.sh が作り、Pulumi がそのまま Lambda へ渡す
