@@ -99,6 +99,13 @@ IAM 側も、GitHub の発行者を信頼するロールについては `sub` �
 すべて `qazx7412-vrc-service-status-panel-` で始まる名前に絞ってあり、
 同じアカウントの他のものへは届かない。
 
+Layer に発行と削除まで与えているのは、yt-dlp の Layer を Pulumi が持つためである
+（`infra/src/layer.ts`）。中身が変われば新しい版が出来て、関数を新しい ARN へ
+繋ぎ替えてから古い版が消える。
+Layer 名は `qazx7412-vrc-service-status-panel-<スタック名>-ytdlp` だが、ここは
+スタック名を挟まない形で絞ってある。ロールを `dev` と `prod` で共有しているので、
+どちらの Layer にも届く必要がある。
+
 Lambda、Logs、Scheduler の ARN にはリージョンが入る。
 Pulumi が組み立てていたころは `aws:region` から取っていたが、いまは書き下してある。
 **スタックのリージョンを変えるときは、このポリシーも作り直す。**
@@ -107,7 +114,7 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 | --- | --- |
 | `FunctionsRead` | 関数の読み取り |
 | `FunctionsWrite` | 関数の作成、削除、コードと設定の更新 |
-| `Layers` | Layer の読み取り。発行は手元から行う |
+| `Layers` | Layer の発行、読み取り、削除 |
 | `ReadRoles` | ロールの読み取りと受け渡し |
 | `CreateBoundedRoles` | 権限境界の付いたロールだけを作る |
 | `WriteBoundedRolePolicies` | 権限境界の付いたロールにだけポリシーを足し引きする |
@@ -166,7 +173,12 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
     {
       "Sid": "Layers",
       "Effect": "Allow",
-      "Action": ["lambda:GetLayerVersion", "lambda:ListLayerVersions"],
+      "Action": [
+        "lambda:DeleteLayerVersion",
+        "lambda:GetLayerVersion",
+        "lambda:ListLayerVersions",
+        "lambda:PublishLayerVersion"
+      ],
       "Resource": "arn:aws:lambda:ap-northeast-1:<アカウントID>:layer:qazx7412-vrc-service-status-panel-*"
     },
     {

@@ -52,8 +52,9 @@ IAM ロール名の上限 64 文字のうち頭と接尾で 44 文字を使う�
 handler 名にも同じ事情がある。関数名の上限は 64 文字で、`dev` なら 26 文字ほど残る。
 外れていればこちらも `pulumi up` の最初で止まる。
 
-Layer だけはこの規則の外にある。手で発行する不変の成果物で、dev と prod が
-同じものを指すためである（`qazx7412-vrc-service-status-panel-ytdlp`）。
+Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`）。
+中身はスタックによらず同じだが、Pulumi が持つので、名前を共有すると dev と prod が
+同じ Layer 名へ別々に版を積むことになる。
 
 **一度出したあとで名前を変えると、作り直しになる。** バケットもロールも関数も、
 名前は置き換えでしか変えられない。バケットには `protect: true` を付けてあるので、
@@ -95,6 +96,7 @@ Layer だけはこの規則の外にある。手で発行する不変の成果�
 | 内部バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-state`） | `cloudflare.R2Bucket` | 6 |
 | `/v1/` 以下の Cache Rules | `cloudflare.Ruleset` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
+| yt-dlp と QuickJS の Layer（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`） | `aws.lambda.LayerVersion` | 7.1、7.3 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
@@ -293,7 +295,7 @@ config:
 ```
 
 平文で入るのは識別子のほうである。アカウント ID、ゾーン ID、配信ホスト名、
-バケット名、Layer の ARN。ARN には AWS のアカウント ID が含まれる。
+バケット名、yt-dlp の版。
 
 commit するのは、CI へ渡すものを減らすためである。ファイルを持たせない道もあるが、
 その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびに
@@ -313,13 +315,15 @@ commit してあれば、CI へ渡すのはパスフレーズひとつで済む�
 `infra/deploy.sh` がひと通り流す。
 
 ```
-infra/deploy.sh                     # 今の設定のまま作り直す
-infra/deploy.sh --ytdlp 2025.09.26  # Layer をこの版で発行し直してから流す
+infra/deploy.sh                     # 今の設定のまま流す
+infra/deploy.sh --ytdlp 2025.09.26  # yt-dlp の版を入れ替えてから流す
 ```
 
-`--ytdlp` を付けたときだけ Layer を作り直す。`ytdlpLayerArn` と
-`ytdlpLayerVersion` は必ず一緒に更新されるので、片方だけ古いまま残ることがない。
-片方だけだと実行時の版の比較が食い違いを出し続ける（#8）。
+`--ytdlp` は `ytdlpVersion` を書き換えるだけである。Layer そのものは Pulumi が
+持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
+
+Layer の zip は毎回用意される。`backend/layer/build.sh` は同じ版の zip が既に
+あれば何もしないので、36 MiB を取り直すのは版を変えたときだけである。
 
 `--ytdlp` 以外の引数はそのまま `pulumi up` へ渡る（`--yes` など）。
 
@@ -355,20 +359,19 @@ export PULUMI_CONFIG_PASSPHRASE
 `Pulumi.example.yaml` に並べてある。
 
 出来上がった `Pulumi.dev.yaml` は commit する（#12）。続きはスクリプトが最後に
-案内する。Layer をまだ発行していなければ、初回は版を渡す。
+案内する。
+
+```
+git add Pulumi.dev.yaml
+./deploy.sh
+```
+
+Layer は `deploy.sh` の中の `pulumi up` が作る。版は `init-stack.sh` で入れた
+`ytdlpVersion` を使うので、初回でも `--ytdlp` は要らない。あとから版を変えるときだけ
+渡す。
 
 ```
 ./deploy.sh --ytdlp 2025.09.26
-
-git add Pulumi.dev.yaml
-```
-
-既にある Layer の ARN と版を `init-stack.sh` へ入れた場合は、`--ytdlp` を付けない。
-付けると新しい Layer バージョンが発行され、入れたばかりの ARN と版を
-`deploy.sh` が上書きする。
-
-```
-./deploy.sh
 ```
 
 #### GitHub Actions からも流す場合
@@ -390,9 +393,9 @@ Secrets へ登録するものは「ワークフローでの受け取り」にあ
 
 ### スクリプトが何をしているか
 
-手で並べると次の四つになる。詰まったときはこの順で追う。
+手で並べると次の三つになる。詰まったときはこの順で追う。
 
-**どれも `infra/` から実行する。** 3 と 4 が `Pulumi.yaml` を要るためで、
+**どれも `infra/` から実行する。** 3 が `Pulumi.yaml` を要るためで、
 そのぶん 1 と 2 は `../backend/...` を指す。
 
 ```
@@ -401,35 +404,19 @@ cd infra
 # 1. バイナリを作る（docker が要る）
 ../backend/build.sh
 
-# 2. Layer を発行し、ARN を控える（仕様書 7.1、7.3）
-#
-#    aws コマンドは Pulumi の写し替えを知らないため、AWS の鍵をその場で
-#    AWS_* へ移す。R2 をバックエンドにしていない場合はこの前置きは要らない。
-#
-#    --region は aws:region と同じ値にする。Layer は関数と同じリージョンに
-#    無いと結べない。CLI の既定リージョンに任せると、未設定なら止まり、
-#    別のリージョンなら pulumi up まで気づけない。
-../backend/layer/build.sh 2025.09.26 "" "$PWD/ytdlp-layer.zip"
-AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID" \
-AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY" \
-AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN" \
-aws lambda publish-layer-version \
-  --region ap-northeast-1 \
-  --layer-name qazx7412-vrc-service-status-panel-ytdlp \
-  --zip-file fileb://ytdlp-layer.zip \
-  --compatible-runtimes provided.al2023 \
-  --compatible-architectures arm64 \
-  --query LayerVersionArn --output text
+# 2. Layer の zip を用意する（仕様書 7.1、7.3）
+#    版は ytdlpVersion と揃える。揃っていないと、実行時の比較が
+#    載せた版ではなく設定の版を見ることになる。
+../backend/layer/build.sh "$(pulumi config get ytdlpVersion)" "" ../backend/ytdlp-layer.zip
 
-# 3. ARN と版を入れる
-pulumi config set ytdlpLayerArn <2で得たARN>
-pulumi config set ytdlpLayerVersion 2025.09.26
-
-# 4. 反映する
+# 3. 反映する
 pulumi up
 ```
 
-`pulumi up` は `../backend/bootstrap.zip` を読むので、1 を飛ばすとそこで止まる。
+`pulumi up` は `../backend/bootstrap.zip` と `../backend/ytdlp-layer.zip` を
+読むので、1 か 2 を飛ばすとそこで止まる。
+
+Layer の発行は 3 の中で起きる。zip が前回と同じなら新しい版は作られない。
 
 OIDC のロールと権限境界はこのスクリプトの対象外である。あちらは CI の権限そのものを
 決める場所で、Pulumi に載せていない（「GitHub Actions から AWS へ入る」を参照）。
@@ -528,6 +515,22 @@ steps:
   # get.pulumi.com のスクリプトで入れてもよい
   - uses: pulumi/actions@v6
 
+  # Layer の zip も .gitignore の対象で、checkout には入っていない。
+  # src/layer.ts が FileArchive として開くので、bootstrap.zip と同じく
+  # 無いと pulumi up はファイル未検出で止まる。
+  #
+  # 版は流す相手のスタックから読む。ここで別のスタックの版を渡すと、
+  # 中身と description と YTDLP_VERSION が食い違う。
+  # config get は Pulumi CLI が要るので、このステップは上より後に置く。
+  - run: |
+      backend/layer/build.sh \
+        "$(pulumi -C infra config get --stack prod ytdlpVersion)" \
+        "" backend/ytdlp-layer.zip
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.PULUMI_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PULUMI_STATE_SECRET_ACCESS_KEY }}
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+
   # スタック名は commit してある Pulumi.<スタック名>.yaml のものにする
   - run: pulumi up --yes --stack prod
     working-directory: infra
@@ -552,13 +555,19 @@ steps:
 `Pulumi.prod.yaml` を commit しておく必要がある。デプロイロールは `dev` と `prod` の
 どちらにも届くので、ロールの側で用意するものは無い。
 
+Layer を Pulumi に持たせたことで、デプロイロールには Layer の発行と削除も要る。
+読み取りだけのままだと、最初の `PublishLayerVersion` で `AccessDenied` になる。
+`docs/aws-oidc.md` のポリシーには入れてあり、実物のロールにも反映済みである。
+ロールは CI から更新できない設計なので、権限を変えるときは手元から CLI で流す。
+
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
 置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
 どちらも checkout した時点でそろっている。**そろっていないのはバイナリだけ**で、
 これは `.gitignore` の対象なので毎回作る。
 
-Layer はここでは発行しない。手で発行して ARN を設定へ入れる形にしてあり、
-CI のデプロイロールにも Layer の読み取りしか与えていない（仕様書 7.1、7.3）。
+Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore` の対象なので、
+`pulumi up` の前に作る（仕様書 7.1、7.3）。発行そのものは `pulumi up` の中で起きるので、
+デプロイロールには Layer の発行と削除も与えてある。
 
 デプロイのワークフロー自体はまだ無い。ここにあるのは受け取り方だけである。
 

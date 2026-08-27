@@ -44,8 +44,7 @@ config:
   # yt-dlp と QuickJS を載せた Layer（仕様書 7.1、7.3）。
   # backend/layer/build.sh で zip を作り、publish-layer-version で発行した
   # 結果の ARN と、そこに入れた yt-dlp の版を入れる
-  vrc-service-status-panel:ytdlpLayerArn: ""
-  vrc-service-status-panel:ytdlpLayerVersion: ""
+  vrc-service-status-panel:ytdlpVersion: ""
 
   # 合成監視の対象（仕様書 3.3）。
   # どちらも作者自身のもので、上流の都合で消えないものを選ぶ
@@ -58,7 +57,5 @@ config:
   # vrc-service-status-panel:workloadBoundaryArn: "arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary"
 
   # secret 指定のもの。pulumi config set --secret で入れる
-  vrc-service-status-panel:githubDispatchToken:
-    secure: pulumi config set --secret で入れる
   vrc-service-status-panel:alertWebhookUrl:
     secure: pulumi config set --secret で入れる
