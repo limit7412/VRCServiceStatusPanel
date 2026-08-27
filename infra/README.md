@@ -370,13 +370,20 @@ export PULUMI_CONFIG_PASSPHRASE
 `Pulumi.example.yaml` に並べてある。
 
 出来上がった `Pulumi.dev.yaml` は commit する（#12）。続きはスクリプトが最後に
-案内する。
+案内する。Layer をまだ発行していなければ、初回は版を渡す。
 
 ```
-# ARN はまだ無いので、初回は必ず版を渡す
 ./deploy.sh --ytdlp 2025.09.26
 
 git add Pulumi.dev.yaml
+```
+
+既にある Layer の ARN と版を `init-stack.sh` へ入れた場合は、`--ytdlp` を付けない。
+付けると新しい Layer バージョンが発行され、入れたばかりの ARN と版を
+`deploy.sh` が上書きする。
+
+```
+./deploy.sh
 ```
 
 #### GitHub Actions からも流す場合

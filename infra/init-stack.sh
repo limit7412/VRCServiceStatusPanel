@@ -239,7 +239,15 @@ create_stack() {
         return 1
     fi
 
-    pulumi -C "$dir" stack select --create "$stack" --secrets-provider passphrase > /dev/null
+    # 終了状態を自分で見る。この関数は `create_stack ... && created=yes` の形で
+    # 呼ばれるため、中では errexit が効かない。任せると、置き場所へ繋がらない
+    # ときや認証に失敗したときでも return 0 まで進み、作ったことにして
+    # 設定を書き始めてしまう。
+    if ! pulumi -C "$dir" stack select --create "$stack" --secrets-provider passphrase > /dev/null; then
+        echo "スタック $stack を作れなかった（$dir）" >&2
+        exit 1
+    fi
+
     return 0
 }
 
