@@ -76,6 +76,7 @@ Layer だけはこの規則の外にある。手で発行する不変の成果�
 
 | ファイル | 何があるか |
 | --- | --- |
+| `init-stack.sh` | スタックを作って設定を入れる。最初の一回だけ |
 | `deploy.sh` | ビルドから `pulumi up` までをひと通り流す |
 | `index.ts` | 環境変数の組み立てと出力 |
 | `src/settings.ts` | スタックごとの設定 |
@@ -230,7 +231,10 @@ backend:
 
 ```
 export AWS_ACCESS_KEY_ID=<状態用R2のアクセスキーID>
-export AWS_SECRET_ACCESS_KEY=<状態用R2のシークレット>
+# シークレットのほうは履歴に残さない
+printf 'AWS_SECRET_ACCESS_KEY: '
+read -rs AWS_SECRET_ACCESS_KEY && echo
+export AWS_SECRET_ACCESS_KEY
 # 一時的な AWS の資格情報を使っていたシェルなら、これを消す。
 # 残っていると R2 への署名に AWS のセッショントークンが混ざって認証に失敗する
 unset AWS_SESSION_TOKEN
@@ -332,22 +336,72 @@ commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` �
 
 ### 初回にすること
 
-スクリプトは設定が埋まっている前提で動く。最初の一回だけ手で用意する。
+`deploy.sh` は設定が埋まっている前提で動く。設定は `infra/init-stack.sh` が作る。
 
 ```
 cd infra
 npm ci
-pulumi stack init dev
-pulumi config set cloudflareAccountId 32cd31ff8a5c721c0583f57a83cb731e
-# 残りは Pulumi.example.yaml を見て埋める
-# CI からデプロイするなら infra/oidc/ を先に流し、その出力を入れる
-# pulumi config set workloadBoundaryArn <infra/oidc の workloadBoundaryArn>
 
-# ARN はまだ無いので、初回は必ず版を渡す
+# 値を export の右辺に書かない。シェルの履歴に平文で残る。
+# 履歴に残ったパスフレーズと commit 済みの設定ファイルがそろえば、
+# Cloudflare のトークンもアラートの URL も復号できてしまう
+# read の -p は zsh では別の意味になるので、プロンプトは printf で出す
+printf 'PULUMI_CONFIG_PASSPHRASE: '
+read -rs PULUMI_CONFIG_PASSPHRASE && echo
+export PULUMI_CONFIG_PASSPHRASE
+
+./init-stack.sh dev
+```
+
+ファイルに置いてある場合は `PULUMI_CONFIG_PASSPHRASE_FILE` にその場所を渡してもよい。
+
+最初に GitHub Actions からも流すかを聞く。流すなら、本体と `infra/oidc/` の両方に
+同じ名前のスタックを作る。二つの名前がずれると、`dev` のデプロイロールでは `prod` を
+触れないまま CI が `AccessDenied` で止まる。手元からだけ流すなら `infra/oidc/` は
+作らない。使わない OIDC プロバイダと IAM ロールを作る権限まで要ることになるためで、
+本体の `workloadBoundaryArn` は省略できる。
+
+二度目以降に流すと、いま入っている値を既定として見せる。Enter で通せばそのまま残る。
+秘密の値は見せずに「Enter で今の値のまま」と聞く。空で答えても消えないので、
+消したいときは `pulumi config rm` を使う。
+
+値は一つずつ聞かれる。省略できるものは空のまま Enter で飛ばせる。秘密の値は
+標準入力から渡すので、コマンドラインにも履歴にも残らない。何を聞かれるかは
+`Pulumi.example.yaml` に並べてある。
+
+出来上がった `Pulumi.dev.yaml` は commit する（#12）。続きはスクリプトが最後に
+案内する。Layer をまだ発行していなければ、初回は版を渡す。
+
+```
 ./deploy.sh --ytdlp 2025.09.26
 
 git add Pulumi.dev.yaml
 ```
+
+既にある Layer の ARN と版を `init-stack.sh` へ入れた場合は、`--ytdlp` を付けない。
+付けると新しい Layer バージョンが発行され、入れたばかりの ARN と版を
+`deploy.sh` が上書きする。
+
+```
+./deploy.sh
+```
+
+#### GitHub Actions からも流す場合
+
+`infra/oidc/Pulumi.dev.yaml` も出来ているので、こちらも commit する。
+`deploy.sh` の前に、入口と権限境界を作って、その出力を本体へ入れる。
+
+```
+# infra/oidc/ は package-lock を別に持つ。infra/ の npm ci では入らない
+npm ci --prefix oidc
+pulumi -C oidc up
+
+pulumi config set --stack dev workloadBoundaryArn $(pulumi -C oidc stack output workloadBoundaryArn)
+
+git add Pulumi.dev.yaml oidc/Pulumi.dev.yaml
+```
+
+Secrets へ登録するものは「ワークフローでの受け取り」にある。
 
 ### スクリプトが何をしているか
 
