@@ -72,7 +72,6 @@ export const ytdlpLayerVersion = config.require("ytdlpLayerVersion");
 export const youtubeProbeVideoId = config.require("youtubeProbeVideoId");
 export const boothProbeItemId = config.require("boothProbeItemId");
 
-export const githubDispatchToken = config.requireSecret("githubDispatchToken");
 export const alertWebhookUrl = config.requireSecret("alertWebhookUrl");
 
 // 実行時ロールに付ける上限。infra/oidc/ が作り、その出力をここへ入れる。

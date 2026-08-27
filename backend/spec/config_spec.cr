@@ -11,7 +11,6 @@ private def full_env : Hash(String, String)
     "YOUTUBE_PROBE_VIDEO_ID" => "video",
     "BOOTH_PROBE_ITEM_ID"    => "item",
     "YTDLP_LAYER_VERSION"    => "2025.09.26",
-    "GITHUB_DISPATCH_TOKEN"  => "token",
     "ALERT_WEBHOOK_URL"      => "https://example.test/hook",
   }
 end

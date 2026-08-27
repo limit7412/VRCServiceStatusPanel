@@ -57,10 +57,6 @@ config:
   boothProbeItemId:
     type: string
     description: 合成監視に使う作者自身の公開商品（仕様書 3.3）
-  githubDispatchToken:
-    type: string
-    secret: true
-    description: 版が食い違ったとき Layer の再ビルドを起動する（仕様書 7.3）
   alertWebhookUrl:
     type: string
     secret: true

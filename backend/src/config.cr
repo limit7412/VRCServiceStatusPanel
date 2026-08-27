@@ -29,9 +29,10 @@ module Main
     getter youtube_probe_video_id : String
     getter booth_probe_item_id : String
     # Layer に載せた yt-dlp の版。/config の値と比べる（仕様書 7.3）
+    #
+    # 食い違いは note に出すだけで、再ビルドはここからは起こさない。
+    # 起点は定期実行のワークフローにあり、そちらが /config を自分で読む。
     getter ytdlp_layer_version : String
-    # 版が食い違ったとき Layer の再ビルドを起動する（仕様書 7.3）
-    getter github_dispatch_token : String
     # 失敗時のアラート送信先（仕様書 11.2 の error/usecase.cr）
     getter alert_webhook_url : String
 
@@ -45,7 +46,6 @@ module Main
       YOUTUBE_PROBE_VIDEO_ID
       BOOTH_PROBE_ITEM_ID
       YTDLP_LAYER_VERSION
-      GITHUB_DISPATCH_TOKEN
       ALERT_WEBHOOK_URL
     ]
 
@@ -65,7 +65,6 @@ module Main
         youtube_probe_video_id: source["YOUTUBE_PROBE_VIDEO_ID"],
         booth_probe_item_id: source["BOOTH_PROBE_ITEM_ID"],
         ytdlp_layer_version: source["YTDLP_LAYER_VERSION"],
-        github_dispatch_token: source["GITHUB_DISPATCH_TOKEN"],
         alert_webhook_url: source["ALERT_WEBHOOK_URL"],
       )
     end
@@ -84,7 +83,6 @@ module Main
       @youtube_probe_video_id : String,
       @booth_probe_item_id : String,
       @ytdlp_layer_version : String,
-      @github_dispatch_token : String,
       @alert_webhook_url : String,
     )
     end

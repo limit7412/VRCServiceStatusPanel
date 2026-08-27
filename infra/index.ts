@@ -7,7 +7,6 @@ import {
     alertWebhookUrl,
     boothProbeItemId,
     deliveryHost,
-    githubDispatchToken,
     stack,
     youtubeProbeVideoId,
     ytdlpLayerVersion,
@@ -43,7 +42,6 @@ const environment: Environment = {
     YOUTUBE_PROBE_VIDEO_ID: youtubeProbeVideoId,
     BOOTH_PROBE_ITEM_ID: boothProbeItemId,
     YTDLP_LAYER_VERSION: ytdlpLayerVersion,
-    GITHUB_DISPATCH_TOKEN: githubDispatchToken,
     ALERT_WEBHOOK_URL: alertWebhookUrl,
 };
 

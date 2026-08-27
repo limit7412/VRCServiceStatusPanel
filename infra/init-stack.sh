@@ -332,7 +332,6 @@ set_required "$here" boothProbeItemId "BOOTH の商品 ID"
 echo
 echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
 set_layer
-set_secret "$here" githubDispatchToken "Layer 再ビルドを起動する GitHub のトークン"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
 if [ "$use_ci" = yes ]; then

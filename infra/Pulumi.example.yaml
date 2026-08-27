@@ -58,7 +58,5 @@ config:
   # vrc-service-status-panel:workloadBoundaryArn: ""
 
   # secret 指定のもの。pulumi config set --secret で入れる
-  vrc-service-status-panel:githubDispatchToken:
-    secure: pulumi config set --secret で入れる
   vrc-service-status-panel:alertWebhookUrl:
     secure: pulumi config set --secret で入れる

@@ -82,7 +82,7 @@ echo "==> bootstrap.zip を作る"
 # Layer は版を指定したときだけ発行し直す。
 #
 # ARN と版は必ず一緒に更新する。片方だけだと、実行時の版の比較が
-# 食い違いを出し続けて repository_dispatch が繰り返し起動する（#8）。
+# 食い違いを出し続け、note に「VRChat 同梱版と不一致」を出したままになる（#8）。
 if [ -n "$ytdlp_version" ]; then
     need aws
 
