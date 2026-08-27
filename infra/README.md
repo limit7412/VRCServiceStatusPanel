@@ -426,15 +426,19 @@ export PULUMI_CONFIG_PASSPHRASE
 
 ```
 git add Pulumi.dev.yaml
-./deploy.sh
+
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh
 ```
+
+トークンを export せずにこの呼び出しへだけ渡すのは「デプロイ」に書いたとおりである。
 
 Layer は `deploy.sh` の中の `pulumi up` が作る。版は `init-stack.sh` で入れた
 `ytdlpVersion` を使うので、初回でも `--ytdlp` は要らない。あとから版を変えるときだけ
 渡す。
 
 ```
-./deploy.sh --ytdlp 2025.09.26
+CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
 ```
 
 #### GitHub Actions からも流す場合
