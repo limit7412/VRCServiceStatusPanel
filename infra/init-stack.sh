@@ -152,6 +152,24 @@ set_optional() {
     pulumi -C "$dir" config set --stack "$stack" "$key" "$ANSWER"
 }
 
+# AWS の資格情報を移して aws を呼ぶ。出力は標準出力へ、雑音は捨てる。
+#
+# ここまでで AWS_* に入っているのは状態の置き場所（R2）の鍵である。
+# そのままでは AWS へ通らないので、deploy.sh と同じく DEPLOY_AWS_* を移す。
+# 移すのは元の変数がある場合だけで、R2 をバックエンドにしていない環境では
+# もとの AWS_* がそのまま使われる。
+#
+# aws が無ければ 1 を返す。呼び出し側はどちらも「既定が無い」として扱う。
+aws_deploy() {
+    command -v aws > /dev/null 2>&1 || return 1
+
+    env \
+        ${DEPLOY_AWS_ACCESS_KEY_ID:+AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID"} \
+        ${DEPLOY_AWS_SECRET_ACCESS_KEY:+AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY"} \
+        ${DEPLOY_AWS_SESSION_TOKEN:+AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN"} \
+        aws "$@" 2> /dev/null
+}
+
 # 設定にその値が入っているか。中身は取り出さない。
 #
 # 秘密の値について「入っているか」だけを知りたいときに使う。
@@ -287,22 +305,20 @@ set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 # 既定はいま繋がっているアカウントから組み立てる。ARN にはアカウント ID が
 # 入るので、public のこのリポジトリには書かない。
 #
-# aws が無いときも、資格情報が通らないときも、既定が空になるだけである。
-# その場合は ARN を手で貼る。
+# 実在を確かめてからでないと既定にしない。ask は空の答えを既定で埋めるので、
+# 無いものを既定に出すと、Enter で通しただけで存在しない境界を指すことになる。
+# fork 先のように境界をまだ作っていないアカウントでは、そのまま流すと
+# 最初の CreateRole が落ちる。無ければ既定を空にして、Enter で飛ばせるようにする。
 #
-# 鍵は deploy.sh と同じくその場で AWS_* へ移す。ここまでで AWS_* に入って
-# いるのは状態の置き場所（R2）の鍵であり、そのままでは AWS へ通らない。
+# aws が無いときも、資格情報が通らないときも、同じく既定が空になるだけである。
+# その場合は ARN を手で貼る。
 boundary_default=""
-if command -v aws > /dev/null 2>&1; then
-    account=$(
-        env \
-            ${DEPLOY_AWS_ACCESS_KEY_ID:+AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID"} \
-            ${DEPLOY_AWS_SECRET_ACCESS_KEY:+AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY"} \
-            ${DEPLOY_AWS_SESSION_TOKEN:+AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN"} \
-            aws sts get-caller-identity --query Account --output text 2> /dev/null || true
-    )
-    if [ -n "$account" ] && [ "$account" != "None" ]; then
-        boundary_default="arn:aws:iam::$account:policy/qazx7412-vrc-service-status-panel-workload-boundary"
+boundary_name=qazx7412-vrc-service-status-panel-workload-boundary
+account=$(aws_deploy sts get-caller-identity --query Account --output text || true)
+if [ -n "$account" ] && [ "$account" != "None" ]; then
+    candidate="arn:aws:iam::$account:policy/$boundary_name"
+    if aws_deploy iam get-policy --policy-arn "$candidate" > /dev/null; then
+        boundary_default="$candidate"
     fi
 fi
 

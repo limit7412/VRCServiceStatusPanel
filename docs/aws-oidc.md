@@ -8,14 +8,19 @@ OIDC で短命の資格情報を受け取るので、長い寿命の AWS の鍵�
 
 ## 作ってあるもの
 
-リージョンは `ap-northeast-1`。
-
 以下の `<アカウントID>` は伏せ字である。実物の ARN には AWS のアカウント ID が入る。
 このリポジトリは public なので書かない。手元では次で引ける。
 
 ```
 aws sts get-caller-identity --query Account --output text
 ```
+
+`ap-northeast-1` と `limit7412/VRCServiceStatusPanel` のほうは伏せ字ではなく、
+いま動いているものの実際の値である。
+**fork したり別のリージョンへ出したりするなら、この二つも書き換える。**
+リージョンは Lambda、Logs、Scheduler の ARN に入っており、スタックの `aws:region` と
+揃っていないとデプロイが `AccessDenied` になる。
+リポジトリは信頼ポリシーの `sub` に入っており、揃っていないとロールを引けない。
 
 | 何 | 名前 | 作った経路 |
 | --- | --- | --- |
@@ -79,6 +84,10 @@ GitHub Actions の OIDC でいちばん間違えやすい箇所である。
 IAM 側も、GitHub の発行者を信頼するロールについては `sub` 条件の有無を作成時に検査し、
 ワイルドカードだけの値を弾く。
 
+**fork したなら `repo:` の後ろを自分の `owner/repo` に書き換える。** ここが元のリポジトリを
+指したままだと、fork の GitHub Actions が出すトークンの `sub` と噛み合わず、
+アカウント ID を正しく直してもロールを引けない。
+
 いまの条件では、`master` に push できる者と `master` 上で `workflow_dispatch` を打てる者は
 誰でも引ける。
 さらに絞るなら、GitHub の environment を作って protection rules を掛け、
@@ -89,6 +98,10 @@ IAM 側も、GitHub の発行者を信頼するロールについては `sub` �
 インラインポリシー `deploy` として付けてある。
 すべて `qazx7412-vrc-service-status-panel-` で始まる名前に絞ってあり、
 同じアカウントの他のものへは届かない。
+
+Lambda、Logs、Scheduler の ARN にはリージョンが入る。
+Pulumi が組み立てていたころは `aws:region` から取っていたが、いまは書き下してある。
+**スタックのリージョンを変えるときは、このポリシーも作り直す。**
 
 | Sid | 何を許すか |
 | --- | --- |
@@ -327,7 +340,24 @@ IAM 側も、GitHub の発行者を信頼するロールについては `sub` �
 ## 作り直すとき
 
 管理者の資格情報で、次を順に流す。
-上の JSON をそれぞれ `boundary.json`、`trust.json`、`deploy-policy.json` として保存しておく。
+上の JSON を、それぞれ次の名前で保存しておく。
+
+| 節 | 保存先 |
+| --- | --- |
+| 「誰がロールを引けるか」の信頼ポリシー | `trust.json` |
+| 「デプロイロールの権限」のポリシー全文 | `deploy-policy.json` |
+| 「実行時ロールの権限境界」のポリシー | `boundary.json` |
+
+保存する前に、置き換えるところが三つある。
+
+- `<アカウントID>` を自分の AWS アカウント ID にする
+- `ap-northeast-1` を、そのスタックの `aws:region` と同じリージョンにする
+- 信頼ポリシーの `repo:limit7412/VRCServiceStatusPanel` を、自分の `owner/repo` にする
+
+置き換え忘れはどれも実行時まで表に出ない。
+リージョンがずれていれば CI の `CreateFunction` が `AccessDenied` になり、
+リポジトリがずれていれば `configure-aws-credentials` が
+`Not authorized to perform sts:AssumeRoleWithWebIdentity` で止まる。
 
 境界を先に作る。デプロイロールのポリシーが境界の ARN を参照している。
 
@@ -384,6 +414,22 @@ aws iam create-policy-version \
   --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
   --policy-document file://boundary.json \
   --set-as-default
+```
+
+**管理ポリシーは版を五つまでしか持てない。** 六つ目の `create-policy-version` は
+`LimitExceeded` で止まるので、先に古い版を消す。
+既定の版は消せないので、`IsDefaultVersion` が `false` のものから選ぶ。
+
+```
+aws iam list-policy-versions \
+  --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
+  --query 'Versions[?!IsDefaultVersion].[VersionId,CreateDate]' --output text
+```
+
+```
+aws iam delete-policy-version \
+  --policy-arn arn:aws:iam::<アカウントID>:policy/qazx7412-vrc-service-status-panel-workload-boundary \
+  --version-id v2
 ```
 
 **直したら、この文書の JSON も同じ内容に揃える。** ここが実物の記録であり、
