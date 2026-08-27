@@ -77,7 +77,7 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 
 | ファイル | 何があるか |
 | --- | --- |
-| `init-stack.sh` | スタックを作って設定を入れる。最初の一回だけ |
+| `init-stack.sh` | スタックを作って設定を入れる。設定の移行もここで起きる |
 | `deploy.sh` | ビルドから `pulumi up` までをひと通り流す |
 | `index.ts` | 環境変数の組み立てと出力 |
 | `src/settings.ts` | スタックごとの設定 |
@@ -162,6 +162,11 @@ R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そ�
 ### Cloudflare の API トークン
 
 ダッシュボードの「My Profile → API Tokens」から作る。
+
+**渡し方は環境変数 `CLOUDFLARE_API_TOKEN` である。** スタックの設定には入れない。
+プロバイダは設定からも環境変数からも読むが、設定へ入れると commit されるファイルに
+暗号文が載る。公開する暗号文は少ないほうがよい（#24）。
+CI は元からこの環境変数で渡している。
 
 **権限ポリシー**を四つ足す。ポリシーごとに、まず対象を選ぶドロップダウン
 （`アカウント全体`、`指定ドメイン` など）があり、その下で権限を選ぶ。
@@ -254,6 +259,27 @@ Object 系のトークンは S3 互換 API でしか使えないが、DIY バッ
 鍵は state の中で暗号化される。DIY バックエンドではパスフレーズから鍵を導くので、
 `PULUMI_CONFIG_PASSPHRASE` を無くすと state を読めなくなる。控えておくこと。
 
+### パスフレーズの作り方
+
+**覚えずに作る。** 生成してパスワードマネージャへ入れる。
+
+```
+openssl rand -base64 32
+```
+
+`init-stack.sh` は 32 文字未満を受け付けない。
+
+理由は commit する先が public だからである（#24）。
+`Pulumi.<スタック名>.yaml` には secret が暗号文として入り、そのファイルは commit する。
+暗号文が公開される以上、総当たりは誰でも好きなだけ試せる。
+
+Pulumi の鍵導出は PBKDF2-SHA256 を 100 万回まわして AES-256-GCM の鍵を作る。
+一回の試行が重いので、生成した値なら手が出ない。
+一方、人が思いついて覚えられる範囲の文字列は、それでも辞書と規則の射程に入る。
+
+文字種の規則は置いていない。規則を足すほど、生成した値が落ちて人が考えた値が通る、
+という逆転が起きるためである。長さだけを見る。
+
 ### AWS の資格情報を分ける
 
 上の `AWS_ACCESS_KEY_ID` と `AWS_SECRET_ACCESS_KEY` は R2 のものである。
@@ -285,7 +311,9 @@ R2 をバックエンドにするなら、AWS 側は鍵で渡すことになる�
 スタックごとの値は `Pulumi.<スタック名>.yaml` に入る。**このファイルは commit する。**
 
 `pulumi config set --secret` で入れた値は暗号文として記録される。復号の鍵は
-パスフレーズから導くので、`PULUMI_CONFIG_PASSPHRASE` を持たない相手には読めない。
+パスフレーズから導く。**このリポジトリは public なので、暗号文もそのまま公開される。**
+強度は「パスフレーズの作り方」に書いた条件で担保する。弱いパスフレーズなら、
+持たない相手でも総当たりで導ける（#24）。
 
 ```yaml
 config:
@@ -300,24 +328,65 @@ config:
 commit するのは、CI へ渡すものを減らすためである。ファイルを持たせない道もあるが、
 その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびに
 ワークフローも直すことになる。ずれても `pulumi up` が落ちて初めて気づく。
-commit してあれば、CI へ渡すのはパスフレーズひとつで済む。
+commit してあれば、CI へ渡すのは鍵と資格情報だけで済む。
 
-このリポジトリは private である。公開するときは、平文の識別子が読まれる前提で
-見直すこと。OIDC のロールは `sub` で引ける相手を絞ってあるので、AWS のアカウント ID
-を知られてもロールを引けるようにはならない。ただしロール名は推測できるようになる。
+**このリポジトリは public である。** 平文の識別子は読まれる前提で置いてある。
+
+置いたままにできるのは、どれも識別子であって資格情報ではないためである。
+OIDC のロールは `sub` で引ける相手を絞ってあるので、AWS のアカウント ID を
+知られてもロールを引けるようにはならない。ただしロール名は推測できるようになる。
+Cloudflare のアカウント ID とゾーン ID も、トークンと組にならなければ何もできない。
+
+暗号文のほうは「パスフレーズの作り方」の条件で守る（#24）。
 
 `Pulumi.example.yaml` は残してある。fork して自分のアカウントへ出すときは、
-こちらを写す。commit されているほうには作者のアカウント ID と、復号できない
-暗号文が入っている。
+こちらを写す。commit されているほうには作者のアカウント ID と、作者のパスフレーズで
+暗号化された値が入っている。
 
 ## デプロイ
 
 `infra/deploy.sh` がひと通り流す。
 
 ```
-infra/deploy.sh                     # 今の設定のまま流す
-infra/deploy.sh --ytdlp 2025.09.26  # yt-dlp の版を入れ替えてから流す
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+
+CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh
+CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh --ytdlp 2025.09.26
 ```
+
+`CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流すときに渡す（#24）。
+`deploy.sh` は最初に見て、無ければそこで止まる。
+
+**`CLOUDFLARE_API_TOKEN` は export しない。** export すると、デプロイが終わったあとも
+呼び出し元のシェルに残り、そこで動かすものすべてへ引き継がれる。この呼び出しにだけ
+渡せば、そこで終わる。
+
+`deploy.sh` の側でも、受け取ったらすぐ環境から外し、`pulumi up` へ渡すときだけ戻している。
+渡ってきたまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
+`build.sh` が起こす docker まで、このトークンを見られることになる。
+「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、
+Pulumi と無関係なコードへは渡さない。
+
+`PULUMI_CONFIG_PASSPHRASE` のほうは export する。渡す先が一つではなく、
+`init-stack.sh` も `deploy.sh` も中で `pulumi` を何度も呼ぶためである。
+
+### この変更より前に作ったスタック
+
+`deploy.sh` の前に `init-stack.sh` を流し直す。
+
+設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として
+`ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、短いパスフレーズの入れ替えを
+案内するのも `init-stack.sh` の中にある。`deploy.sh` だけを流すと、設定ファイルに
+トークンの暗号文が残ったままになる。
+
+```
+printf 'PULUMI_CONFIG_PASSPHRASE: '; read -rs PULUMI_CONFIG_PASSPHRASE && echo
+export PULUMI_CONFIG_PASSPHRASE
+
+infra/init-stack.sh dev
+```
+
+聞かれる値には、いま入っているものが既定として出る。Enter で通せばそのまま残る。
 
 `--ytdlp` は `ytdlpVersion` を書き換えるだけである。Layer そのものは Pulumi が
 持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
@@ -337,9 +406,10 @@ commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` �
 cd infra
 npm ci
 
-# 値を export の右辺に書かない。シェルの履歴に平文で残る。
-# 履歴に残ったパスフレーズと commit 済みの設定ファイルがそろえば、
-# Cloudflare のトークンもアラートの URL も復号できてしまう
+# パスフレーズは覚えずに作る（「パスフレーズの作り方」を参照）。
+#   openssl rand -base64 32
+# 値を export の右辺に書かない。シェルの履歴に平文で残り、
+# commit 済みの設定ファイルと合わされば alertWebhookUrl を復号できてしまう
 # read の -p は zsh では別の意味になるので、プロンプトは printf で出す
 printf 'PULUMI_CONFIG_PASSPHRASE: '
 read -rs PULUMI_CONFIG_PASSPHRASE && echo
@@ -363,15 +433,19 @@ export PULUMI_CONFIG_PASSPHRASE
 
 ```
 git add Pulumi.dev.yaml
-./deploy.sh
+
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh
 ```
+
+トークンを export せずにこの呼び出しへだけ渡すのは「デプロイ」に書いたとおりである。
 
 Layer は `deploy.sh` の中の `pulumi up` が作る。版は `init-stack.sh` で入れた
 `ytdlpVersion` を使うので、初回でも `--ytdlp` は要らない。あとから版を変えるときだけ
 渡す。
 
 ```
-./deploy.sh --ytdlp 2025.09.26
+CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
 ```
 
 #### GitHub Actions からも流す場合
@@ -401,6 +475,9 @@ Secrets へ登録するものは「ワークフローでの受け取り」にあ
 ```
 cd infra
 
+# トークンは export せずにこの三つへ渡す（「デプロイ」を参照）
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+
 # 1. バイナリを作る（docker が要る）
 ../backend/build.sh
 
@@ -410,7 +487,7 @@ cd infra
 ../backend/layer/build.sh "$(pulumi config get ytdlpVersion)" "" ../backend/ytdlp-layer.zip
 
 # 3. 反映する
-pulumi up
+CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up
 ```
 
 `pulumi up` は `../backend/bootstrap.zip` と `../backend/ytdlp-layer.zip` を
@@ -431,11 +508,12 @@ OIDC のロールと権限境界はこのスクリプトの対象外である。
 
 ```
 # 既存の ruleset の ID を調べる
-curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+curl -s -H "Authorization: Bearer $cloudflare_token" \
   "https://api.cloudflare.com/client/v4/zones/<ゾーンID>/rulesets/phases/http_request_cache_settings/entrypoint" \
   | jq -r '.result.id, (.result.rules[] | .expression)'
 
-pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
+CLOUDFLARE_API_TOKEN="$cloudflare_token" \
+  pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
 ```
 
 取り込んだあと、既存の規則も `src/delivery.ts` に書き写す。書き漏らすと次の `pulumi up`

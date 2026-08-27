@@ -50,10 +50,73 @@ if ! command -v pulumi > /dev/null 2>&1; then
     exit 1
 fi
 
-# パスフレーズは state の中の secret を復号する鍵である。
-# 失うと state を読めなくなるので、控えを残してもらう（仕様書 9.1）。
-if [ -z "${PULUMI_CONFIG_PASSPHRASE:-}" ] && [ -z "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
-    echo "PULUMI_CONFIG_PASSPHRASE が要る。これを失うと state の secret を読めなくなるので、控えを残すこと" >&2
+# パスフレーズは state と設定ファイルの中の secret を復号する鍵である。
+# 失うと読めなくなるので、控えを残してもらう（仕様書 9.1）。
+#
+# 長さの下限を置くのは、設定ファイルを commit する先が public だからである（#24）。
+# 暗号文が公開される以上、総当たりは誰でも好きなだけ試せる。Pulumi の鍵導出は
+# PBKDF2-SHA256 を 100 万回まわすので一回の試行は重いが、人が思いついて
+# 覚えられる範囲の文字列は、それでも辞書と規則の射程に入る。
+#
+# 文字種では見ない。規則を足すほど、生成した値が落ちて人が考えた値が通る、
+# という逆転が起きる。ここで欲しいのは覚えずに生成させることなので、
+# 覚えられない長さを下限にするだけでよい。
+MIN_PASSPHRASE=32
+
+# 鍵の材料になる文字列を、Pulumi と同じ形で取り出す。
+#
+# 環境変数はそのまま使われる（pkg/secrets/passphrase/manager.go の readPassphrase）。
+# ファイルのほうは strings.TrimSpace を通してから使われる。$(cat) が落とすのは
+# 末尾の改行だけなので、CRLF のファイルだと CR が残り、ここでの長さが Pulumi の
+# 見る長さより一文字多くなる。下限をすり抜けられるので、前後の空白を自分で落とす。
+phrase=""
+if [ -n "${PULUMI_CONFIG_PASSPHRASE+set}" ]; then
+    # 空で export されていても Pulumi はこちらを採る。os.LookupEnv は値ではなく
+    # 設定の有無を見るためで、そのとき鍵は空文字から導かれる。値の有無で分けると、
+    # ここではファイルを見て通し、Pulumi は空文字で暗号化する、という食い違いになる。
+    # 空なら下の長さの検査が 0 文字として弾く。
+    phrase="$PULUMI_CONFIG_PASSPHRASE"
+elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
+    # 相対パスは絶対パスへ直して環境変数へ書き戻す。
+    #
+    # pulumi -C は「そのディレクトリで起動したかのように」振る舞うので、相対の
+    # ままだと Pulumi は infra/ から解決する。ここで読むファイルと
+    # 食い違い、無ければスタックの作成が落ち、別の短いファイルがあれば検査した値と
+    # 違う鍵で暗号化される。Pulumi CLI 3.259.0 で、-C の先から解決することを確かめた。
+    case "$PULUMI_CONFIG_PASSPHRASE_FILE" in
+        /*) ;;
+        *) PULUMI_CONFIG_PASSPHRASE_FILE="$PWD/$PULUMI_CONFIG_PASSPHRASE_FILE" ;;
+    esac
+    export PULUMI_CONFIG_PASSPHRASE_FILE
+
+    if [ ! -r "$PULUMI_CONFIG_PASSPHRASE_FILE" ]; then
+        echo "PULUMI_CONFIG_PASSPHRASE_FILE が読めない: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
+        exit 1
+    fi
+    phrase=$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")
+    phrase="${phrase#"${phrase%%[![:space:]]*}"}"
+    phrase="${phrase%"${phrase##*[![:space:]]}"}"
+else
+    echo "PULUMI_CONFIG_PASSPHRASE が要る。これを失うと secret を読めなくなるので、控えを残すこと" >&2
+    exit 1
+fi
+
+if [ "${#phrase}" -lt "$MIN_PASSPHRASE" ]; then
+    echo "PULUMI_CONFIG_PASSPHRASE が短い（${#phrase} 文字）。${MIN_PASSPHRASE} 文字以上にする" >&2
+    echo "  設定ファイルは commit され、このリポジトリは public である（#24）" >&2
+    echo "  覚えずに済ませる。次のように作って、パスワードマネージャへ入れる" >&2
+    echo "    openssl rand -base64 32" >&2
+    echo >&2
+    echo "  既にこのパスフレーズでスタックを作ってあるなら、先に入れ替える。" >&2
+    echo "  古いほうを PULUMI_CONFIG_PASSPHRASE に入れたまま次を実行すると、" >&2
+    echo "  新しいパスフレーズを聞かれ、設定と state が入れ替わったもので暗号化し直される。" >&2
+    echo "    pulumi -C \"$here\" stack change-secrets-provider passphrase --stack $stack" >&2
+    echo "  そのあと新しいほうを PULUMI_CONFIG_PASSPHRASE に入れて、ここへ戻る。" >&2
+    echo >&2
+    echo "  古い設定ファイルを commit してあるなら、入れ替えだけでは足りない。" >&2
+    echo "  古い暗号文は履歴に残り、弱いパスフレーズごと総当たりの的になる。" >&2
+    echo "  そこに入っていた secret は作り直す（alertWebhookUrl、設定へ入れていたなら" >&2
+    echo "  Cloudflare のトークンも）。" >&2
     exit 1
 fi
 
@@ -267,6 +330,7 @@ create_stack "$here" && created_main=yes
 # 暗号文とはいえ commit 済みの設定ファイルに入ったままになる。
 drop_config "$here" githubDispatchToken "GitHub 側でこのトークンを失効させること。commit 済みの履歴からは消えない"
 drop_config "$here" ytdlpLayerArn "Layer は pulumi up が作るので、ARN を設定に持たない"
+drop_config "$here" cloudflare:apiToken "CLOUDFLARE_API_TOKEN で渡す。commit 済みの履歴に暗号文が残っているなら、トークンを作り直すこと"
 rename_config "$here" ytdlpLayerVersion ytdlpVersion
 
 # 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
@@ -282,7 +346,10 @@ pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
 
 echo
 echo "--- Cloudflare（仕様書 6） ---"
-set_secret "$here" cloudflare:apiToken "API トークン（要る権限は README の「Cloudflare の API トークン」）"
+# API トークンはここでは聞かない。CLOUDFLARE_API_TOKEN で渡す（#24）。
+#
+# 設定へ入れると commit されるファイルに暗号文が載る。プロバイダは環境変数からも
+# 読むので、入れる意味が無い。CI は元からこの環境変数で渡している。
 set_required "$here" cloudflareAccountId "アカウント ID"
 set_required "$here" deliveryZoneId "配信ドメインのゾーン ID"
 set_required "$here" deliveryHost "配信ホスト名（例 status.example.com）"
@@ -339,7 +406,10 @@ echo
 echo "次にやること"
 
 # Layer は pulumi up が作るので、初回と二度目で案内は変わらない。
-deploy_line="       \"$here/deploy.sh\""
+#
+# Cloudflare のトークンは設定に入らないので、流す前に環境変数へ入れてもらう（#24）。
+deploy_line="       printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+       CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" \"$here/deploy.sh\""
 deploy_label="本体を流す（Layer もここで作られる）"
 
 echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
