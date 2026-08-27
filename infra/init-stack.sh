@@ -94,6 +94,11 @@ if [ "${#phrase}" -lt "$MIN_PASSPHRASE" ]; then
     echo "  次に infra/oidc/ を流したときに state を復号できない。" >&2
     echo "    pulumi -C \"$here/oidc\" stack change-secrets-provider passphrase --stack $stack" >&2
     echo "  そのあと新しいほうを PULUMI_CONFIG_PASSPHRASE に入れて、ここへ戻る。" >&2
+    echo >&2
+    echo "  古い設定ファイルを commit してあるなら、入れ替えだけでは足りない。" >&2
+    echo "  古い暗号文は履歴に残り、弱いパスフレーズごと総当たりの的になる。" >&2
+    echo "  そこに入っていた secret は作り直す（alertWebhookUrl、設定へ入れていたなら" >&2
+    echo "  Cloudflare のトークンも）。" >&2
     exit 1
 fi
 
@@ -395,9 +400,8 @@ echo "次にやること"
 # Layer は pulumi up が作るので、初回と二度目で案内は変わらない。
 #
 # Cloudflare のトークンは設定に入らないので、流す前に環境変数へ入れてもらう（#24）。
-deploy_line="       printf 'CLOUDFLARE_API_TOKEN: '; read -rs CLOUDFLARE_API_TOKEN && echo
-       export CLOUDFLARE_API_TOKEN
-       \"$here/deploy.sh\""
+deploy_line="       printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
+       CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" \"$here/deploy.sh\""
 deploy_label="本体を流す（Layer もここで作られる）"
 
 if [ "$use_ci" = no ]; then

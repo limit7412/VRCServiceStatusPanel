@@ -357,18 +357,20 @@ Cloudflare のアカウント ID とゾーン ID も、トークンと組にな�
 `infra/deploy.sh` がひと通り流す。
 
 ```
-printf 'CLOUDFLARE_API_TOKEN: '; read -rs CLOUDFLARE_API_TOKEN && echo
-export CLOUDFLARE_API_TOKEN
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
 
-infra/deploy.sh                     # 今の設定のまま流す
-infra/deploy.sh --ytdlp 2025.09.26  # yt-dlp の版を入れ替えてから流す
+CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh
+CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh --ytdlp 2025.09.26
 ```
 
-`CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流す前に環境変数へ入れる（#24）。
+`CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流すときに渡す（#24）。
 `deploy.sh` は最初に見て、無ければそこで止まる。
 
-受け取ったあとは環境から外し、`pulumi up` へ渡すときだけ戻す。
-export したまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
+**`export` しない。** export すると、デプロイが終わったあとも呼び出し元のシェルに残り、
+そこで動かすものすべてへ引き継がれる。この呼び出しにだけ渡せば、そこで終わる。
+
+`deploy.sh` の側でも、受け取ったらすぐ環境から外し、`pulumi up` へ渡すときだけ戻している。
+渡ってきたまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
 `build.sh` が起こす docker まで、このトークンを見られることになる。
 「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、
 Pulumi と無関係なコードへは渡さない。
