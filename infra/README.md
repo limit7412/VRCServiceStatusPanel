@@ -688,8 +688,8 @@ CI からデプロイする場合だけ要る。登録しないと `pulumi/auth-
 
 手元から流すだけなら要らない。`pulumi login` で足りる。
 
-CLI にこれを行うコマンドは無い。コンソールか REST API のどちらかになる
-（Pulumi CLI 3.259.0 の `pulumi org` に issuer を扱うサブコマンドが無いことを確かめた）。
+CLI にこれを行うコマンドは無い。
+コンソールか REST API のどちらかになる（Pulumi CLI 3.259.0 の `pulumi org` に issuer を扱うサブコマンドが無いことを確かめた）。
 
 コンソールなら Settings → Access Management → OIDC Issuers → Register issuer。
 四つ聞かれるが、必須は Name と URL だけである。
@@ -702,19 +702,18 @@ CLI にこれを行うコマンドは無い。コンソールか REST API のど
 | Thumbprint | 空のまま |
 
 `Max expiration` は、交換して渡すアクセストークンの寿命の上限である。
-`pulumi/auth-actions` の `token-expiration` はあくまで要求で、そのまま通すか
-短く切り詰めるかは発行する側が決める。いまのワークフロー例はその入力を渡していないので
-空でも動くが、あとで長い寿命を要求する行が足されたときに、ここで頭打ちにできる。
+`pulumi/auth-actions` の `token-expiration` はあくまで要求で、そのまま通すか短く切り詰めるかは発行する側が決める。
+いまのワークフロー例はその入力を渡していないので空でも動くが、あとで長い寿命を要求する行が足されたときに、ここで頭打ちにできる。
 このプロジェクトのデプロイは 1 時間もあれば収まる。
 
-**`Thumbprint` は空のままにする。** 空なら Pulumi が発行者から公開鍵を取ってきて持つ。
-手で埋めると、GitHub が証明書を更新したときに交換が通らなくなり、入れ替えるまで
-CI が止まる。しかも Pulumi の `regenerate-thumbprints` は JWKS を静的に設定した
-発行者には使えないので、取り直しの道も塞ぐことになる。
+**`Thumbprint` は空のままにする。**
+空なら Pulumi が発行者から公開鍵を取ってきて持つ。
+手で埋めると、GitHub が証明書を更新したときに交換が通らなくなり、入れ替えるまで CI が止まる。
+しかも Pulumi の `regenerate-thumbprints` は JWKS を静的に設定した発行者には使えないので、取り直しの道も塞ぐことになる。
 AWS の OIDC プロバイダに指紋を渡していないのと同じ理由である（`docs/aws-oidc.md`）。
 
-続けて認可ポリシーを一つ足す。無料の Individual で使えるのは personal トークンだけで、
-ワークフローの `pulumi/auth-actions` に渡す値と揃える必要がある。
+続けて認可ポリシーを一つ足す。
+無料の Individual で使えるのは personal トークンだけで、ワークフローの `pulumi/auth-actions` に渡す値と揃える必要がある。
 
 | 項目 | 値 |
 | --- | --- |
@@ -724,20 +723,22 @@ AWS の OIDC プロバイダに指紋を渡していないのと同じ理由で�
 | Audience | `urn:pulumi:org:limit7412` |
 | Subject | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
 
-**Subject は `:*` で終わらせない。** 公式の例は `repo:<owner>/<repo>:*` だが、それだと
-そのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
-AWS 側の信頼ポリシーは `master` への push に絞ってあるので、ここも揃える
-（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
+**Subject は `:*` で終わらせない。**
+公式の例は `repo:<owner>/<repo>:*` だが、それだとそのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
+AWS 側の信頼ポリシーも `master` の ref で動くワークフローに絞ってあるので、ここも揃える（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
+`sub` はイベントの種別を持たないため、どちらも push だけには絞れない。
+`master` 上の `workflow_dispatch` も同じ値になる。
 
-REST API で行うなら次の二つを使う。`<orgName>` は個人アカウントならユーザー名である。
+REST API で行うなら次の二つを使う。
+`<orgName>` は個人アカウントならユーザー名である。
 
 ```
 POST /api/orgs/<orgName>/oidc/issuers
 POST /api/orgs/<orgName>/auth/policies/oidcissuers/<issuerId>
 ```
 
-fork するなら、この表の `limit7412` と `limit7412/VRCServiceStatusPanel` を
-自分のものに書き換える。ワークフロー側の `organization` と `scope` も同じ値にする。
+fork するなら、この表の `limit7412` と `limit7412/VRCServiceStatusPanel` を自分のものに書き換える。
+ワークフロー側の `organization` と `scope` も同じ値にする。
 
 **カスタムドメインの接続。** ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
