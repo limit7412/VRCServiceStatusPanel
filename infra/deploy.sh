@@ -67,6 +67,16 @@ need docker
 need zip
 need curl
 
+# Cloudflare のトークンは設定に入れず、環境変数で渡す（#24）。
+# ここで見ないと、bootstrap.zip と Layer の zip を作ったあとの
+# pulumi up まで進んでから、プロバイダの初期化で落ちる。
+if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    echo "CLOUDFLARE_API_TOKEN が要る。履歴に残さないよう、次のように入れる" >&2
+    echo "  printf 'CLOUDFLARE_API_TOKEN: '; read -rs CLOUDFLARE_API_TOKEN && echo" >&2
+    echo "  export CLOUDFLARE_API_TOKEN" >&2
+    exit 1
+fi
+
 cd "$here"
 
 stack=$(pulumi stack --show-name 2>/dev/null || true)

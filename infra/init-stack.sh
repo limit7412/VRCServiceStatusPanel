@@ -54,10 +54,36 @@ if ! command -v pulumi > /dev/null 2>&1; then
     exit 1
 fi
 
-# パスフレーズは state の中の secret を復号する鍵である。
-# 失うと state を読めなくなるので、控えを残してもらう（仕様書 9.1）。
-if [ -z "${PULUMI_CONFIG_PASSPHRASE:-}" ] && [ -z "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
-    echo "PULUMI_CONFIG_PASSPHRASE が要る。これを失うと state の secret を読めなくなるので、控えを残すこと" >&2
+# パスフレーズは state と設定ファイルの中の secret を復号する鍵である。
+# 失うと読めなくなるので、控えを残してもらう（仕様書 9.1）。
+#
+# 長さの下限を置くのは、設定ファイルを commit する先が public だからである（#24）。
+# 暗号文が公開される以上、総当たりは誰でも好きなだけ試せる。Pulumi の鍵導出は
+# PBKDF2-SHA256 を 100 万回まわすので一回の試行は重いが、人が思いついて
+# 覚えられる範囲の文字列は、それでも辞書と規則の射程に入る。
+#
+# 文字種では見ない。規則を足すほど、生成した値が落ちて人が考えた値が通る、
+# という逆転が起きる。ここで欲しいのは覚えずに生成させることなので、
+# 覚えられない長さを下限にするだけでよい。
+MIN_PASSPHRASE=32
+
+# Pulumi は環境変数でもファイルでも末尾の改行を落とすので、
+# $(cat) で読んだ長さがそのまま鍵の材料の長さになる。
+phrase=""
+if [ -n "${PULUMI_CONFIG_PASSPHRASE:-}" ]; then
+    phrase="$PULUMI_CONFIG_PASSPHRASE"
+elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ] && [ -f "${PULUMI_CONFIG_PASSPHRASE_FILE}" ]; then
+    phrase=$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")
+else
+    echo "PULUMI_CONFIG_PASSPHRASE が要る。これを失うと secret を読めなくなるので、控えを残すこと" >&2
+    exit 1
+fi
+
+if [ "${#phrase}" -lt "$MIN_PASSPHRASE" ]; then
+    echo "PULUMI_CONFIG_PASSPHRASE が短い（${#phrase} 文字）。${MIN_PASSPHRASE} 文字以上にする" >&2
+    echo "  設定ファイルは commit され、このリポジトリは public である（#24）" >&2
+    echo "  覚えずに済ませる。次のように作って、パスワードマネージャへ入れる" >&2
+    echo "    openssl rand -base64 32" >&2
     exit 1
 fi
 
@@ -304,6 +330,7 @@ fi
 # 暗号文とはいえ commit 済みの設定ファイルに入ったままになる。
 drop_config "$here" githubDispatchToken "GitHub 側でこのトークンを失効させること。commit 済みの履歴からは消えない"
 drop_config "$here" ytdlpLayerArn "Layer は pulumi up が作るので、ARN を設定に持たない"
+drop_config "$here" cloudflare:apiToken "CLOUDFLARE_API_TOKEN で渡す。commit 済みの履歴に暗号文が残っているなら、トークンを作り直すこと"
 rename_config "$here" ytdlpLayerVersion ytdlpVersion
 
 # 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
@@ -318,7 +345,10 @@ pulumi -C "$here" config set --stack "$stack" aws:region "$ANSWER"
 
 echo
 echo "--- Cloudflare（仕様書 6） ---"
-set_secret "$here" cloudflare:apiToken "API トークン（要る権限は README の「Cloudflare の API トークン」）"
+# API トークンはここでは聞かない。CLOUDFLARE_API_TOKEN で渡す（#24）。
+#
+# 設定へ入れると commit されるファイルに暗号文が載る。プロバイダは環境変数からも
+# 読むので、入れる意味が無い。CI は元からこの環境変数で渡している。
 set_required "$here" cloudflareAccountId "アカウント ID"
 set_required "$here" deliveryZoneId "配信ドメインのゾーン ID"
 set_required "$here" deliveryHost "配信ホスト名（例 status.example.com）"
@@ -353,7 +383,11 @@ echo
 echo "次にやること"
 
 # Layer は pulumi up が作るので、初回と二度目で案内は変わらない。
-deploy_line="       \"$here/deploy.sh\""
+#
+# Cloudflare のトークンは設定に入らないので、流す前に環境変数へ入れてもらう（#24）。
+deploy_line="       printf 'CLOUDFLARE_API_TOKEN: '; read -rs CLOUDFLARE_API_TOKEN && echo
+       export CLOUDFLARE_API_TOKEN
+       \"$here/deploy.sh\""
 deploy_label="本体を流す（Layer もここで作られる）"
 
 if [ "$use_ci" = no ]; then

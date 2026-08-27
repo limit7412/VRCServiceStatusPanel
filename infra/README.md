@@ -173,6 +173,11 @@ R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そ�
 
 ダッシュボードの「My Profile → API Tokens」から作る。
 
+**渡し方は環境変数 `CLOUDFLARE_API_TOKEN` である。** スタックの設定には入れない。
+プロバイダは設定からも環境変数からも読むが、設定へ入れると commit されるファイルに
+暗号文が載る。公開する暗号文は少ないほうがよい（#24）。
+CI は元からこの環境変数で渡している。
+
 **権限ポリシー**を四つ足す。ポリシーごとに、まず対象を選ぶドロップダウン
 （`アカウント全体`、`指定ドメイン` など）があり、その下で権限を選ぶ。
 公式ドキュメントが Account / Zone と呼ぶ区別が、ここでは対象の選択にあたる。
@@ -263,6 +268,27 @@ Object 系のトークンは S3 互換 API でしか使えないが、DIY バッ
 鍵は state の中で暗号化される。DIY バックエンドではパスフレーズから鍵を導くので、
 `PULUMI_CONFIG_PASSPHRASE` を無くすと state を読めなくなる。控えておくこと。
 
+### パスフレーズの作り方
+
+**覚えずに作る。** 生成してパスワードマネージャへ入れる。
+
+```
+openssl rand -base64 32
+```
+
+`init-stack.sh` は 32 文字未満を受け付けない。
+
+理由は commit する先が public だからである（#24）。
+`Pulumi.<スタック名>.yaml` には secret が暗号文として入り、そのファイルは commit する。
+暗号文が公開される以上、総当たりは誰でも好きなだけ試せる。
+
+Pulumi の鍵導出は PBKDF2-SHA256 を 100 万回まわして AES-256-GCM の鍵を作る。
+一回の試行が重いので、生成した値なら手が出ない。
+一方、人が思いついて覚えられる範囲の文字列は、それでも辞書と規則の射程に入る。
+
+文字種の規則は置いていない。規則を足すほど、生成した値が落ちて人が考えた値が通る、
+という逆転が起きるためである。長さだけを見る。
+
 ### AWS の資格情報を分ける
 
 上の `AWS_ACCESS_KEY_ID` と `AWS_SECRET_ACCESS_KEY` は R2 のものである。
@@ -294,7 +320,9 @@ R2 をバックエンドにするなら、AWS 側は鍵で渡すことになる�
 スタックごとの値は `Pulumi.<スタック名>.yaml` に入る。**このファイルは commit する。**
 
 `pulumi config set --secret` で入れた値は暗号文として記録される。復号の鍵は
-パスフレーズから導くので、`PULUMI_CONFIG_PASSPHRASE` を持たない相手には読めない。
+パスフレーズから導く。**このリポジトリは public なので、暗号文もそのまま公開される。**
+強度は「パスフレーズの作り方」に書いた条件で担保する。弱いパスフレーズなら、
+持たない相手でも総当たりで導ける（#24）。
 
 ```yaml
 config:
@@ -309,7 +337,7 @@ config:
 commit するのは、CI へ渡すものを減らすためである。ファイルを持たせない道もあるが、
 その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびに
 ワークフローも直すことになる。ずれても `pulumi up` が落ちて初めて気づく。
-commit してあれば、CI へ渡すのはパスフレーズひとつで済む。
+commit してあれば、CI へ渡すのは鍵と資格情報だけで済む。
 
 このリポジトリは private である。公開するときは、平文の識別子が読まれる前提で
 見直すこと。OIDC のロールは `sub` で引ける相手を絞ってあるので、AWS のアカウント ID
@@ -324,9 +352,15 @@ commit してあれば、CI へ渡すのはパスフレーズひとつで済む�
 `infra/deploy.sh` がひと通り流す。
 
 ```
+printf 'CLOUDFLARE_API_TOKEN: '; read -rs CLOUDFLARE_API_TOKEN && echo
+export CLOUDFLARE_API_TOKEN
+
 infra/deploy.sh                     # 今の設定のまま流す
 infra/deploy.sh --ytdlp 2025.09.26  # yt-dlp の版を入れ替えてから流す
 ```
+
+`CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流す前に環境変数へ入れる（#24）。
+`deploy.sh` は最初に見て、無ければそこで止まる。
 
 `--ytdlp` は `ytdlpVersion` を書き換えるだけである。Layer そのものは Pulumi が
 持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
@@ -346,9 +380,10 @@ commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` �
 cd infra
 npm ci
 
-# 値を export の右辺に書かない。シェルの履歴に平文で残る。
-# 履歴に残ったパスフレーズと commit 済みの設定ファイルがそろえば、
-# Cloudflare のトークンもアラートの URL も復号できてしまう
+# パスフレーズは覚えずに作る（「パスフレーズの作り方」を参照）。
+#   openssl rand -base64 32
+# 値を export の右辺に書かない。シェルの履歴に平文で残り、
+# commit 済みの設定ファイルと合わされば alertWebhookUrl を復号できてしまう
 # read の -p は zsh では別の意味になるので、プロンプトは printf で出す
 printf 'PULUMI_CONFIG_PASSPHRASE: '
 read -rs PULUMI_CONFIG_PASSPHRASE && echo
