@@ -16,7 +16,11 @@
 #
 # 手で入れる場合は次の形になる。--secret を付けないと平文で記録される。
 #
-#   pulumi stack init dev
+# --secrets-provider passphrase を省かないこと。状態は Pulumi Cloud にあり（#23）、
+# そこでの既定はサービス側の鍵管理である。PULUMI_CONFIG_PASSPHRASE を渡しても
+# provider は切り替わらないので、省くと secret の鍵を預けることになる。
+#
+#   pulumi stack init dev --secrets-provider passphrase
 #   pulumi config set cloudflareAccountId <アカウントID>
 #   pulumi config set --secret alertWebhookUrl <URL>
 #

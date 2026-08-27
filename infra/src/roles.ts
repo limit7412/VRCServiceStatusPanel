@@ -20,8 +20,7 @@ const assumeRolePolicy = (service: string) =>
 // 名前だけを設定から取り、いま繋いでいるアカウントと組み合わせて ARN にする。
 //
 // 引く先はデプロイ先と同じアカウントに限る。onAws を渡すのは、既定の資格情報では
-// なく AWS プロバイダのものを見せるためである（R2 をバックエンドにしていると
-// AWS_* には R2 の鍵が入っている。providers.ts を参照）。
+// なく AWS プロバイダのものを見せるためである（providers.ts を参照）。
 //
 // パーティションも引く。書き下すと aws-cn や GovCloud で無効な ARN になり、
 // CreateRole がそこで落ちる。init-stack.sh の移行はどのパーティションの ARN でも

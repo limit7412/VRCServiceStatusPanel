@@ -9,17 +9,20 @@ description: 集約サーバー（Lambda）と配信経路（R2）の定義
 # 決まるためである。Pulumi.<スタック名>.yaml の設定は、バックエンドが
 # 決まってからでないと読めないので、置き場所を書く先にはならない。
 #
-# 手元でも CI でも pulumi login は要らない。要るのは R2 の鍵だけで、
-# それは AWS_ACCESS_KEY_ID と AWS_SECRET_ACCESS_KEY から読まれる。
+# Pulumi Cloud に置く（#23）。手元は pulumi login、CI は OIDC で入る。
+# 長い寿命の鍵を Secrets へ置かずに済み、置き場所を手で作る一歩も要らない。
 #
-# エンドポイントのホスト名に入っているのは Cloudflare のアカウント ID で、
-# Pulumi.<スタック名>.yaml の cloudflareAccountId と同じ値である。
+# pulumi login の先より、ここが優先される。別の場所へログインしていても、
+# このプロジェクトを流すかぎり Pulumi Cloud へ向かう。
+# ただし環境変数 PULUMI_BACKEND_URL はこれを上書きする（README を参照）。
 #
-# fork して自分のアカウントへ出すときは、まずここを書き換える。
-# この URL はスタック設定より先に読まれるので、cloudflareAccountId を
-# 直しただけでは作者のアカウントへ繋ぎに行って認証で止まる。
+# 消すと、手元のログイン先しだいで別のバックエンドへ出てしまう。
+# fork した人が file バックエンドのまま流すのも防げる。
+#
+# state の中の secret は PULUMI_CONFIG_PASSPHRASE で暗号化したままにする。
+# Pulumi Cloud の鍵管理には切り替えない。預ける先にあるのは暗号文だけになる。
 backend:
-  url: s3://qazx7412-vrc-service-status-panel-pulumi-state?endpoint=https://32cd31ff8a5c721c0583f57a83cb731e.r2.cloudflarestorage.com&s3ForcePathStyle=true&region=auto
+  url: https://api.pulumi.com
 
 # 値はスタックごとの Pulumi.<スタック名>.yaml に入れる。
 # 雛形は Pulumi.example.yaml にある。

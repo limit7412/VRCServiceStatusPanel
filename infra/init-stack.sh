@@ -213,22 +213,17 @@ set_optional() {
     pulumi -C "$dir" config set --stack "$stack" "$key" "$ANSWER"
 }
 
-# AWS の資格情報を移して aws を呼ぶ。出力は標準出力へ、雑音は捨てる。
+# aws を呼ぶ。出力は標準出力へ、雑音は捨てる。
 #
-# ここまでで AWS_* に入っているのは状態の置き場所（R2）の鍵である。
-# そのままでは AWS へ通らないので、deploy.sh と同じく DEPLOY_AWS_* を移す。
-# 移すのは元の変数がある場合だけで、R2 をバックエンドにしていない環境では
-# もとの AWS_* がそのまま使われる。
+# 資格情報は AWS_* をそのまま使う。状態が R2 にあったころは、そこに R2 の鍵が
+# 入っていたので DEPLOY_AWS_* を移していた。状態が Pulumi Cloud へ移って
+# バックエンドが AWS_* を見なくなったので、その切り分けは要らない（#23）。
 #
 # aws が無ければ 1 を返す。呼び出し側はどちらも「既定が無い」として扱う。
 aws_deploy() {
     command -v aws > /dev/null 2>&1 || return 1
 
-    env \
-        ${DEPLOY_AWS_ACCESS_KEY_ID:+AWS_ACCESS_KEY_ID="$DEPLOY_AWS_ACCESS_KEY_ID"} \
-        ${DEPLOY_AWS_SECRET_ACCESS_KEY:+AWS_SECRET_ACCESS_KEY="$DEPLOY_AWS_SECRET_ACCESS_KEY"} \
-        ${DEPLOY_AWS_SESSION_TOKEN:+AWS_SESSION_TOKEN="$DEPLOY_AWS_SESSION_TOKEN"} \
-        aws "$@" 2> /dev/null
+    aws "$@" 2> /dev/null
 }
 
 # 設定にその値が入っているか。中身は取り出さない。
@@ -451,11 +446,10 @@ echo "$deploy_line"
 # default: "" 付きで宣言してあるので、設定へ入れていなくても config get は
 # その既定を返して成功する。入っているかどうかは値の中身で見る。
 if [ -n "$(current_config "$here" workloadBoundaryName)" ]; then
-    echo "  3. 次の五つが GitHub の Secrets にあるか確かめる"
+    echo "  3. 次の三つが GitHub の Secrets にあるか確かめる"
     echo "       AWS_DEPLOY_ROLE_ARN             デプロイロールの ARN（docs/aws-oidc.md）"
     echo "       PULUMI_CONFIG_PASSPHRASE        いま使ったもの"
-    echo "       PULUMI_STATE_ACCESS_KEY_ID      状態の置き場所（R2）の鍵"
-    echo "       PULUMI_STATE_SECRET_ACCESS_KEY  同上"
     echo "       CLOUDFLARE_API_TOKEN            Cloudflare の API トークン"
+    echo "     状態の置き場所への鍵は要らない。Pulumi Cloud へは OIDC で入る（#23）"
     echo "     どれが何に使われるかは README の「ワークフローでの受け取り」にある"
 fi

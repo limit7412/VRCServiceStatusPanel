@@ -14,8 +14,8 @@
 #
 # 相手のスタックは pulumi stack select で先に決める。--stack は受け付けない。
 #
-# R2 をバックエンドにしている場合、AWS の鍵は DEPLOY_AWS_* で渡す
-# （infra/README.md の「AWS の資格情報を分ける」）。
+# AWS の鍵は AWS_* で渡す。状態は Pulumi Cloud にあり、バックエンドは
+# この変数を見ないので、切り分けは要らない（#23）。
 
 set -euo pipefail
 
