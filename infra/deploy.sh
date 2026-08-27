@@ -67,6 +67,29 @@ need docker
 need zip
 need curl
 
+# Cloudflare のトークンは設定に入れず、環境変数で渡す（#24）。
+# ここで見ないと、bootstrap.zip と Layer の zip を作ったあとの
+# pulumi up まで進んでから、プロバイダの初期化で落ちる。
+if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    echo "CLOUDFLARE_API_TOKEN が要る。履歴にも呼び出し元のシェルにも残さないよう、" >&2
+    echo "export せずに、この呼び出しにだけ渡す" >&2
+    echo "  printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo" >&2
+    echo "  CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" \"$here/deploy.sh\"" >&2
+    exit 1
+fi
+
+# 受け取ったらすぐ環境から外し、pulumi へ渡すときだけ戻す。
+#
+# 渡ってきたまま進むと、npm ci が動かす依存パッケージのインストールスクリプトや、
+# build.sh が起こす docker、layer/build.sh の curl まで、このトークンを見られる。
+# README が「実質的に管理者相当」と書いている資格情報なので、Pulumi と無関係な
+# コードへ渡す理由が無い。
+#
+# 呼び出し元が export していた場合、こちらで外せるのはこのプロセスから先だけである。
+# 呼び出し元のシェルには残るので、案内のほうは export しない形にしてある。
+cloudflare_token="$CLOUDFLARE_API_TOKEN"
+unset CLOUDFLARE_API_TOKEN
+
 cd "$here"
 
 stack=$(pulumi stack --show-name 2>/dev/null || true)
@@ -111,7 +134,7 @@ echo "==> Layer の zip を用意する（yt-dlp $want_version）"
 "$repo/backend/layer/build.sh" "$want_version" "" "$repo/backend/ytdlp-layer.zip"
 
 echo "==> pulumi up"
-pulumi up "${pulumi_args[@]+"${pulumi_args[@]}"}"
+CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up "${pulumi_args[@]+"${pulumi_args[@]}"}"
 
 cat <<EOF
 
