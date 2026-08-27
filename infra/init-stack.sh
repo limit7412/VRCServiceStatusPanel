@@ -74,9 +74,17 @@ MIN_PASSPHRASE=32
 # 末尾の改行だけなので、CRLF のファイルだと CR が残り、ここでの長さが Pulumi の
 # 見る長さより一文字多くなる。下限をすり抜けられるので、前後の空白を自分で落とす。
 phrase=""
-if [ -n "${PULUMI_CONFIG_PASSPHRASE:-}" ]; then
+if [ -n "${PULUMI_CONFIG_PASSPHRASE+set}" ]; then
+    # 空で export されていても Pulumi はこちらを採る。os.LookupEnv は値ではなく
+    # 設定の有無を見るためで、そのとき鍵は空文字から導かれる。値の有無で分けると、
+    # ここではファイルを見て通し、Pulumi は空文字で暗号化する、という食い違いになる。
+    # 空なら下の長さの検査が 0 文字として弾く。
     phrase="$PULUMI_CONFIG_PASSPHRASE"
-elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ] && [ -f "${PULUMI_CONFIG_PASSPHRASE_FILE}" ]; then
+elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
+    if [ ! -r "$PULUMI_CONFIG_PASSPHRASE_FILE" ]; then
+        echo "PULUMI_CONFIG_PASSPHRASE_FILE が読めない: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
+        exit 1
+    fi
     phrase=$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")
     phrase="${phrase#"${phrase%%[![:space:]]*}"}"
     phrase="${phrase%"${phrase##*[![:space:]]}"}"
