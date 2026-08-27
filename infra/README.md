@@ -366,7 +366,23 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh --ytdlp 2025.09.26
 `CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流すときに渡す（#24）。
 `deploy.sh` は最初に見て、無ければそこで止まる。
 
-**この変更より前に作ったスタックは、`deploy.sh` の前に `init-stack.sh` を流し直す。**
+**`CLOUDFLARE_API_TOKEN` は export しない。** export すると、デプロイが終わったあとも
+呼び出し元のシェルに残り、そこで動かすものすべてへ引き継がれる。この呼び出しにだけ
+渡せば、そこで終わる。
+
+`deploy.sh` の側でも、受け取ったらすぐ環境から外し、`pulumi up` へ渡すときだけ戻している。
+渡ってきたまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
+`build.sh` が起こす docker まで、このトークンを見られることになる。
+「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、
+Pulumi と無関係なコードへは渡さない。
+
+`PULUMI_CONFIG_PASSPHRASE` のほうは export する。渡す先が一つではなく、
+`init-stack.sh` も `deploy.sh` も中で `pulumi` を何度も呼ぶためである。
+
+### この変更より前に作ったスタック
+
+`deploy.sh` の前に `init-stack.sh` を流し直す。
+
 設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として
 `ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、短いパスフレーズの入れ替えを
 案内するのも `init-stack.sh` の中にある。`deploy.sh` だけを流すと、設定ファイルに
@@ -380,15 +396,6 @@ infra/init-stack.sh dev
 ```
 
 聞かれる値には、いま入っているものが既定として出る。Enter で通せばそのまま残る。
-
-**`export` しない。** export すると、デプロイが終わったあとも呼び出し元のシェルに残り、
-そこで動かすものすべてへ引き継がれる。この呼び出しにだけ渡せば、そこで終わる。
-
-`deploy.sh` の側でも、受け取ったらすぐ環境から外し、`pulumi up` へ渡すときだけ戻している。
-渡ってきたまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
-`build.sh` が起こす docker まで、このトークンを見られることになる。
-「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、
-Pulumi と無関係なコードへは渡さない。
 
 `--ytdlp` は `ytdlpVersion` を書き換えるだけである。Layer そのものは Pulumi が
 持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
