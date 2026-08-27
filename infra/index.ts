@@ -7,10 +7,9 @@ import {
     alertWebhookUrl,
     boothProbeItemId,
     deliveryHost,
-    githubDispatchToken,
     stack,
     youtubeProbeVideoId,
-    ytdlpLayerVersion,
+    ytdlpVersion,
 } from "./src/settings";
 
 // 集約サーバー（Lambda）と配信経路（R2）をひとつの定義にまとめる。
@@ -24,6 +23,7 @@ import {
 //   settings.ts     スタックごとの設定
 //   providers.ts    AWS プロバイダ（R2 バックエンドとの鍵の取り合いを解く）
 //   delivery.ts     R2 のバケットと Cache Rules（仕様書 6）
+//   layer.ts        yt-dlp と QuickJS の Layer（仕様書 7.1、7.3）
 //   credentials.ts  R2 の S3 互換トークンと、そこから導く鍵（仕様書 9）
 //   functions.ts    関数の一覧。増やすときはここ
 //   roles.ts        実行時のロール
@@ -42,8 +42,7 @@ const environment: Environment = {
     R2_SECRET_ACCESS_KEY: r2SecretAccessKey,
     YOUTUBE_PROBE_VIDEO_ID: youtubeProbeVideoId,
     BOOTH_PROBE_ITEM_ID: boothProbeItemId,
-    YTDLP_LAYER_VERSION: ytdlpLayerVersion,
-    GITHUB_DISPATCH_TOKEN: githubDispatchToken,
+    YTDLP_VERSION: ytdlpVersion,
     ALERT_WEBHOOK_URL: alertWebhookUrl,
 };
 

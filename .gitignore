@@ -24,7 +24,9 @@ backend/bootstrap.zip
 backend/bin
 backend/lib
 
-# Layer の zip。backend/layer/build.sh が作る
+# Layer の zip と、何の版で作ったかの印。
+# backend/layer/build.sh が作り、Pulumi が Layer の中身としてそのまま渡す
 ytdlp-layer.zip
+ytdlp-layer.zip.version
 
 .idea/

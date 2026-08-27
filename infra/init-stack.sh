@@ -70,8 +70,6 @@ fi
 created_main=no
 created_oidc=no
 
-# Layer の ARN と版がそろっているか。最後の案内を分けるために使う。
-layer_ready=no
 
 abort_on_eof() {
     printf '\n' >&2
@@ -204,44 +202,39 @@ set_secret() {
     printf '%s' "$ANSWER" | pulumi -C "$dir" config set --stack "$stack" --secret "$key"
 }
 
-# Layer は ARN と版を一組で入れる（仕様書 7.3）。
-# 片方だけだと、deploy.sh の事前確認は ARN しか見ないので通ってしまい、
-# settings.ts が両方を require しているため pulumi up で止まる。
-set_layer() {
-    local arn="" version="" arn_default="" version_default=""
+# 以前の init-stack.sh が入れていた値を落とす。
+#
+# 質問から外しただけでは Pulumi.<スタック名>.yaml に残る。secret 指定の値なら
+# 暗号文で残り、その設定ファイルは commit する。パスフレーズを持つ相手は
+# 復号できるので、消したつもりの資格情報が commit 済みの履歴に残り続ける。
+drop_config() {
+    local dir="$1" key="$2" why="$3"
 
-    arn_default=$(current_config "$here" ytdlpLayerArn)
-    version_default=$(current_config "$here" ytdlpLayerVersion)
+    has_config "$dir" "$key" || return 0
 
-    while :; do
-        ask "yt-dlp Layer の ARN（未発行なら空のまま）" "$arn_default" || abort_on_eof
-        arn="$ANSWER"
+    pulumi -C "$dir" config rm --stack "$stack" "$key" > /dev/null
+    echo "  $key を消した。$why"
+}
 
-        ask "その Layer に入れた yt-dlp の版（同上）" "$version_default" || abort_on_eof
-        version="$ANSWER"
+# 名前を変えた設定を引き継ぐ。
+#
+# 新しい側がまだ空のときだけ写す。既に入っていれば、そちらが新しいので触らない。
+# 写し終えたら古い側を落とす。残しておくと、読む者のいないキーが
+# commit 済みの設定ファイルに溜まる。
+#
+# secret 指定の値には使わない。current_config は復号した平文を返すので、
+# そのまま config set へ渡すと暗号文だったものが平文で書き直される。
+rename_config() {
+    local dir="$1" old="$2" new="$3"
 
-        if [ -n "$arn" ] && [ -z "$version" ]; then
-            echo "  ARN と版は一組で入れる。版だけ空にはできない" >&2
-            continue
-        fi
+    has_config "$dir" "$old" || return 0
 
-        if [ -z "$arn" ] && [ -n "$version" ]; then
-            echo "  ARN と版は一組で入れる。ARN だけ空にはできない" >&2
-            continue
-        fi
-
-        break
-    done
-
-    # 両方とも空なら、まだ発行していないということである。
-    # deploy.sh --ytdlp <版> が発行と同時に両方を入れる。
-    if [ -z "$arn" ]; then
-        return 0
+    if ! has_config "$dir" "$new"; then
+        pulumi -C "$dir" config set --stack "$stack" "$new" "$(current_config "$dir" "$old")"
+        echo "  $old を $new へ引き継いだ"
     fi
 
-    pulumi -C "$here" config set --stack "$stack" ytdlpLayerArn "$arn"
-    pulumi -C "$here" config set --stack "$stack" ytdlpLayerVersion "$version"
-    layer_ready=yes
+    pulumi -C "$dir" config rm --stack "$stack" "$old" > /dev/null
 }
 
 # スタックを選ぶ。無ければ作る。
@@ -304,6 +297,15 @@ if [ "$use_ci" = yes ]; then
     create_stack "$here/oidc" && created_oidc=yes
 fi
 
+# 使わなくなった設定を落とす。
+#
+# 質問から外すだけでは、以前の init-stack.sh で作ったスタックに残り続ける。
+# githubDispatchToken はリポジトリへの書き込み権限を持つトークンで、
+# 暗号文とはいえ commit 済みの設定ファイルに入ったままになる。
+drop_config "$here" githubDispatchToken "GitHub 側でこのトークンを失効させること。commit 済みの履歴からは消えない"
+drop_config "$here" ytdlpLayerArn "Layer は pulumi up が作るので、ARN を設定に持たない"
+rename_config "$here" ytdlpLayerVersion ytdlpVersion
+
 # 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
 # 別のリージョンで作ってあると、AWS のリソースが置き換わり、
 # 発行済みの Layer とも食い違う。
@@ -331,8 +333,7 @@ set_required "$here" boothProbeItemId "BOOTH の商品 ID"
 
 echo
 echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
-set_layer
-set_secret "$here" githubDispatchToken "Layer 再ビルドを起動する GitHub のトークン"
+set_required "$here" ytdlpVersion "Layer に載せる yt-dlp の版（VRChat の /config の youtubedl_version に合わせる）"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
 if [ "$use_ci" = yes ]; then
@@ -351,14 +352,9 @@ echo "  $here/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
 
-# Layer が既にそろっているなら、--ytdlp は付けない。
-# 付けると新しい版を発行し、いま入れた ARN と版を上書きしてしまう。
-deploy_line="       \"$here/deploy.sh\" --ytdlp <版>"
-deploy_label="Layer を発行して本体を流す"
-if [ "$layer_ready" = yes ]; then
-    deploy_line="       \"$here/deploy.sh\""
-    deploy_label="本体を流す（Layer は入れた ARN をそのまま使う）"
-fi
+# Layer は pulumi up が作るので、初回と二度目で案内は変わらない。
+deploy_line="       \"$here/deploy.sh\""
+deploy_label="本体を流す（Layer もここで作られる）"
 
 if [ "$use_ci" = no ]; then
     echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"

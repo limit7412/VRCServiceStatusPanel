@@ -2,9 +2,10 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
 import { FUNCTIONS } from "./functions";
+import { ytdlpLayer } from "./layer";
 import { onAws } from "./providers";
 import { lambdaRole, schedulerRole } from "./roles";
-import { prefix, ytdlpLayerArn } from "./settings";
+import { prefix } from "./settings";
 
 // 集約サーバー（仕様書 5.1）。
 //
@@ -69,7 +70,8 @@ export function createFunctions(environment: Environment): Compute {
                 architectures: ["arm64"],
                 memorySize: spec.memorySize,
                 timeout: spec.timeout,
-                layers: [ytdlpLayerArn],
+                // 版付きの ARN を渡す。layerArn のほうは版を含まないので結べない。
+                layers: [ytdlpLayer.arn],
                 loggingConfig: {
                     logFormat: "Text",
                     logGroup: logGroup.name,
