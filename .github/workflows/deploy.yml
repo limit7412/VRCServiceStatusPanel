@@ -1,0 +1,119 @@
+name: deploy
+
+# 集約サーバーと配信経路を一つのスタックへ出す（仕様書 5.1、6、7.3）。
+#
+# 手で起動するときだけ動く。master への push では出さない。
+# まだ一度もデプロイしていないので、押した覚えのない更新が走るほうが害が大きい。
+# 常時デプロイへ変えるなら、ここに push: branches: [master] を足す。
+#
+# 資格情報はどちらも OIDC で受け取る（#22、#23）。
+# AWS は configure-aws-credentials、Pulumi Cloud は pulumi/auth-actions である。
+# Secrets に置いてあるのは三つだけで、長い寿命の鍵は無い。
+#
+# infra/deploy.sh は呼ばない。あちらは中で backend/build.sh と npm ci を回すが、
+# ここではその二つを資格情報より前に済ませたい（infra/README.md の
+# 「ワークフローでの受け取り」）。順序を変えられないので、同じ段をここに並べる。
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 出す先のスタック名。commit してある Pulumi.<スタック名>.yaml のもの
+        required: true
+        default: dev
+        type: string
+
+permissions:
+  # OIDC のトークンを発行させる。既定では付かない
+  id-token: write
+  contents: read
+
+# 同じスタックへ二つ流さない。
+# Pulumi 側にも排他はあるが、待たせるより手前で弾いたほうが分かりやすい。
+# 走っているものは止めない。途中で切ると state と実物がずれる。
+concurrency:
+  group: deploy-${{ inputs.stack }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: pulumi up
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      # bootstrap.zip は .gitignore の対象で、checkout には入っていない。
+      # src/compute.ts が FileArchive として即座に開くため、無いと
+      # pulumi up は AWS へ触る前にファイル未検出で止まる。
+      #
+      # build.sh は linux/arm64 のイメージを走らせる。x86_64 のランナーでは
+      # binfmt の登録が要る。
+      - name: enable arm64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: build bootstrap.zip
+        run: backend/build.sh
+
+      # 依存の取得は資格情報を出す前に済ませる。
+      # あとに回すと、install スクリプトから AWS と Pulumi Cloud の資格情報が読める。
+      # 手元の deploy.sh が Cloudflare のトークンを npm ci の前で外しているのと同じ理由である。
+      - name: install infra dependencies
+        run: npm ci
+        working-directory: infra
+
+      # Pulumi CLI はランナーに入っていない。
+      # このアクションは command を渡さなければ CLI を入れるだけで終わる。
+      - name: install pulumi cli
+        uses: pulumi/actions@v6
+
+      - name: assume aws deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-1
+
+      # Pulumi Cloud へは OIDC で入る。PULUMI_ACCESS_TOKEN を Secrets へ置かない。
+      # 無料の Individual で使えるのは personal トークンだけである。
+      # organization は個人アカウントでも必須で、値は自分のユーザー名になる。
+      # fork するならこの二つを自分のものに書き換える。
+      - name: authenticate to pulumi cloud
+        uses: pulumi/auth-actions@v2
+        with:
+          organization: limit7412
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:limit7412
+
+      # Layer の zip も .gitignore の対象で、checkout には入っていない。
+      # src/layer.ts が FileArchive として開くので、bootstrap.zip と同じく
+      # 無いと pulumi up はファイル未検出で止まる。
+      #
+      # 版は出す相手のスタックから読む。別のスタックの版を渡すと、
+      # 中身と description と YTDLP_VERSION が食い違う。
+      # config get は Pulumi CLI と Pulumi Cloud への資格情報を要るので、
+      # このステップは上の二つより後に置く。
+      - name: build ytdlp layer zip
+        run: |
+          version=$(pulumi -C infra config get --stack "$STACK" ytdlpVersion)
+          if [ -z "$version" ]; then
+            echo "ytdlpVersion が未設定である。Pulumi.$STACK.yaml を確かめること" >&2
+            exit 1
+          fi
+          echo "yt-dlp $version"
+          backend/layer/build.sh "$version" "" backend/ytdlp-layer.zip
+        env:
+          STACK: ${{ inputs.stack }}
+          # 設定は checkout した Pulumi.<スタック名>.yaml から読まれる。
+          # 暗号文で入っている値を開けるのに要る（infra/README.md の「設定の置き場所」）
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+
+      - name: pulumi up
+        run: pulumi up --yes --stack "$STACK"
+        working-directory: infra
+        env:
+          STACK: ${{ inputs.stack }}
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          # Cloudflare は OIDC に対応していないので、ここだけ Secrets から渡す
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
