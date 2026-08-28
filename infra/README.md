@@ -1,6 +1,7 @@
 # infra
 
-集約サーバー（Lambda）と配信経路（R2）の定義。仕様書は #1 にある。
+集約サーバー（Lambda）と配信経路（R2）の定義。
+仕様書は #1 にある。
 
 AWS と Cloudflare を一つの Pulumi プログラムにまとめている。
 分けないのは、片側の値をもう片側が使うためである。
@@ -9,16 +10,14 @@ R2 のバケット名も、トークンから導いた鍵も、そのまま Lamb
 
 ## CI の入口はここに無い
 
-GitHub Actions が AWS へ入るための OIDC プロバイダ、デプロイロール、実行時ロールの
-権限境界は、Pulumi で管理していない。AWS CLI で作り、`docs/aws-oidc.md` に記録してある。
+GitHub Actions が AWS へ入るための OIDC プロバイダ、デプロイロール、実行時ロールの権限境界は、Pulumi で管理していない。
+AWS CLI で作り、`docs/aws-oidc.md` に記録してある。
 
 分けてあるのは、そこが CI の権限そのものを決める場所だからである。
-同じプログラムに置くと、CI が自分を縛っている境界を書き換えられることになり、
-境界も入口も意味を失う。
+同じプログラムに置くと、CI が自分を縛っている境界を書き換えられることになり、境界も入口も意味を失う。
 
-このプログラムから見えるのは、権限境界の名前を設定 `workloadBoundaryName` で
-受け取ることだけである。ARN ではなく名前なのは、ARN にアカウント ID が入り、
-設定ファイルを commit するからである（#26）。
+このプログラムから見えるのは、権限境界の名前を設定 `workloadBoundaryName` で受け取ることだけである。
+ARN ではなく名前なのは、ARN にアカウント ID が入り、設定ファイルを commit するからである（#26）。
 
 ## 名前の付け方
 
@@ -33,33 +32,32 @@ GitHub Actions が AWS へ入るための OIDC プロバイダ、デプロイロ
 | `qazx7412-vrc-service-status-panel-dev-state` | 内部バケット |
 | `qazx7412-vrc-service-status-panel-dev-r2` | R2 のデータ用トークン |
 
-頭を作成者の名前から始めるのは、同じ AWS / Cloudflare アカウントに置いた
-他のものと見分けるためである。デプロイロールの権限もこの頭で絞ってあり、
-名前を外れたものへは手が届かない。
+頭を作成者の名前から始めるのは、同じ AWS / Cloudflare アカウントに置いた他のものと見分けるためである。
+デプロイロールの権限もこの頭で絞ってあり、名前を外れたものへは手が届かない。
 
-デプロイロールと権限境界だけはスタック名を挟まない。リポジトリに対して一つあればよく、
-`dev` と `prod` で同じものを使う（`docs/aws-oidc.md`）。
+デプロイロールと権限境界だけはスタック名を挟まない。
+リポジトリに対して一つあればよく、`dev` と `prod` で同じものを使う（`docs/aws-oidc.md`）。
 
 スタック名まで含めるので、同じアカウントに dev と prod を並べても衝突しない。
 
-**スタック名は小文字、数字、ハイフンだけ、16 文字までにする。** Pulumi のスタック名は
-これより緩く、大文字も `_` も長い名前も通るが、そのまま物理名にすると R2 は `_` を
-受け付けず、AWS と R2 は長さで弾く。外れていれば `pulumi up` の最初で止まる。
+**スタック名は小文字、数字、ハイフンだけ、16 文字までにする。**
+Pulumi のスタック名はこれより緩く、大文字も `_` も長い名前も通るが、そのまま物理名にすると R2 は `_` を受け付けず、AWS と R2 は長さで弾く。
+外れていれば `pulumi up` の最初で止まる。
 
-いちばん厳しいのは `qazx7412-vrc-service-status-panel-<スタック名>-scheduler` で、
-IAM ロール名の上限 64 文字のうち頭と接尾で 44 文字を使うため 20 文字まで置ける。
+いちばん厳しいのは `qazx7412-vrc-service-status-panel-<スタック名>-scheduler` で、IAM ロール名の上限 64 文字のうち頭と接尾で 44 文字を使うため 20 文字まで置ける。
 16 文字にしてあるのは、関数名に余りを残すためである。
 
-handler 名にも同じ事情がある。関数名の上限は 64 文字で、`dev` なら 26 文字ほど残る。
+handler 名にも同じ事情がある。
+関数名の上限は 64 文字で、`dev` なら 26 文字ほど残る。
 外れていればこちらも `pulumi up` の最初で止まる。
 
 Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`）。
-中身はスタックによらず同じだが、Pulumi が持つので、名前を共有すると dev と prod が
-同じ Layer 名へ別々に版を積むことになる。
+中身はスタックによらず同じだが、Pulumi が持つので、名前を共有すると dev と prod が同じ Layer 名へ別々に版を積むことになる。
 
-**一度出したあとで名前を変えると、作り直しになる。** バケットもロールも関数も、
-名前は置き換えでしか変えられない。バケットには `protect: true` を付けてあるので、
-置き換えは削除の段階で止まる。中身とカスタムドメインの繋ぎ先も移らない。
+**一度出したあとで名前を変えると、作り直しになる。**
+バケットもロールも関数も、名前は置き換えでしか変えられない。
+バケットには `protect: true` を付けてあるので、置き換えは削除の段階で止まる。
+中身とカスタムドメインの繋ぎ先も移らない。
 
 出したあとで変えたくなったら、次の順で行う。
 
@@ -69,12 +67,13 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 4. カスタムドメインを新しいバケットへ繋ぎ直す
 5. `protect: true` を戻す
 
-配信が止まる作業である。名前は最初に決めておくほうがよい。
+配信が止まる作業である。
+名前は最初に決めておくほうがよい。
 
 ## ファイルの並び
 
-`infra/` の中身は `src/` に分けてある。`index.ts` はそれらを繋いで
-出力を並べるだけである。
+`infra/` の中身は `src/` に分けてある。
+`index.ts` はそれらを繋いで出力を並べるだけである。
 
 | ファイル | 何があるか |
 | --- | --- |
@@ -102,42 +101,41 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
 
-OIDC プロバイダ、デプロイロール、権限境界はここに無い。CLI で作ってあり、
-中身は `docs/aws-oidc.md` にある。
+OIDC プロバイダ、デプロイロール、権限境界はここに無い。
+CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 
-バケット名の既定にスタック名が入るのは、同じアカウントで `dev` と `prod` を
-並べたときに名前がぶつかるためである。決めた名前を使いたければ
-`publicBucket` と `stateBucket` で明示する。
+バケット名の既定にスタック名が入るのは、同じアカウントで `dev` と `prod` を並べたときに名前がぶつかるためである。
+決めた名前を使いたければ `publicBucket` と `stateBucket` で明示する。
 
-カスタムドメインは作らない。理由は下の「手で行う作業」にある。
+カスタムドメインは作らない。
+理由は下の「手で行う作業」にある。
 
 ### R2 のデータ用トークンの権限
 
-Pulumi が発行するトークンは、配信バケットと内部バケットの二つに絞った
-**Object Read & Write** である（仕様書 9）。
+Pulumi が発行するトークンは、配信バケットと内部バケットの二つに絞った **Object Read & Write** である（仕様書 9）。
 
-R2 のトークンに「書き込みのみ」の段階は無い。選べるのは Admin Read & Write、
-Admin Read only、Object Read & Write、Object Read only の四つで、書けるのは
-Admin Read & Write と Object Read & Write の二つである。どちらも読み取りを伴う。
+R2 のトークンに「書き込みのみ」の段階は無い。
+選べるのは Admin Read & Write、Admin Read only、Object Read & Write、Object Read only の四つで、書けるのは Admin Read & Write と Object Read & Write の二つである。
+どちらも読み取りを伴う。
 
-その二つのうち Object 系を選ぶのは、バケット単位に絞れるためである。Admin 系は
-絞れず、アカウントの R2 全体に届く。そのかわり Admin 系は Cloudflare の REST API
-でも使えるのに対し、Object 系は S3 互換 API 専用で、REST API へ使うと 401 か 403 に
-なる。集約サーバーが要るのは S3 互換 API での読み書きだけなので、狭いほうで足りる。
+その二つのうち Object 系を選ぶのは、バケット単位に絞れるためである。
+Admin 系は絞れず、アカウントの R2 全体に届く。
+そのかわり Admin 系は Cloudflare の REST API でも使えるのに対し、Object 系は S3 互換 API 専用で、REST API へ使うと 401 か 403 になる。
+集約サーバーが要るのは S3 互換 API での読み書きだけなので、狭いほうで足りる。
 
-読み取りはどちらにせよ要る。内部バケットは、前回の状態を引き継ぐために毎回読む
-（仕様書 5.2 の手順 4）。配信バケットの内容は CDN から誰でも読めるので、そこに
-読み取りが付く実害は小さい。
+読み取りはどちらにせよ要る。
+内部バケットは、前回の状態を引き継ぐために毎回読む（仕様書 5.2 の手順 4）。
+配信バケットの内容は CDN から誰でも読めるので、そこに読み取りが付く実害は小さい。
 
-鍵は一組にしてある。バケットごとに割れば片方が漏れたときの範囲は狭くなるが、
-どちらも同じ関数の環境変数に入るので、関数を破られたときは両方とも取られる。
+鍵は一組にしてある。
+バケットごとに割れば片方が漏れたときの範囲は狭くなるが、どちらも同じ関数の環境変数に入るので、関数を破られたときは両方とも取られる。
 分けて効くのは書き手を別の関数へ割ったときで、いまの構成にその予定は無い。
 
 ## 関数を増やすとき
 
-関数は `src/functions.ts` の `FUNCTIONS` に並べる。バイナリは一つで、`handler` の
-文字列だけが違う。この文字列が `_HANDLER` として渡り、`backend/src/main.cr` の
-`Runtime::Lambda.handler` の名前と一致したものが動く。
+関数は `src/functions.ts` の `FUNCTIONS` に並べる。
+バイナリは一つで、`handler` の文字列だけが違う。
+この文字列が `_HANDLER` として渡り、`backend/src/main.cr` の `Runtime::Lambda.handler` の名前と一致したものが動く。
 
 増やすときは次の三つを揃える。
 
@@ -157,19 +155,21 @@ Admin Read & Write と Object Read & Write の二つである。どちらも読�
 GitHub Actions からデプロイするなら、AWS の鍵を Secrets へ置く必要はない。
 OIDC のロールを CLI で作り、その ARN を Secrets へ入れる（`docs/aws-oidc.md`）。
 
-R2 のデータ用の鍵は用意しなくてよい。Pulumi が発行し、そのまま Lambda へ渡す。
+R2 のデータ用の鍵は用意しなくてよい。
+Pulumi が発行し、そのまま Lambda へ渡す。
 
 ### Cloudflare の API トークン
 
 ダッシュボードの「My Profile → API Tokens」から作る。
 
-**渡し方は環境変数 `CLOUDFLARE_API_TOKEN` である。** スタックの設定には入れない。
-プロバイダは設定からも環境変数からも読むが、設定へ入れると commit されるファイルに
-暗号文が載る。公開する暗号文は少ないほうがよい（#24）。
+**渡し方は環境変数 `CLOUDFLARE_API_TOKEN` である。**
+スタックの設定には入れない。
+プロバイダは設定からも環境変数からも読むが、設定へ入れると commit されるファイルに暗号文が載る。
+公開する暗号文は少ないほうがよい（#24）。
 CI は元からこの環境変数で渡している。
 
-**権限ポリシー**を四つ足す。ポリシーごとに、まず対象を選ぶドロップダウン
-（`アカウント全体`、`指定ドメイン` など）があり、その下で権限を選ぶ。
+**権限ポリシー**を四つ足す。
+ポリシーごとに、まず対象を選ぶドロップダウン（`アカウント全体`、`指定ドメイン` など）があり、その下で権限を選ぶ。
 公式ドキュメントが Account / Zone と呼ぶ区別が、ここでは対象の選択にあたる。
 
 | 対象 | 権限 | 何のため |
@@ -179,25 +179,24 @@ CI は元からこの環境変数で渡している。
 | アカウント全体 | Account Rulesets | Cache Rules |
 | 指定ドメイン（配信ドメイン） | Cache Settings | Cache Rules |
 
-どれも Read と Edit（Write）の両方を入れる。この画面は読み取りと書き込みを
-別々の権限として扱っており、Edit だけでは読めない。
+どれも Read と Edit（Write）の両方を入れる。
+この画面は読み取りと書き込みを別々の権限として扱っており、Edit だけでは読めない。
 
-R2 は `アカウント全体` にする。`R2 バケット` を選ぶとバケット単位に絞れるが、
-それはバケットの中身を触る権限であって、バケット自体は作れない。
+R2 は `アカウント全体` にする。
+`R2 バケット` を選ぶとバケット単位に絞れるが、それはバケットの中身を触る権限であって、バケット自体は作れない。
 
-**「Cache Rules」という項目は無い。** Cache Rules を触る権限の名前は
-`Cache Settings` である。ドキュメントの本文は製品名で書かれているが、
-権限の一覧は別の名前で並んでいる。
+**「Cache Rules」という項目は無い。**
+Cache Rules を触る権限の名前は `Cache Settings` である。
+ドキュメントの本文は製品名で書かれているが、権限の一覧は別の名前で並んでいる。
 
-[公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)は
-`Account Filter Lists` も挙げている。これはルールがリストを参照する場合のもので、
-ここで作るルールは参照していない。入れずに始めて、`pulumi up` が 403 を返したら足す。
+[公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)は `Account Filter Lists` も挙げている。
+これはルールがリストを参照する場合のもので、ここで作るルールは参照していない。
+入れずに始めて、`pulumi up` が 403 を返したら足す。
 
-**Account API Tokens の重さは把握しておくこと。** これはトークンを作る権限で
-あり、持たせた相手はアカウント内の任意の権限を持つトークンを発行できる。実質的に
-管理者相当である。R2 のデータ用トークンを Pulumi に発行させる以上は避けられないが、
-[IP 制限や TTL](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/)
-で使える範囲を狭められる。
+**Account API Tokens の重さは把握しておくこと。**
+これはトークンを作る権限であり、持たせた相手はアカウント内の任意の権限を持つトークンを発行できる。
+実質的に管理者相当である。
+R2 のデータ用トークンを Pulumi に発行させる以上は避けられないが、[IP 制限や TTL](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/) で使える範囲を狭められる。
 
 ## 状態の置き場所
 
@@ -211,16 +210,15 @@ backend:
 ```
 
 ここで固定するのは、バックエンドがスタックより先に決まるためである。
-`Pulumi.<スタック名>.yaml` の設定はバックエンドが決まってからでないと読めないので、
-置き場所を書く先にはならない。
+`Pulumi.<スタック名>.yaml` の設定はバックエンドが決まってからでないと読めないので、置き場所を書く先にはならない。
 
-**`pulumi login` の先より、ここが優先される。** 別の場所へログインしていても、
-このプロジェクトを流すかぎり Pulumi Cloud へ向かう。Pulumi CLI 3.259.0 で、
-`pulumi login file://...` したあとに `pulumi stack ls` がそちらを見に行かないことを
-確かめた。`backend.url` を書かないプロジェクトでは、ログイン先がそのまま使われる。
+**`pulumi login` の先より、ここが優先される。**
+別の場所へログインしていても、このプロジェクトを流すかぎり Pulumi Cloud へ向かう。
+Pulumi CLI 3.259.0 で、`pulumi login file://...` したあとに `pulumi stack ls` がそちらを見に行かないことを確かめた。
+`backend.url` を書かないプロジェクトでは、ログイン先がそのまま使われる。
 
-**ただし環境変数 `PULUMI_BACKEND_URL` はこれを上書きする。** 同じ確認で、
-`PULUMI_BACKEND_URL` を渡すと `backend.url` を無視して指した先が使われた。
+**ただし環境変数 `PULUMI_BACKEND_URL` はこれを上書きする。**
+同じ確認で、`PULUMI_BACKEND_URL` を渡すと `backend.url` を無視して指した先が使われた。
 意図せず別の state を触らないよう、この変数はシェルに残さないこと。
 
 ここを消すと、手元のログイン先しだいで別のバックエンドへ出てしまう。
@@ -232,48 +230,44 @@ fork した人が file バックエンドのまま流すこともできてしま
 pulumi login
 ```
 
-ブラウザが開いてトークンを受け取る。以後は資格情報がローカルに残るので、
-デプロイのたびに繰り返す必要はない。
+ブラウザが開いてトークンを受け取る。
+以後は資格情報がローカルに残るので、デプロイのたびに繰り返す必要はない。
 
-CI はトークンを持たない。GitHub Actions の OIDC を Pulumi Cloud のアクセス
-トークンへ交換する（「ワークフローでの受け取り」）。長い寿命の鍵が Secrets に
-増えないのがこの方式を採った理由である。
+CI はトークンを持たない。
+GitHub Actions の OIDC を Pulumi Cloud のアクセストークンへ交換する（「ワークフローでの受け取り」）。
+長い寿命の鍵が Secrets に増えないのがこの方式を採った理由である。
 
-**fork して自分のアカウントへ出すときは、`pulumi login` した先が自分の組織に
-なっていればよい。** 以前は `backend.url` に作者のバケットとアカウント ID が
-入っていたので、そこを書き換えないと作者のアカウントへ繋ぎに行っていた。
+**fork して自分のアカウントへ出すときは、`pulumi login` した先が自分の組織になっていればよい。**
+以前は `backend.url` に作者のバケットとアカウント ID が入っていたので、そこを書き換えないと作者のアカウントへ繋ぎに行っていた。
 いまはその一歩が消えている。
 
 CI からも流すなら、書き換える先が二つある。
 
 一つは AWS 側で、`docs/aws-oidc.md` のロールと境界を自分のアカウントに作り直す。
-信頼ポリシーの `sub` は元のリポジトリを指しているので、fork の Actions では
-そのままロールを引けない。
+信頼ポリシーの `sub` は元のリポジトリを指しているので、fork の Actions ではそのままロールを引けない。
 
-もう一つは Pulumi Cloud 側で、ワークフローの `pulumi/auth-actions` に渡す
-`organization` と `scope` を自分のものにする（「ワークフローでの受け取り」）。
-自分の組織に OIDC issuer を登録しても、要求するトークンが作者のものを指したままでは
-交換が通らない。
+もう一つは Pulumi Cloud 側で、ワークフローの `pulumi/auth-actions` に渡す `organization` と `scope` を自分のものにする（「ワークフローでの受け取り」）。
+自分の組織に OIDC issuer を登録しても、要求するトークンが作者のものを指したままでは交換が通らない。
 
-**state の中の secret は預けない。** `--secrets-provider passphrase` を続けるので、
-Pulumi Cloud にあるのは `PULUMI_CONFIG_PASSPHRASE` で暗号化した暗号文だけである。
-Pulumi Cloud の鍵管理には切り替えない。パスフレーズを無くすと state を読めなくなる
-のは、置き場所を変えても同じである。控えておくこと。
+**state の中の secret は預けない。**
+`--secrets-provider passphrase` を続けるので、Pulumi Cloud にあるのは `PULUMI_CONFIG_PASSPHRASE` で暗号化した暗号文だけである。
+Pulumi Cloud の鍵管理には切り替えない。
+パスフレーズを無くすと state を読めなくなるのは、置き場所を変えても同じである。
+控えておくこと。
 
 **スタックを手で作るなら `--secrets-provider passphrase` を省かないこと。**
-Pulumi Cloud での既定はサービス側の鍵管理であり、DIY バックエンドのころの
-既定（passphrase）とは違う。`PULUMI_CONFIG_PASSPHRASE` を渡しても provider は
-切り替わらないので、省くと secret の鍵まで預けることになる。
+Pulumi Cloud での既定はサービス側の鍵管理であり、DIY バックエンドのころの既定（passphrase）とは違う。
+`PULUMI_CONFIG_PASSPHRASE` を渡しても provider は切り替わらないので、省くと secret の鍵まで預けることになる。
 `init-stack.sh` は `stack select --create` に付けて渡している。
 
 **`src/delivery.ts` が作る内部バケットは state とは別物である。**
-`qazx7412-vrc-service-status-panel-<スタック名>-state` のほうは集約サーバーが使うもので
-（仕様書 6）、Pulumi が管理する。名前に `state` が入っているのは、集約サーバーが
-合成監視の履歴と前回値を置く先だからで、Pulumi の state とは関係が無い。
+`qazx7412-vrc-service-status-panel-<スタック名>-state` のほうは集約サーバーが使うもので（仕様書 6）、Pulumi が管理する。
+名前に `state` が入っているのは、集約サーバーが合成監視の履歴と前回値を置く先だからで、Pulumi の state とは関係が無い。
 
 ### パスフレーズの作り方
 
-**覚えずに作る。** 生成してパスワードマネージャへ入れる。
+**覚えずに作る。**
+生成してパスワードマネージャへ入れる。
 
 ```
 openssl rand -base64 32
@@ -295,27 +289,29 @@ Pulumi の鍵導出は PBKDF2-SHA256 を 100 万回まわして AES-256-GCM の�
 一回の試行が重いので、生成した値なら手が出ない。
 一方、人が思いついて覚えられる範囲の文字列は、それでも辞書と規則の射程に入る。
 
-文字種の規則は置いていない。規則を足すほど、生成した値が落ちて人が考えた値が通る、
-という逆転が起きるためである。長さだけを見る。
+文字種の規則は置いていない。
+規則を足すほど、生成した値が落ちて人が考えた値が通る、という逆転が起きるためである。
+長さだけを見る。
 
 ### AWS の資格情報
 
-`AWS_*` をそのまま使う。`aws configure` のプロファイルも普通に使える。
+`AWS_*` をそのまま使う。
+`aws configure` のプロファイルも普通に使える。
 
-かつては AWS 側の鍵を `DEPLOY_AWS_*` で渡し、`src/providers.ts` が `envVarMappings`
-で写していた。state を R2 へ置いていたころ、そのバックエンドが `AWS_ACCESS_KEY_ID` と
-`AWS_SECRET_ACCESS_KEY` から R2 の鍵を読むため、AWS の操作と食い違ったからである。
-state が Pulumi Cloud へ移ってバックエンドがこの変数を見なくなったので、
-切り分けも写し替えも要らなくなった（#23）。
+かつては AWS 側の鍵を `DEPLOY_AWS_*` で渡し、`src/providers.ts` が `envVarMappings` で写していた。
+state を R2 へ置いていたころ、そのバックエンドが `AWS_ACCESS_KEY_ID` と `AWS_SECRET_ACCESS_KEY` から R2 の鍵を読むため、AWS の操作と食い違ったからである。
+state が Pulumi Cloud へ移ってバックエンドがこの変数を見なくなったので、切り分けも写し替えも要らなくなった（#23）。
 
 ## 設定の置き場所
 
-スタックごとの値は `Pulumi.<スタック名>.yaml` に入る。**このファイルは commit する。**
+スタックごとの値は `Pulumi.<スタック名>.yaml` に入る。
+**このファイルは commit する。**
 
-`pulumi config set --secret` で入れた値は暗号文として記録される。復号の鍵は
-パスフレーズから導く。**このリポジトリは public なので、暗号文もそのまま公開される。**
-強度は「パスフレーズの作り方」に書いた条件で担保する。弱いパスフレーズなら、
-持たない相手でも総当たりで導ける（#24）。
+`pulumi config set --secret` で入れた値は暗号文として記録される。
+復号の鍵はパスフレーズから導く。
+**このリポジトリは public なので、暗号文もそのまま公開される。**
+強度は「パスフレーズの作り方」に書いた条件で担保する。
+弱いパスフレーズなら、持たない相手でも総当たりで導ける（#24）。
 
 ```yaml
 config:
@@ -324,26 +320,27 @@ config:
     secure: v1:zXQ8kR2mN4pL:vT7hJ...
 ```
 
-平文で入るのは識別子のほうである。アカウント ID、ゾーン ID、配信ホスト名、
-バケット名、yt-dlp の版。
+平文で入るのは識別子のほうである。
+アカウント ID、ゾーン ID、配信ホスト名、バケット名、yt-dlp の版。
 
-commit するのは、CI へ渡すものを減らすためである。ファイルを持たせない道もあるが、
-その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびに
-ワークフローも直すことになる。ずれても `pulumi up` が落ちて初めて気づく。
+commit するのは、CI へ渡すものを減らすためである。
+ファイルを持たせない道もあるが、その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびにワークフローも直すことになる。
+ずれても `pulumi up` が落ちて初めて気づく。
 commit してあれば、CI へ渡すのは鍵と資格情報だけで済む。
 
-**このリポジトリは public である。** 平文の識別子は読まれる前提で置いてある。
+**このリポジトリは public である。**
+平文の識別子は読まれる前提で置いてある。
 
 置いたままにできるのは、どれも識別子であって資格情報ではないためである。
-OIDC のロールは `sub` で引ける相手を絞ってあるので、AWS のアカウント ID を
-知られてもロールを引けるようにはならない。ただしロール名は推測できるようになる。
+OIDC のロールは `sub` で引ける相手を絞ってあるので、AWS のアカウント ID を知られてもロールを引けるようにはならない。
+ただしロール名は推測できるようになる。
 Cloudflare のアカウント ID とゾーン ID も、トークンと組にならなければ何もできない。
 
 暗号文のほうは「パスフレーズの作り方」の条件で守る（#24）。
 
-`Pulumi.example.yaml` は残してある。fork して自分のアカウントへ出すときは、
-こちらを写す。commit されているほうには作者のアカウント ID と、作者のパスフレーズで
-暗号化された値が入っている。
+`Pulumi.example.yaml` は残してある。
+fork して自分のアカウントへ出すときは、こちらを写す。
+commit されているほうには作者のアカウント ID と、作者のパスフレーズで暗号化された値が入っている。
 
 ## デプロイ
 
@@ -359,36 +356,30 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh --ytdlp 2025.09.26
 `CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流すときに渡す（#24）。
 `deploy.sh` は最初に見て、無ければそこで止まる。
 
-**`CLOUDFLARE_API_TOKEN` は export しない。** export すると、デプロイが終わったあとも
-呼び出し元のシェルに残り、そこで動かすものすべてへ引き継がれる。この呼び出しにだけ
-渡せば、そこで終わる。
+**`CLOUDFLARE_API_TOKEN` は export しない。**
+export すると、デプロイが終わったあとも呼び出し元のシェルに残り、そこで動かすものすべてへ引き継がれる。
+この呼び出しにだけ渡せば、そこで終わる。
 
 `deploy.sh` の側でも、受け取ったらすぐ環境から外し、`pulumi up` へ渡すときだけ戻している。
-渡ってきたまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、
-`build.sh` が起こす docker まで、このトークンを見られることになる。
-「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、
-Pulumi と無関係なコードへは渡さない。
+渡ってきたまま進むと、`npm ci` が動かす依存パッケージのインストールスクリプトや、`build.sh` が起こす docker まで、このトークンを見られることになる。
+「Account API Tokens の重さ」で書いたとおり実質的に管理者相当なので、Pulumi と無関係なコードへは渡さない。
 
-`PULUMI_CONFIG_PASSPHRASE` のほうは export する。渡す先が一つではなく、
-`init-stack.sh` も `deploy.sh` も中で `pulumi` を何度も呼ぶためである。
+`PULUMI_CONFIG_PASSPHRASE` のほうは export する。
+渡す先が一つではなく、`init-stack.sh` も `deploy.sh` も中で `pulumi` を何度も呼ぶためである。
 
 ### この変更より前に作ったスタック
 
 **状態の置き場所が R2 から Pulumi Cloud へ変わった（#23）。**
 R2 に state を持つスタックは、`pulumi login` した先から見えない。
-移送するなら、古い `backend.url` を指した作業ツリーで `pulumi stack export` して
-`pulumi stack import` で入れ直すことになる。
+移送するなら、古い `backend.url` を指した作業ツリーで `pulumi stack export` して `pulumi stack import` で入れ直すことになる。
 
-このリポジトリではその手間は要らない。`Pulumi.<スタック名>.yaml` はまだ commit されて
-おらず（#12）、`pulumi up` も流れていないので、移す state が無い。
+このリポジトリではその手間は要らない。
+`Pulumi.<スタック名>.yaml` はまだ commit されておらず（#12）、`pulumi up` も流れていないので、移す state が無い。
 
 `deploy.sh` の前に `init-stack.sh` を流し直す。
 
-設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として
-`ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、`workloadBoundaryArn` を
-`workloadBoundaryName` へ移すのも、短いパスフレーズの入れ替えを案内するのも
-`init-stack.sh` の中にある。`deploy.sh` だけを流すと、設定ファイルにトークンの
-暗号文が残り、アカウント ID も入ったままになる。
+設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として `ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、`workloadBoundaryArn` を `workloadBoundaryName` へ移すのも、短いパスフレーズの入れ替えを案内するのも `init-stack.sh` の中にある。
+`deploy.sh` だけを流すと、設定ファイルにトークンの暗号文が残り、アカウント ID も入ったままになる。
 
 ```
 printf 'PULUMI_CONFIG_PASSPHRASE: '; read -rs PULUMI_CONFIG_PASSPHRASE && echo
@@ -397,21 +388,24 @@ export PULUMI_CONFIG_PASSPHRASE
 infra/init-stack.sh dev
 ```
 
-聞かれる値には、いま入っているものが既定として出る。Enter で通せばそのまま残る。
+聞かれる値には、いま入っているものが既定として出る。
+Enter で通せばそのまま残る。
 
-`--ytdlp` は `ytdlpVersion` を書き換えるだけである。Layer そのものは Pulumi が
-持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
+`--ytdlp` は `ytdlpVersion` を書き換えるだけである。
+Layer そのものは Pulumi が持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
 
-Layer の zip は毎回用意される。`backend/layer/build.sh` は同じ版の zip が既に
-あれば何もしないので、36 MiB を取り直すのは版を変えたときだけである。
+Layer の zip は毎回用意される。
+`backend/layer/build.sh` は同じ版の zip が既にあれば何もしないので、36 MiB を取り直すのは版を変えたときだけである。
 
 `--ytdlp` 以外の引数はそのまま `pulumi up` へ渡る（`--yes` など）。
 
-commit はしない。設定が変わったら `Pulumi.<スタック名>.yaml` を自分で残す。
+commit はしない。
+設定が変わったら `Pulumi.<スタック名>.yaml` を自分で残す。
 
 ### 初回にすること
 
-`deploy.sh` は設定が埋まっている前提で動く。設定は `infra/init-stack.sh` が作る。
+`deploy.sh` は設定が埋まっている前提で動く。
+設定は `infra/init-stack.sh` が作る。
 
 ```
 cd infra
@@ -434,16 +428,18 @@ export PULUMI_CONFIG_PASSPHRASE
 
 ファイルに置いてある場合は `PULUMI_CONFIG_PASSPHRASE_FILE` にその場所を渡してもよい。
 
-二度目以降に流すと、いま入っている値を既定として見せる。Enter で通せばそのまま残る。
-秘密の値は見せずに「Enter で今の値のまま」と聞く。空で答えても消えないので、
-消したいときは `pulumi config rm` を使う。
+二度目以降に流すと、いま入っている値を既定として見せる。
+Enter で通せばそのまま残る。
+秘密の値は見せずに「Enter で今の値のまま」と聞く。
+空で答えても消えないので、消したいときは `pulumi config rm` を使う。
 
-値は一つずつ聞かれる。省略できるものは空のまま Enter で飛ばせる。秘密の値は
-標準入力から渡すので、コマンドラインにも履歴にも残らない。何を聞かれるかは
-`Pulumi.example.yaml` に並べてある。
+値は一つずつ聞かれる。
+省略できるものは空のまま Enter で飛ばせる。
+秘密の値は標準入力から渡すので、コマンドラインにも履歴にも残らない。
+何を聞かれるかは `Pulumi.example.yaml` に並べてある。
 
-出来上がった `Pulumi.dev.yaml` は commit する（#12）。続きはスクリプトが最後に
-案内する。
+出来上がった `Pulumi.dev.yaml` は commit する（#12）。
+続きはスクリプトが最後に案内する。
 
 ```
 git add Pulumi.dev.yaml
@@ -454,9 +450,9 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh
 
 トークンを export せずにこの呼び出しへだけ渡すのは「デプロイ」に書いたとおりである。
 
-Layer は `deploy.sh` の中の `pulumi up` が作る。版は `init-stack.sh` で入れた
-`ytdlpVersion` を使うので、初回でも `--ytdlp` は要らない。あとから版を変えるときだけ
-渡す。
+Layer は `deploy.sh` の中の `pulumi up` が作る。
+版は `init-stack.sh` で入れた `ytdlpVersion` を使うので、初回でも `--ytdlp` は要らない。
+あとから版を変えるときだけ渡す。
 
 ```
 CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
@@ -464,11 +460,11 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
 
 #### GitHub Actions からも流す場合
 
-権限境界の ARN が要る。入れないと実行ロールに境界が付かず、手元からは通っても
-CI からは `CreateRole` で止まる。
+権限境界の ARN が要る。
+入れないと実行ロールに境界が付かず、手元からは通っても CI からは `CreateRole` で止まる。
 
-`init-stack.sh` が「GitHub Actions からの入口」で聞く。いま繋がっている AWS
-アカウントに境界が実在するときだけ既定として出るので、Enter で通せば入る。
+`init-stack.sh` が「GitHub Actions からの入口」で聞く。
+いま繋がっている AWS アカウントに境界が実在するときだけ既定として出るので、Enter で通せば入る。
 飛ばしていたら後から足す。
 
 ```
@@ -482,10 +478,11 @@ Secrets へ登録するものは「ワークフローでの受け取り」にあ
 
 ### スクリプトが何をしているか
 
-手で並べると次の三つになる。詰まったときはこの順で追う。
+手で並べると次の三つになる。
+詰まったときはこの順で追う。
 
-**どれも `infra/` から実行する。** 3 が `Pulumi.yaml` を要るためで、
-そのぶん 1 と 2 は `../backend/...` を指す。
+**どれも `infra/` から実行する。**
+3 が `Pulumi.yaml` を要るためで、そのぶん 1 と 2 は `../backend/...` を指す。
 
 ```
 cd infra
@@ -505,19 +502,18 @@ printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
 CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up
 ```
 
-`pulumi up` は `../backend/bootstrap.zip` と `../backend/ytdlp-layer.zip` を
-読むので、1 か 2 を飛ばすとそこで止まる。
+`pulumi up` は `../backend/bootstrap.zip` と `../backend/ytdlp-layer.zip` を読むので、1 か 2 を飛ばすとそこで止まる。
 
-Layer の発行は 3 の中で起きる。zip が前回と同じなら新しい版は作られない。
+Layer の発行は 3 の中で起きる。
+zip が前回と同じなら新しい版は作られない。
 
-OIDC のロールと権限境界はこのスクリプトの対象外である。あちらは CI の権限そのものを
-決める場所で、Pulumi に載せていない（「GitHub Actions から AWS へ入る」を参照）。
+OIDC のロールと権限境界はこのスクリプトの対象外である。
+あちらは CI の権限そのものを決める場所で、Pulumi に載せていない（「GitHub Actions から AWS へ入る」を参照）。
 
 ## 前提: ゾーンに既存の Cache Rules が無いこと
 
-`deliveryZoneId` のゾーンで `http_request_cache_settings` を既に使っていると、
-`pulumi up` はここで失敗する。`kind: "zone"` のこのフェーズは、ゾーンごとに
-一つしか置けないためである。
+`deliveryZoneId` のゾーンで `http_request_cache_settings` を既に使っていると、`pulumi up` はここで失敗する。
+`kind: "zone"` のこのフェーズは、ゾーンごとに一つしか置けないためである。
 
 既にある場合は取り込んでから、規則を `src/delivery.ts` の `rules` に並べ直す。
 
@@ -531,16 +527,17 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" \
   pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
 ```
 
-取り込んだあと、既存の規則も `src/delivery.ts` に書き写す。書き漏らすと次の `pulumi up`
-で消える。Pulumi は自分の定義を正として、そこに無い規則を落とすためである。
+取り込んだあと、既存の規則も `src/delivery.ts` に書き写す。
+書き漏らすと次の `pulumi up` で消える。
+Pulumi は自分の定義を正として、そこに無い規則を落とすためである。
 
-自動で取り込んで混ぜる作りにはしていない。こちらが置いた覚えのない規則を黙って
-管理下に入れると、消えたことに気づけない。
+自動で取り込んで混ぜる作りにはしていない。
+こちらが置いた覚えのない規則を黙って管理下に入れると、消えたことに気づけない。
 
 ## GitHub Actions から AWS へ入る
 
-入口は Pulumi に無い。OIDC プロバイダ、デプロイロール、実行時ロールの権限境界は
-AWS CLI で作ってあり、権限の一覧も作り直す手順も `docs/aws-oidc.md` にある。
+入口は Pulumi に無い。
+OIDC プロバイダ、デプロイロール、実行時ロールの権限境界は AWS CLI で作ってあり、権限の一覧も作り直す手順も `docs/aws-oidc.md` にある。
 長い寿命の鍵を Secrets へ置かずに済む。
 
 ロールはリポジトリに対して一つで、`dev` と `prod` で同じものを使う。
@@ -548,34 +545,33 @@ AWS CLI で作ってあり、権限の一覧も作り直す手順も `docs/aws-o
 
 ### 本体へ渡すもの
 
-境界の名前を設定に入れる。ARN は `src/roles.ts` がその場のアカウントから組む。
+境界の名前を設定に入れる。
+ARN は `src/roles.ts` がその場のアカウントから組む。
 
 ```
 pulumi config set workloadBoundaryName \
   qazx7412-vrc-service-status-panel-workload-boundary
 ```
 
-これを入れないと、実行ロールに境界が付かない。手元から流す分にはそれでも通るが、
-CI からは通らない。デプロイロールは境界の付いたロールしか作れず、
-`CreateRole` がそこで止まる。
+これを入れないと、実行ロールに境界が付かない。
+手元から流す分にはそれでも通るが、CI からは通らない。
+デプロイロールは境界の付いたロールしか作れず、`CreateRole` がそこで止まる。
 
 ロールの ARN は GitHub の Secrets に `AWS_DEPLOY_ROLE_ARN` として登録する。
 
 ### ワークフローでの受け取り
 
 CI はトークンを一つも持たずに Pulumi Cloud へ入る。
-`pulumi/auth-actions` が GitHub Actions の OIDC トークンをアクセストークンへ
-交換し、以降のステップから見える `PULUMI_ACCESS_TOKEN` に入れる。
+`pulumi/auth-actions` が GitHub Actions の OIDC トークンをアクセストークンへ交換し、以降のステップから見える `PULUMI_ACCESS_TOKEN` に入れる。
 
-AWS 側も OIDC で入る。`AWS_*` の取り合いはもう起きないので、
-`configure-aws-credentials` にはジョブの環境へ普通に書かせてよい。
+AWS 側も OIDC で入る。
+`AWS_*` の取り合いはもう起きないので、`configure-aws-credentials` にはジョブの環境へ普通に書かせてよい。
 
-**資格情報を出す前に `npm ci` を済ませる。** どちらのアクションも、以降のステップから
-見える環境変数に資格情報を置く。`npm ci` をあとに回すと、依存パッケージの
-インストールスクリプトからデプロイロールの一時資格情報と `PULUMI_ACCESS_TOKEN` が
-読める。手元の `deploy.sh` が Cloudflare のトークンを `npm ci` の前で外しているのと
-同じ理由である。Pulumi CLI を入れる `pulumi/actions` も資格情報を要らないので、
-先へ寄せてある。
+**資格情報を出す前に `npm ci` を済ませる。**
+どちらのアクションも、以降のステップから見える環境変数に資格情報を置く。
+`npm ci` をあとに回すと、依存パッケージのインストールスクリプトからデプロイロールの一時資格情報と `PULUMI_ACCESS_TOKEN` が読める。
+手元の `deploy.sh` が Cloudflare のトークンを `npm ci` の前で外しているのと同じ理由である。
+Pulumi CLI を入れる `pulumi/actions` も資格情報を要らないので、先へ寄せてある。
 
 ```yaml
 permissions:
@@ -654,13 +650,14 @@ Secrets に置くのは三つだけである。
 | `PULUMI_CONFIG_PASSPHRASE` | `Pulumi.<スタック名>.yaml` の暗号文を開ける |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare プロバイダ |
 
-**Pulumi Cloud 側の下ごしらえが一つ要る。** GitHub Actions を OIDC issuer として
-登録する。登録しないと `pulumi/auth-actions` の交換が通らない。
+**Pulumi Cloud 側の下ごしらえが一つ要る。**
+GitHub Actions を OIDC issuer として登録する。
+登録しないと `pulumi/auth-actions` の交換が通らない。
 手順は[公式の案内](https://www.pulumi.com/docs/administration/access-identity/oidc-issuers/github/)にある。
 
-**この例は `prod` を更新する。** 動かすには `prod` のスタックを作り、その
-`Pulumi.prod.yaml` を commit しておく必要がある。デプロイロールは `dev` と `prod` の
-どちらにも届くので、ロールの側で用意するものは無い。
+**この例は `prod` を更新する。**
+動かすには `prod` のスタックを作り、その `Pulumi.prod.yaml` を commit しておく必要がある。
+デプロイロールは `dev` と `prod` のどちらにも届くので、ロールの側で用意するものは無い。
 
 Layer を Pulumi に持たせたことで、デプロイロールには Layer の発行と削除も要る。
 読み取りだけのままだと、最初の `PublishLayerVersion` で `AccessDenied` になる。
@@ -668,13 +665,12 @@ Layer を Pulumi に持たせたことで、デプロイロールには Layer �
 ロールは CI から更新できない設計なので、権限を変えるときは手元から CLI で流す。
 
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
-置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、
-どちらも checkout した時点でそろっている。**そろっていないのはバイナリだけ**で、
-これは `.gitignore` の対象なので毎回作る。
+置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、どちらも checkout した時点でそろっている。
+**そろっていないのはバイナリだけ**で、これは `.gitignore` の対象なので毎回作る。
 
-Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore` の対象なので、
-`pulumi up` の前に作る（仕様書 7.1、7.3）。発行そのものは `pulumi up` の中で起きるので、
-デプロイロールには Layer の発行と削除も与えてある。
+Layer の zip もバイナリと同じ扱いになる。
+どちらも `.gitignore` の対象なので、`pulumi up` の前に作る（仕様書 7.1、7.3）。
+発行そのものは `pulumi up` の中で起きるので、デプロイロールには Layer の発行と削除も与えてある。
 
 実体は `.github/workflows/deploy.yml` にある。
 上の並びをそのまま書いたものである。
@@ -689,19 +685,21 @@ Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore
 
 ### ロールの権限
 
-`docs/aws-oidc.md` に一覧がある。名前の頭で絞ってあり、同じアカウントの他のリソースへは
-届かない。このロール自身の権限を書き換える操作は Deny してあるので、CI からは変えられない。
+`docs/aws-oidc.md` に一覧がある。
+名前の頭で絞ってあり、同じアカウントの他のリソースへは届かない。
+このロール自身の権限を書き換える操作は Deny してあるので、CI からは変えられない。
 
-実行ロールに付く権限境界も同じ文書にある。`src/roles.ts` は設定の
-`workloadBoundaryName` から ARN を組んで渡すだけで、境界そのものはここに無い。
+実行ロールに付く権限境界も同じ文書にある。
+`src/roles.ts` は設定の `workloadBoundaryName` から ARN を組んで渡すだけで、境界そのものはここに無い。
 
 ## 手で行う作業
 
 **Pulumi Cloud に GitHub Actions を OIDC issuer として登録する。**
-CI からデプロイする場合だけ要る。登録しないと `pulumi/auth-actions` の交換が通らず、
-ワークフローが Pulumi Cloud へ入れない。
+CI からデプロイする場合だけ要る。
+登録しないと `pulumi/auth-actions` の交換が通らず、ワークフローが Pulumi Cloud へ入れない。
 
-手元から流すだけなら要らない。`pulumi login` で足りる。
+手元から流すだけなら要らない。
+`pulumi login` で足りる。
 
 CLI にこれを行うコマンドは無い。
 コンソールか REST API のどちらかになる（Pulumi CLI 3.259.0 の `pulumi org` に issuer を扱うサブコマンドが無いことを確かめた）。
@@ -758,18 +756,17 @@ POST /api/orgs/<orgName>/auth/policies/oidcissuers/<issuerId>
 fork するなら、この表の `limit7412` と `limit7412/VRCServiceStatusPanel` を自分のものに書き換える。
 ワークフロー側の `organization` と `scope` も同じ値にする。
 
-**カスタムドメインの接続。** ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
+**カスタムドメインの接続。**
+ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
 
 繋ぐ先のバケット名は `pulumi stack output publicBucketOut` で確かめる。
-既定のままなら `qazx7412-vrc-service-status-panel-<スタック名>-public` である。`publicBucket` を
-設定している場合はその名前になる。
+既定のままなら `qazx7412-vrc-service-status-panel-<スタック名>-public` である。
+`publicBucket` を設定している場合はその名前になる。
 
-Pulumi に載せていないのは、`cloudflare_r2_custom_domain` に、作成の約一分後に
-`enabled` が `false` へ戻る不具合があるためである
-（[cloudflare/terraform-provider-cloudflare#6578](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6578)）。
-Pulumi の Cloudflare プロバイダは同じ Terraform プロバイダを包んだものなので、
-同じ挙動になる。配信そのものが止まる箇所であり、載せる利より害が大きい。
+Pulumi に載せていないのは、`cloudflare_r2_custom_domain` に、作成の約一分後に `enabled` が `false` へ戻る不具合があるためである（[cloudflare/terraform-provider-cloudflare#6578](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6578)）。
+Pulumi の Cloudflare プロバイダは同じ Terraform プロバイダを包んだものなので、同じ挙動になる。
+配信そのものが止まる箇所であり、載せる利より害が大きい。
 
 不具合が直れば `src/delivery.ts` に `R2CustomDomain` を足すだけで済む。
 
