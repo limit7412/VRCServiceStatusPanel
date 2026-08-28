@@ -63,6 +63,15 @@ fi
 # 覚えられない長さを下限にするだけでよい。
 MIN_PASSPHRASE=32
 
+# パスフレーズを入れたファイルの上限。
+#
+# trim_go_space は端の空白を一文字ずつ落とすので、空白だけのファイルでは時間が長さの二乗で伸びる。
+# 弾かずに通すと、短すぎるという答えを出すまでに CPU を使い切ることになる。
+#
+# この上限での最悪は 0.22 秒だった（空白 512 バイトのファイル、bash 5.2、C.UTF-8）。
+# README が勧める openssl rand -base64 32 は 44 バイトなので、実用の十倍を超える余裕がある。
+MAX_PASSPHRASE_BYTES=512
+
 # Go の strings.TrimSpace と同じ範囲で前後の空白を落とす。
 #
 # [[:space:]] には頼らない。
@@ -77,6 +86,10 @@ MIN_PASSPHRASE=32
 # 符号位置は 8 進で書く。
 # $'\uXXXX' は Bash 4.2 以降で、このリポジトリは macOS 標準の 3.2 で動くことを前提にしている。
 # 8 進エスケープなら 3.2 でも通り、UTF-8 のバイト列をそのまま書ける。
+#
+# 端の空白は一文字ずつ落とす。
+# まとめて落とす書き方（extglob の +(...)）も試したが、bash の最長一致が総当たりになり、空白 1000 文字で 30 秒を超えた。
+# 一文字ずつでも時間は長さの二乗で伸びるため、入力の大きさを MAX_PASSPHRASE_BYTES で抑えてある。
 #
 # 突き合わせは Go の strings.TrimSpace そのものと行った。
 # 空白候補と通常の文字を混ぜた 3000 本を C と C.UTF-8 の両方で流し、結果は全て一致した（#24）。
@@ -135,6 +148,14 @@ elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
 
     if [ ! -r "$PULUMI_CONFIG_PASSPHRASE_FILE" ]; then
         echo "PULUMI_CONFIG_PASSPHRASE_FILE が読めない: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
+        exit 1
+    fi
+
+    # 中身を読む前に大きさで弾く。
+    # バイトで数えるのは、文字で数えると単位がロケールで変わるためである。
+    if [ "$(( $(wc -c < "$PULUMI_CONFIG_PASSPHRASE_FILE") ))" -gt "$MAX_PASSPHRASE_BYTES" ]; then
+        echo "PULUMI_CONFIG_PASSPHRASE_FILE が大きい（${MAX_PASSPHRASE_BYTES} バイトまで）: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
+        echo "  パスフレーズだけが入ったファイルか確かめる" >&2
         exit 1
     fi
     # 前後の空白を落としてから測る。
