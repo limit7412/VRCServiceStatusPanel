@@ -690,10 +690,64 @@ Layer の zip もバイナリと同じ扱いになる。どちらも `.gitignore
 
 **Pulumi Cloud に GitHub Actions を OIDC issuer として登録する。**
 CI からデプロイする場合だけ要る。登録しないと `pulumi/auth-actions` の交換が通らず、
-ワークフローが Pulumi Cloud へ入れない。手順は
-[公式の案内](https://www.pulumi.com/docs/administration/access-identity/oidc-issuers/github/)にある。
+ワークフローが Pulumi Cloud へ入れない。
 
 手元から流すだけなら要らない。`pulumi login` で足りる。
+
+CLI にこれを行うコマンドは無い。
+コンソールか REST API のどちらかになる（Pulumi CLI 3.259.0 の `pulumi org` に issuer を扱うサブコマンドが無いことを確かめた）。
+
+コンソールなら Settings → Access Management → OIDC Issuers → Register issuer。
+四つ聞かれるが、必須は Name と URL だけである。
+
+| 欄 | 値 |
+| --- | --- |
+| Name | `github-actions` |
+| URL | `https://token.actions.githubusercontent.com` |
+| Max expiration (seconds) | `3600` |
+| Thumbprint | 空のまま |
+
+**Max expiration** は、交換して渡すアクセストークンの寿命の上限である。
+`pulumi/auth-actions` の `token-expiration` はあくまで要求で、そのまま通すか短く切り詰めるかは発行する側が決める。
+いまのワークフロー例はその入力を渡していないので空でも動くが、あとで長い寿命を要求する行が足されたときに、ここで頭打ちにできる。
+このプロジェクトのデプロイは 1 時間もあれば収まる。
+
+**Thumbprint** は、発行者の TLS 証明書を検証するための SHA-1 の指紋である。
+空のままにする。
+空なら Pulumi が発行者の URL から鍵の集合（**JWKS**、JSON Web Key Set）を取りに行き、指紋も自分で持つ。
+
+手で埋めると、GitHub が TLS 証明書を更新するたびにこちらで入れ替えることになり、忘れれば交換が通らなくなる。
+入れ替え自体は `regenerate-thumbprints` で取り直せるので手はある。
+それでも、追随する仕事を自分で抱える理由が無い。
+AWS の OIDC プロバイダに指紋を渡していないのと同じ理由である（`docs/aws-oidc.md`）。
+
+続けて認可ポリシーを一つ足す。
+無料の Individual で使えるのは personal トークンだけで、ワークフローの `pulumi/auth-actions` に渡す値と揃える必要がある。
+
+| 項目 | 値 |
+| --- | --- |
+| Decision | Allow |
+| Token type | Personal |
+| Scope | `user:limit7412` |
+| Audience | `urn:pulumi:org:limit7412` |
+| Subject | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
+
+**Subject は `:*` で終わらせない。**
+公式の例は `repo:<owner>/<repo>:*` だが、それだとそのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
+AWS 側の信頼ポリシーも `master` の ref で動くワークフローに絞ってあるので、ここも揃える（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
+`sub` はイベントの種別を持たないため、どちらも push だけには絞れない。
+`master` 上の `workflow_dispatch` も同じ値になる。
+
+REST API で行うなら次の二つを使う。
+`<orgName>` は個人アカウントならユーザー名である。
+
+```
+POST /api/orgs/<orgName>/oidc/issuers
+POST /api/orgs/<orgName>/auth/policies/oidcissuers/<issuerId>
+```
+
+fork するなら、この表の `limit7412` と `limit7412/VRCServiceStatusPanel` を自分のものに書き換える。
+ワークフロー側の `organization` と `scope` も同じ値にする。
 
 **カスタムドメインの接続。** ダッシュボードで配信バケットに配信ホスト名を繋ぐ。
 R2 → バケットを選ぶ → Settings → Custom Domains → Add。
