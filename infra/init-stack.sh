@@ -63,6 +63,63 @@ fi
 # 覚えられない長さを下限にするだけでよい。
 MIN_PASSPHRASE=32
 
+# パスフレーズを入れたファイルの上限。
+#
+# trim_go_space は端の空白を一文字ずつ落とすので、空白だけのファイルでは時間が長さの二乗で伸びる。
+# 弾かずに通すと、短すぎるという答えを出すまでに CPU を使い切ることになる。
+#
+# この上限での最悪は 0.22 秒だった（空白 512 バイトのファイル、bash 5.2、C.UTF-8）。
+# README が勧める openssl rand -base64 32 は 44 バイトなので、実用の十倍を超える余裕がある。
+MAX_PASSPHRASE_BYTES=512
+
+# Go の strings.TrimSpace と同じ範囲で前後の空白を落とす。
+#
+# [[:space:]] には頼らない。
+# 当たる文字がロケールで変わるためである。
+# glibc の C ロケールでは ASCII の六文字だけだが、C.UTF-8 では U+1680 や U+3000 も空白に分類される（この環境で両方を測った）。
+# 一方 Pulumi が落とすのは unicode.IsSpace の範囲で、こちらはロケールで変わらない。
+#
+# 落とし残すと長さの下限をすり抜けられる。
+# 一文字の後ろに NBSP を 31 個並べたファイルは、落とし残せば 32 文字以上として通り、Pulumi は一文字のパスフレーズで暗号化する。
+# 端に一個置いた場合の一文字ずれでは済まない。
+#
+# 符号位置は 8 進で書く。
+# $'\uXXXX' は Bash 4.2 以降で、このリポジトリは macOS 標準の 3.2 で動くことを前提にしている。
+# 8 進エスケープなら 3.2 でも通り、UTF-8 のバイト列をそのまま書ける。
+#
+# 端の空白は一文字ずつ落とす。
+# まとめて落とす書き方（extglob の +(...)）も試したが、bash の最長一致が総当たりになり、空白 1000 文字で 30 秒を超えた。
+# 一文字ずつでも時間は長さの二乗で伸びるため、入力の大きさを MAX_PASSPHRASE_BYTES で抑えてある。
+#
+# 突き合わせは Go の strings.TrimSpace そのものと行った。
+# 空白候補と通常の文字を混ぜた 3000 本を C と C.UTF-8 の両方で流し、結果は全て一致した（#24）。
+GO_SPACES=(
+    $'\011' $'\012' $'\013' $'\014' $'\015' $'\040'
+    $'\302\205' $'\302\240' $'\341\232\200'
+    $'\342\200\200' $'\342\200\201' $'\342\200\202' $'\342\200\203'
+    $'\342\200\204' $'\342\200\205' $'\342\200\206' $'\342\200\207'
+    $'\342\200\210' $'\342\200\211' $'\342\200\212'
+    $'\342\200\250' $'\342\200\251' $'\342\200\257'
+    $'\342\201\237' $'\343\200\200'
+)
+
+trim_go_space() {
+    local s="$1" before sp
+
+    # 一巡では端の一個ずつしか落ちない。
+    # 変わらなくなるまで回す。
+    while :; do
+        before="$s"
+        for sp in "${GO_SPACES[@]}"; do
+            s="${s#"$sp"}"
+            s="${s%"$sp"}"
+        done
+        [ "$s" = "$before" ] && break
+    done
+
+    printf '%s' "$s"
+}
+
 # 鍵の材料になる文字列を、Pulumi と同じ形で取り出す。
 #
 # 環境変数はそのまま使われる（pkg/secrets/passphrase/manager.go の readPassphrase）。
@@ -93,9 +150,18 @@ elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
         echo "PULUMI_CONFIG_PASSPHRASE_FILE が読めない: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
         exit 1
     fi
-    phrase=$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")
-    phrase="${phrase#"${phrase%%[![:space:]]*}"}"
-    phrase="${phrase%"${phrase##*[![:space:]]}"}"
+
+    # 中身を読む前に大きさで弾く。
+    # バイトで数えるのは、文字で数えると単位がロケールで変わるためである。
+    if [ "$(( $(wc -c < "$PULUMI_CONFIG_PASSPHRASE_FILE") ))" -gt "$MAX_PASSPHRASE_BYTES" ]; then
+        echo "PULUMI_CONFIG_PASSPHRASE_FILE が大きい（${MAX_PASSPHRASE_BYTES} バイトまで）: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
+        echo "  パスフレーズだけが入ったファイルか確かめる" >&2
+        exit 1
+    fi
+    # 前後の空白を落としてから測る。
+    # Pulumi はファイルから読んだ値を strings.TrimSpace してから鍵の材料にする。
+    # 落とさずに測ると、末尾の改行やその他の空白の分だけ長く見える。
+    phrase=$(trim_go_space "$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")")
 else
     echo "PULUMI_CONFIG_PASSPHRASE が要る。これを失うと secret を読めなくなるので、控えを残すこと" >&2
     exit 1
