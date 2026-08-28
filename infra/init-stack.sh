@@ -93,6 +93,27 @@ elif [ -n "${PULUMI_CONFIG_PASSPHRASE_FILE:-}" ]; then
         echo "PULUMI_CONFIG_PASSPHRASE_FILE が読めない: $PULUMI_CONFIG_PASSPHRASE_FILE" >&2
         exit 1
     fi
+    # 前後の空白を落としてから測る。Pulumi はファイルから読んだ値を
+    # strings.TrimSpace してから鍵の材料にするので、落とさずに測ると
+    # 末尾の改行の分だけ長く見える。
+    #
+    # ここで落とせるのは ASCII の空白だけである。C ロケールの [[:space:]] は
+    # TAB、LF、VT、FF、CR、SP に当たり、Go の unicode.IsSpace が落とす
+    # U+0085、U+00A0、U+1680、U+2000-U+200A、U+2028、U+2029、U+202F、
+    # U+205F、U+3000 には当たらない（この環境で全て確かめた）。
+    #
+    # したがって、そのどれかを端に置いた値では、ここで測る長さが Pulumi の
+    # 見る長さより 1 文字ぶん長くなる。31 文字ちょうどの値の端に NBSP を足すと、
+    # 32 文字として通ってしまう。
+    #
+    # 合わせるには $'\uXXXX' が要り Bash 4.2 以降になる。このリポジトリは
+    # macOS 標準の 3.2 で動くことを前提にしている。python3 へ寄せれば厳密に
+    # 合うが、依存が一つ増える。
+    #
+    # 受け入れる。README が勧める openssl rand -base64 32 は 44 文字で
+    # Unicode の空白を含まないため、この経路を踏まない。踏むのは 31 文字前後の
+    # 値の端にそうした文字を置いた場合に限られ、そこは生成した値なら通らない
+    # 範囲である（#24）。
     phrase=$(cat "$PULUMI_CONFIG_PASSPHRASE_FILE")
     phrase="${phrase#"${phrase%%[![:space:]]*}"}"
     phrase="${phrase%"${phrase##*[![:space:]]}"}"
