@@ -279,7 +279,11 @@ Pulumi Cloud での既定はサービス側の鍵管理であり、DIY バック
 openssl rand -base64 32
 ```
 
-`init-stack.sh` は 32 文字未満を受け付けない。
+`init-stack.sh` は 32 バイト未満を受け付けない。
+`openssl rand -base64 32` の出力は 44 バイトなので、そのまま通る。
+
+数えるのがバイトなのは、文字で数えると単位がロケールで変わるためである（#35）。
+日本語なら 11 文字で 32 バイトを越える。
 
 理由は commit する先が public だからである（#24）。
 `Pulumi.<スタック名>.yaml` には secret が暗号文として入り、そのファイルは commit する。
