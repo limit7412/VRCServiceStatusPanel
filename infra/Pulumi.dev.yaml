@@ -5,7 +5,7 @@ config:
   vrc-service-status-panel:deliveryZoneId: 9e3a1e4d7a8a79af45c16b1e5fcd176c
   vrc-service-status-panel:deliveryHost: vrc-status-dev.oxymoron.link
   vrc-service-status-panel:bucketLocation: apac
-  vrc-service-status-panel:youtubeProbeVideoId: 3jUJgm6cYuU
+  vrc-service-status-panel:youtubeProbeVideoId: "-3opIii0LBU"
   vrc-service-status-panel:boothProbeItemId: "8763171"
   vrc-service-status-panel:ytdlpVersion: 2026.07.04
   vrc-service-status-panel:alertWebhookUrl:
