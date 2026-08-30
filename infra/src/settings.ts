@@ -56,8 +56,13 @@ export const prefix = `qazx7412-vrc-service-status-panel-${stack}`;
 export const awsRegion = new pulumi.Config("aws").get("region") ?? "ap-northeast-1";
 
 export const cloudflareAccountId = config.require("cloudflareAccountId");
-export const deliveryZoneId = config.require("deliveryZoneId");
 export const deliveryHost = config.require("deliveryHost");
+
+// この定義からは読まない。Cache Rules もカスタムドメインも手で作るためである
+// （infra/README.md の「手で行う作業」）。
+// それでも設定に残してあるのは、その手作業がどのゾーンに触るのかを、
+// スタックごとに記録しておく先がここしかないからである。
+export const deliveryZoneId = config.require("deliveryZoneId");
 
 // バケットも同じ頭で揃える。スタック名まで入れるのは、同じアカウントで
 // dev と prod を並べたときに、名前が同じだと後から作るほうが既存のものと
