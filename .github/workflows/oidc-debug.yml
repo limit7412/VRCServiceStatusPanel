@@ -20,17 +20,9 @@ jobs:
       # 見たいのはトークンの claim そのものである。
       - name: inspect oidc claims
         run: |
-          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
           # トークン本体は出さない。payload の claim だけを出す
-          printf '%s' "$token" | python3 -c '
-import base64, json, sys
-p = sys.stdin.read().split(".")[1]
-p += "=" * (-len(p) % 4)
-c = json.loads(base64.urlsafe_b64decode(p))
-for k in ("iss", "aud", "sub", "repository", "repository_owner", "ref", "event_name", "workflow_ref"):
-    print(f"{k}={c.get(k)}")
-'
+          printf '%s' "$token" | python3 -c 'import base64,json,sys; p=sys.stdin.read().split(".")[1]; p+="="*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print("\n".join(f"{k}={c.get(k)}" for k in ("iss","aud","sub","repository","repository_owner","ref","event_name","workflow_ref")))'
       - name: inspect secret shape
         env:
           ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
