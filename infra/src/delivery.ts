@@ -3,8 +3,6 @@ import * as cloudflare from "@pulumi/cloudflare";
 import {
     bucketLocation,
     cloudflareAccountId,
-    deliveryHost,
-    deliveryZoneId,
     publicBucketName,
     stateBucketName,
 } from "./settings";
@@ -33,40 +31,23 @@ export const stateBucket = new cloudflare.R2Bucket(
     { protect: true },
 );
 
+// Cache Rules はここでは作らない。
+//
 // 配信 JSON は .json なので、既定ではキャッシュの対象にならない（仕様書 6）。
-// Cache Rules で /v1/ 以下を対象に入れる。
+// 対象へ入れるには Cache Rules が要る。
+// ところが http_request_cache_settings の kind: "zone" の ruleset は、
+// ゾーンに一つしか置けない。
 //
-// このゾーンの http_request_cache_settings に、既に Cache Rules があると作成は
-// 失敗する。kind: "zone" のこのフェーズはゾーンごとに一つしか置けないためである。
-// 既にあるなら pulumi import で取り込み、規則をここへ並べ直す。手順は README にある。
+// dev と prod は同じゾーンへ配信するので、スタックごとに持たせると二つ目が
+// 400 で落ちる（#45）。import で相乗りさせることもできない。
+// rules はスタックごとに全体を書き下す形であり、後から流したほうが
+// もう片方の規則を消す。
 //
-// 自動で取り込んで混ぜることはしない。こちらが置いた覚えのない規則を
-// 黙って管理下に入れると、次の pulumi up でそれを消してしまう。
-//
-// edgeTtl は respect_origin を使う。オブジェクトの Cache-Control に従わせる
-// ためで、仕様書 6 の「オブジェクトの Cache-Control に従い 30 秒」がこれにあたる。
-// override_origin で 30 秒を書くことはできない。Edge Cache TTL の下限が
-// Free で 2 時間、Pro で 1 時間あり、Business 以上でないと 30 秒を指定できない。
-export const cacheRuleset = new cloudflare.Ruleset("delivery-cache", {
-    zoneId: deliveryZoneId,
-    name: "VRCServiceStatusPanel の配信",
-    description: "配信 JSON をキャッシュの対象に入れる",
-    kind: "zone",
-    phase: "http_request_cache_settings",
-    rules: [
-        {
-            ref: "cache_status_feed",
-            description: "v1 以下をキャッシュし、TTL はオブジェクトに従う",
-            expression: `(http.host eq "${deliveryHost}" and starts_with(http.request.uri.path, "/v1/"))`,
-            action: "set_cache_settings",
-            actionParameters: {
-                cache: true,
-                edgeTtl: { mode: "respect_origin" },
-                browserTtl: { mode: "respect_origin" },
-            },
-        },
-    ],
-});
+// ゾーンに一つしか置けない共有資源であって、スタックの寿命とは合わない。
+// AWS の OIDC プロバイダを Pulumi に載せていないのと同じ扱いにした
+// （docs/aws-oidc.md の「Pulumi に載せない理由」）。
+// 手で作り、規則にすべてのスタックの配信ホストを並べる。
+// 手順は infra/README.md の「手で行う作業」にある。
 
 // カスタムドメインはここでは作らない。
 //

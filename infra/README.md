@@ -82,7 +82,7 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | `index.ts` | 環境変数の組み立てと出力 |
 | `src/settings.ts` | スタックごとの設定 |
 | `src/providers.ts` | AWS プロバイダ。R2 バックエンドとの鍵の取り合いを解く |
-| `src/delivery.ts` | R2 のバケットと Cache Rules（仕様書 6） |
+| `src/delivery.ts` | R2 のバケット（仕様書 6） |
 | `src/credentials.ts` | R2 の S3 互換トークンと、そこから導く鍵（仕様書 9） |
 | `src/functions.ts` | 関数の一覧。増やすときはここ |
 | `src/roles.ts` | 実行時のロール |
@@ -94,7 +94,6 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | --- | --- | --- |
 | 配信バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-public`） | `cloudflare.R2Bucket` | 6 |
 | 内部バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-state`） | `cloudflare.R2Bucket` | 6 |
-| `/v1/` 以下の Cache Rules | `cloudflare.Ruleset` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
 | yt-dlp と QuickJS の Layer（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`） | `aws.lambda.LayerVersion` | 7.1、7.3 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
@@ -107,8 +106,8 @@ CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 バケット名の既定にスタック名が入るのは、同じアカウントで `dev` と `prod` を並べたときに名前がぶつかるためである。
 決めた名前を使いたければ `publicBucket` と `stateBucket` で明示する。
 
-カスタムドメインは作らない。
-理由は下の「手で行う作業」にある。
+カスタムドメインと Cache Rules は作らない。
+理由はどちらも下の「手で行う作業」にある。
 
 ### R2 のデータ用トークンの権限
 
@@ -168,7 +167,7 @@ Pulumi が発行し、そのまま Lambda へ渡す。
 公開する暗号文は少ないほうがよい（#24）。
 CI は元からこの環境変数で渡している。
 
-**権限ポリシー**を四つ足す。
+**権限ポリシー**を二つ足す。
 ポリシーごとに、まず対象を選ぶドロップダウン（`アカウント全体`、`指定ドメイン` など）があり、その下で権限を選ぶ。
 公式ドキュメントが Account / Zone と呼ぶ区別が、ここでは対象の選択にあたる。
 
@@ -176,8 +175,6 @@ CI は元からこの環境変数で渡している。
 | --- | --- | --- |
 | アカウント全体 | Workers R2 Storage | バケットの作成、削除、設定の変更 |
 | アカウント全体 | Account API Tokens | R2 のデータ用トークンを発行する |
-| アカウント全体 | Account Rulesets | Cache Rules |
-| 指定ドメイン（配信ドメイン） | Cache Settings | Cache Rules |
 
 どれも Read と Edit（Write）の両方を入れる。
 この画面は読み取りと書き込みを別々の権限として扱っており、Edit だけでは読めない。
@@ -185,13 +182,8 @@ CI は元からこの環境変数で渡している。
 R2 は `アカウント全体` にする。
 `R2 バケット` を選ぶとバケット単位に絞れるが、それはバケットの中身を触る権限であって、バケット自体は作れない。
 
-**「Cache Rules」という項目は無い。**
-Cache Rules を触る権限の名前は `Cache Settings` である。
-ドキュメントの本文は製品名で書かれているが、権限の一覧は別の名前で並んでいる。
-
-[公式の手順](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/)は `Account Filter Lists` も挙げている。
-これはルールがリストを参照する場合のもので、ここで作るルールは参照していない。
-入れずに始めて、`pulumi up` が 403 を返したら足す。
+Cache Rules を触る権限はここに要らない。
+ruleset は Pulumi の外にあり、手で置く（「手で行う作業」）。
 
 **Account API Tokens の重さは把握しておくこと。**
 これはトークンを作る権限であり、持たせた相手はアカウント内の任意の権限を持つトークンを発行できる。
@@ -510,30 +502,6 @@ zip が前回と同じなら新しい版は作られない。
 OIDC のロールと権限境界はこのスクリプトの対象外である。
 あちらは CI の権限そのものを決める場所で、Pulumi に載せていない（「GitHub Actions から AWS へ入る」を参照）。
 
-## 前提: ゾーンに既存の Cache Rules が無いこと
-
-`deliveryZoneId` のゾーンで `http_request_cache_settings` を既に使っていると、`pulumi up` はここで失敗する。
-`kind: "zone"` のこのフェーズは、ゾーンごとに一つしか置けないためである。
-
-既にある場合は取り込んでから、規則を `src/delivery.ts` の `rules` に並べ直す。
-
-```
-# 既存の ruleset の ID を調べる
-curl -s -H "Authorization: Bearer $cloudflare_token" \
-  "https://api.cloudflare.com/client/v4/zones/<ゾーンID>/rulesets/phases/http_request_cache_settings/entrypoint" \
-  | jq -r '.result.id, (.result.rules[] | .expression)'
-
-CLOUDFLARE_API_TOKEN="$cloudflare_token" \
-  pulumi import cloudflare:index/ruleset:Ruleset delivery-cache <ゾーンID>/<rulesetのID>
-```
-
-取り込んだあと、既存の規則も `src/delivery.ts` に書き写す。
-書き漏らすと次の `pulumi up` で消える。
-Pulumi は自分の定義を正として、そこに無い規則を落とすためである。
-
-自動で取り込んで混ぜる作りにはしていない。
-こちらが置いた覚えのない規則を黙って管理下に入れると、消えたことに気づけない。
-
 ## GitHub Actions から AWS へ入る
 
 入口は Pulumi に無い。
@@ -822,6 +790,65 @@ Pulumi の Cloudflare プロバイダは同じ Terraform プロバイダを包�
 配信そのものが止まる箇所であり、載せる利より害が大きい。
 
 不具合が直れば `src/delivery.ts` に `R2CustomDomain` を足すだけで済む。
+
+**Cache Rules を置く。**
+配信 JSON は `.json` なので、既定ではキャッシュの対象に入らない（仕様書 6）。
+ゾーンの Cache Rules で、配信ホストの `/v1/` 以下を対象へ入れる。
+
+ダッシュボードなら Caching → Cache Rules → Create rule。
+API なら entrypoint をまとめて置き換える。
+
+```
+curl -X PUT \
+  -H "Authorization: Bearer $cloudflare_token" -H "Content-Type: application/json" \
+  "https://api.cloudflare.com/client/v4/zones/<ゾーンID>/rulesets/phases/http_request_cache_settings/entrypoint" \
+  -d @rules.json
+```
+
+**すべてのスタックの配信ホストを、この一つの ruleset に並べる。**
+`http_request_cache_settings` の `kind: "zone"` の ruleset は、ゾーンに一つしか置けない。
+`dev` と `prod` は同じゾーンへ配信するので、スタックごとに持つことはできない（#45）。
+
+```json
+{
+  "rules": [
+    {
+      "ref": "cache_status_feed",
+      "description": "v1 以下をキャッシュし、TTL はオブジェクトに従う",
+      "expression": "(http.host in {\"vrc-status.oxymoron.link\" \"vrc-status-dev.oxymoron.link\"} and starts_with(http.request.uri.path, \"/v1/\"))",
+      "action": "set_cache_settings",
+      "action_parameters": {
+        "cache": true,
+        "edge_ttl": { "mode": "respect_origin" },
+        "browser_ttl": { "mode": "respect_origin" }
+      }
+    }
+  ]
+}
+```
+
+`PUT` は ruleset の中身を丸ごと置き換える。
+このゾーンで他の Cache Rules も使っているなら、先に entrypoint を読んで、
+残す規則ごと並べ直す。
+
+```
+curl -H "Authorization: Bearer $cloudflare_token" \
+  "https://api.cloudflare.com/client/v4/zones/<ゾーンID>/rulesets/phases/http_request_cache_settings/entrypoint"
+```
+
+`edge_ttl` は `respect_origin` にする。
+仕様書 6 の「オブジェクトの `Cache-Control` に従い 30 秒」がこれにあたる。
+`override_origin` で 30 秒を書くことはできない。
+Edge Cache TTL の下限が Free で 2 時間、Pro で 1 時間あり、Business 以上でないと 30 秒を指定できない。
+
+触るトークンには、アカウント全体の `Account Rulesets` と、配信ドメインの `Cache Settings` が要る。
+どちらも Read と Edit を入れる。
+**「Cache Rules」という項目は無い。** 権限の一覧では `Cache Settings` という名前で並んでいる。
+
+Pulumi に載せていないのは、ゾーンに一つしか置けない共有資源だからである。
+スタックを増やすたびに取り合いになり、`pulumi destroy` の射程に入れると、
+片方のスタックを畳んだだけでもう片方の配信のキャッシュ設定まで消える。
+AWS の OIDC プロバイダを Pulumi に載せていないのと同じ形にしてある（`docs/aws-oidc.md`）。
 
 ## 確かめ方
 

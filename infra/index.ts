@@ -2,7 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 import { createFunctions, Environment } from "./src/compute";
 import { r2AccessKeyId, r2Endpoint, r2SecretAccessKey } from "./src/credentials";
-import { cacheRuleset, publicBucket, stateBucket } from "./src/delivery";
+import { publicBucket, stateBucket } from "./src/delivery";
 import {
     alertWebhookUrl,
     boothProbeItemId,
@@ -22,7 +22,7 @@ import {
 //
 //   settings.ts     スタックごとの設定
 //   providers.ts    AWS プロバイダ（リージョンを固定する）
-//   delivery.ts     R2 のバケットと Cache Rules（仕様書 6）
+//   delivery.ts     R2 のバケット（仕様書 6）
 //   layer.ts        yt-dlp と QuickJS の Layer（仕様書 7.1、7.3）
 //   credentials.ts  R2 の S3 互換トークンと、そこから導く鍵（仕様書 9）
 //   functions.ts    関数の一覧。増やすときはここ
@@ -57,6 +57,5 @@ export const stateBucketOut = stateBucket.name;
 export const r2EndpointOut = r2Endpoint;
 export const functionNames = pulumi.all(compute.functions.map((fn) => fn.name));
 export const logGroupNames = pulumi.all(compute.logGroups.map((group) => group.name));
-export const cacheRulesetId = cacheRuleset.id;
 // カスタムドメインを手で繋ぐときの相手。
 export const deliveryUrl = `https://${deliveryHost}/v1/status.json`;
