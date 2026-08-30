@@ -1,0 +1,40 @@
+name: oidc debug
+
+# 一時的な診断用。deploy が assume aws deploy role で止まる原因を切り分けるためだけに置く（#41）。
+# 切り分けが終わったら消す。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/image-work-validation-5d883a]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      # ロールは引かない。信頼ポリシーが master に限っているので、この枝では引けない。
+      # 見たいのはトークンの claim そのものである。
+      - name: inspect oidc claims
+        run: |
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          # トークン本体は出さない。payload の claim だけを出す
+          printf '%s' "$token" | python3 -c '
+import base64, json, sys
+p = sys.stdin.read().split(".")[1]
+p += "=" * (-len(p) % 4)
+c = json.loads(base64.urlsafe_b64decode(p))
+for k in ("iss", "aud", "sub", "repository", "repository_owner", "ref", "event_name", "workflow_ref"):
+    print(f"{k}={c.get(k)}")
+'
+      - name: inspect secret shape
+        env:
+          ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          # 値そのものは出さない。数字を伏せた形と長さだけを見る
+          printf 'len=%s\n' "${#ARN}"
+          printf 'shape=[%s]\n' "$(printf '%s' "$ARN" | sed -E 's/[0-9]/#/g')"
