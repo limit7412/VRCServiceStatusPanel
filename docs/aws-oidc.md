@@ -85,7 +85,8 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
         },
         "StringLike": {
           "token.actions.githubusercontent.com:sub": [
-            "repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master"
+            "repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master",
+            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master"
           ]
         }
       }
@@ -94,14 +95,41 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
 }
 ```
 
+`sub` が二つ並んでいるのは、GitHub がこの claim の形を移している途中だからである。
+古い形は `repo:<owner>/<repo>` で始まる。
+新しい形は所有者とリポジトリの数値 ID を足した `repo:<owner>@<所有者ID>/<repo>@<リポジトリID>` になる。
+数値 ID は名前を変えても変わらないので、リポジトリを消したり改名したりして空いた名前を
+別のリポジトリが取っても、同じ `sub` を名乗れない。
+
+いまこのリポジトリのランナーが受け取るのは新しい形である。
+
+```
+sub=repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master
+```
+
+古い形だけを書いていたころ、`configure-aws-credentials` は
+`Not authorized to perform sts:AssumeRoleWithWebIdentity` で止まっていた（#41）。
+`gh api /repos/limit7412/VRCServiceStatusPanel/actions/oidc/customization/sub` は
+`use_immutable_subject` に `false` を返すが、実際に届くトークンはこの形だった。
+設定の返り値ではなく、届いたトークンの `sub` が正である。
+
+両方を並べてあるのは、どちらの形で来ても通るようにするためである。
+どちらもワイルドカードを含まない完全一致なので、並べたぶん引ける相手が増えることはない。
+
 `sub` を絞らないと、同じ発行者の JWT を持つ任意のリポジトリからこのロールを引ける。
 GitHub Actions の OIDC でいちばん間違えやすい箇所である。
 IAM 側も、GitHub の発行者を信頼するロールについては `sub` 条件の有無を作成時に検査し、
 ワイルドカードだけの値を弾く。
 
-**fork したなら `repo:` の後ろを自分の `owner/repo` に書き換える。** ここが元のリポジトリを
-指したままだと、fork の GitHub Actions が出すトークンの `sub` と噛み合わず、
+**fork したなら `repo:` の後ろを自分のものに書き換える。** `owner/repo` と、新しい形の
+数値 ID の両方である。
+ここが元のリポジトリを指したままだと、fork の GitHub Actions が出すトークンの `sub` と噛み合わず、
 アカウント ID を正しく直してもロールを引けない。
+数値 ID は次で引ける。
+
+```
+gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'
+```
 
 いまの条件では、`master` に push できる者と `master` 上で `workflow_dispatch` を打てる者は
 誰でも引ける。
@@ -385,7 +413,7 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 
 - `<アカウントID>` を自分の AWS アカウント ID にする
 - `ap-northeast-1` を、そのスタックの `aws:region` と同じリージョンにする
-- 信頼ポリシーの `repo:limit7412/VRCServiceStatusPanel` を、自分の `owner/repo` にする
+- 信頼ポリシーの `repo:limit7412/VRCServiceStatusPanel` と `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387` を、自分の `owner/repo` と数値 ID にする
 - `arn:aws:` を、出す先のパーティションにする（`aws-cn`、`aws-us-gov`）
 
 パーティションは商用の `aws` のままでよいことがほとんどである。
