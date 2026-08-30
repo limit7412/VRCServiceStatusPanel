@@ -738,8 +738,14 @@ CLI にこれを行うコマンドは無い。
 それでも、追随する仕事を自分で抱える理由が無い。
 AWS の OIDC プロバイダに指紋を渡していないのと同じ理由である（`docs/aws-oidc.md`）。
 
-続けて認可ポリシーを一つ足す。
+続けて認可ポリシーを足す。
 無料の Individual で使えるのは personal トークンだけで、ワークフローの `pulumi/auth-actions` に渡す値と揃える必要がある。
+
+登録した直後は、どのトークン交換も拒む Deny のポリシーが一つだけ入っている。
+足すのではなく、これを差し替える形になる。
+
+Subject 違いで二つ要る。
+他の欄はどちらも同じである。
 
 | 項目 | 値 |
 | --- | --- |
@@ -747,7 +753,13 @@ AWS の OIDC プロバイダに指紋を渡していないのと同じ理由で�
 | Token type | Personal |
 | Scope | `user:limit7412` |
 | Audience | `urn:pulumi:org:limit7412` |
-| Subject | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
+| Subject（新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master` |
+| Subject（古い形） | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
+
+**Subject が二つあるのは、GitHub がこの claim の形を移しているためである。**
+いま届くトークンは、所有者とリポジトリの数値 ID を含む新しい形である。
+事情は `docs/aws-oidc.md` の「誰がロールを引けるか」にある。
+数値 ID は `gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'` で引ける。
 
 **Subject は `:*` で終わらせない。**
 公式の例は `repo:<owner>/<repo>:*` だが、それだとそのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
@@ -755,13 +767,44 @@ AWS 側の信頼ポリシーも `master` の ref で動くワークフローに�
 `sub` はイベントの種別を持たないため、どちらも push だけには絞れない。
 `master` 上の `workflow_dispatch` も同じ値になる。
 
-REST API で行うなら次の二つを使う。
+REST API で行うなら三つを順に叩く。
 `<orgName>` は個人アカウントならユーザー名である。
+`Authorization: token <アクセストークン>` を付ける。
 
 ```
-POST /api/orgs/<orgName>/oidc/issuers
-POST /api/orgs/<orgName>/auth/policies/oidcissuers/<issuerId>
+POST  /api/orgs/<orgName>/oidc/issuers
+GET   /api/orgs/<orgName>/auth/policies/oidcissuers/<issuerId>
+PATCH /api/orgs/<orgName>/auth/policies/<policyId>
 ```
+
+`POST` の body は `{"name": ..., "url": ..., "maxExpiration": 3600}` である。
+返る `id` が `<issuerId>` になる。
+ここに `policies` を並べても入らない。ポリシーは次の二つで差し替える。
+
+`GET` は登録時に入った Deny のポリシーを、それが属する `<policyId>` ごと返す。
+`PATCH` の body は `{"policies": [...]}` で、送った配列がそのまま置き換わる。
+一つの要素は次の形になる。
+
+```json
+{
+  "decision": "allow",
+  "tokenType": "personal",
+  "userLogin": "limit7412",
+  "authorizedPermissions": null,
+  "rules": {
+    "aud": "urn:pulumi:org:limit7412",
+    "sub": "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master"
+  }
+}
+```
+
+`authorizedPermissions` は組織トークン向けの項目なので、personal では渡さない。
+
+**`GET` が返した Deny をそのまま送り返さない。**
+あれは `sub` が空文字であり、`PATCH` は空の `sub` を弾く
+（`key sub should at least have a strict matching portion`）。
+差し替えるときは Allow だけを並べる。
+並べなかった交換は、どのみち通らない。
 
 fork するなら、この表の `limit7412` と `limit7412/VRCServiceStatusPanel` を自分のものに書き換える。
 ワークフロー側の `organization` と `scope` も同じ値にする。
