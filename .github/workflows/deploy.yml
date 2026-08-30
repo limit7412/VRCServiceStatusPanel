@@ -28,6 +28,15 @@ permissions:
   id-token: write
   contents: read
 
+# スタック名を修飾する組織。pulumi/auth-actions へ渡すものと同じ値にする。
+#
+# 素の "dev" は、そのランナーの既定の組織のスタックとして解決される。
+# 手元では pulumi org set-default で揃っていても、CI の既定は別の組織になりうる。
+# 実際、OIDC で交換したトークンでは stack ls が "limit7412/dev" と修飾して出し、
+# 素の "dev" は no stack named 'dev' found で止まった（#41）。
+env:
+  ORG: limit7412
+
 # 同じスタックへ二つ流さない。
 # Pulumi 側にも排他はあるが、待たせるより手前で弾いたほうが分かりやすい。
 # 走っているものは止めない。途中で切ると state と実物がずれる。
@@ -78,7 +87,7 @@ jobs:
       # Pulumi Cloud へは OIDC で入る。PULUMI_ACCESS_TOKEN を Secrets へ置かない。
       # 無料の Individual で使えるのは personal トークンだけである。
       # organization は個人アカウントでも必須で、値は自分のユーザー名になる。
-      # fork するならこの二つを自分のものに書き換える。
+      # 上の ORG と同じ値である。fork するなら三つとも自分のものに書き換える。
       - name: authenticate to pulumi cloud
         uses: pulumi/auth-actions@v2
         with:
@@ -96,7 +105,7 @@ jobs:
       # このステップは上の二つより後に置く。
       - name: build ytdlp layer zip
         run: |
-          version=$(pulumi -C infra config get --stack "$STACK" ytdlpVersion)
+          version=$(pulumi -C infra config get --stack "$ORG/$STACK" ytdlpVersion)
           if [ -z "$version" ]; then
             echo "ytdlpVersion が未設定である。Pulumi.$STACK.yaml を確かめること" >&2
             exit 1
@@ -110,7 +119,7 @@ jobs:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
 
       - name: pulumi up
-        run: pulumi up --yes --stack "$STACK"
+        run: pulumi up --yes --stack "$ORG/$STACK"
         working-directory: infra
         env:
           STACK: ${{ inputs.stack }}

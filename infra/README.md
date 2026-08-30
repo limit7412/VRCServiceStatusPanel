@@ -567,6 +567,12 @@ CI はトークンを一つも持たずに Pulumi Cloud へ入る。
 AWS 側も OIDC で入る。
 `AWS_*` の取り合いはもう起きないので、`configure-aws-credentials` にはジョブの環境へ普通に書かせてよい。
 
+**スタック名は組織で修飾する。**
+素の `prod` は、そのランナーの既定の組織のスタックとして解決される。
+手元で `pulumi org set-default` を済ませてあっても、CI の既定はそれと違う組織になりうる。
+OIDC で交換したトークンで `pulumi stack ls` を打つと `limit7412/dev` と修飾して出るのに、
+`--stack dev` は `no stack named 'dev' found` で止まった（#41）。
+
 **資格情報を出す前に `npm ci` を済ませる。**
 どちらのアクションも、以降のステップから見える環境変数に資格情報を置く。
 `npm ci` をあとに回すと、依存パッケージのインストールスクリプトからデプロイロールの一時資格情報と `PULUMI_ACCESS_TOKEN` が読める。
@@ -577,6 +583,10 @@ Pulumi CLI を入れる `pulumi/actions` も資格情報を要らないので、
 permissions:
   id-token: write   # OIDC のトークンを発行させる。既定では付かない
   contents: read
+
+# スタック名を修飾する組織。pulumi/auth-actions へ渡すものと同じ値にする
+env:
+  ORG: limit7412
 
 steps:
   - uses: actions/checkout@v7
@@ -627,13 +637,13 @@ steps:
   # このステップは pulumi/actions と auth-actions の後に置く。
   - run: |
       backend/layer/build.sh \
-        "$(pulumi -C infra config get --stack prod ytdlpVersion)" \
+        "$(pulumi -C infra config get --stack "$ORG/prod" ytdlpVersion)" \
         "" backend/ytdlp-layer.zip
     env:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
 
   # スタック名は commit してある Pulumi.<スタック名>.yaml のものにする
-  - run: pulumi up --yes --stack prod
+  - run: pulumi up --yes --stack "$ORG/prod"
     working-directory: infra
     env:
       # 設定は checkout した Pulumi.prod.yaml から読まれる。
