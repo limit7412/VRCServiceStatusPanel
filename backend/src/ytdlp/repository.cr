@@ -1,3 +1,4 @@
+require "file_utils"
 require "json"
 require "log"
 require "./models"
@@ -12,11 +13,18 @@ require "./models"
 # 使う部品だからである（仕様書 3.3）。
 module Ytdlp
   # 検査の結果（仕様書 7.2）。
+  #
+  # 解決できなかったことと、検査そのものが成り立たなかったことを分ける。
+  # 前者は YouTube 側の話で、後者はこちら側の話である。
+  # 同じ扱いにすると、Layer が載っていない状態が何日続いても、
+  # パネルには「少し調子が悪い YouTube」としか出ない。
   enum Outcome
     # 解決できた
     Resolved
-    # 解決できなかった
-    Failed
+    # 解決できなかった。動画が消えた、形式が無い、など
+    Unresolved
+    # 検査そのものが成り立たなかった。起動できない、終わらない、出力が読めない
+    Unavailable
     # bot 検知やサインイン要求で、解決できるかを判定できなかった
     Indeterminate
   end
@@ -37,14 +45,9 @@ module Ytdlp
     QUICKJS = "/opt/bin/qjs"
 
     # /opt は読み取り専用なので、書ける場所へ向ける（仕様書 7.1）。
-    # スタンドアロン版は起動のたびに自身を展開するので、その先も同じである。
-    WRITABLE  = "/tmp"
+    #
+    # キャッシュだけは実行をまたいで使い回す。毎回捨てると、置いた意味がない。
     CACHE_DIR = "/tmp/ytdlp"
-
-    ENVIRONMENT = {
-      "HOME"   => WRITABLE,
-      "TMPDIR" => WRITABLE,
-    }
 
     # 起動から結果までの上限（仕様書 5.2）。
     TIMEOUT = 20.seconds
@@ -84,25 +87,43 @@ module Ytdlp
     end
 
     # 固定動画を解決してみる。例外は外に出さない（仕様書 11.4）。
+    #
+    # 実行ごとに置き場所を作り、終わったら畳む。
+    # スタンドアロン版は起動のたびに自身を TMPDIR へ展開し、途中で止められると
+    # その展開物を残す。毎分それが続けば、ウォームな環境の /tmp が埋まって、
+    # やがて何も検査できなくなる。
     def probe(video_id : String) : Result
+      workspace = File.tempname("ytdlp-run")
+      Dir.mkdir_p(workspace)
+
+      begin
+        run(video_id, workspace)
+      ensure
+        FileUtils.rm_rf(workspace)
+      end
+    end
+
+    private def run(video_id : String, workspace : String) : Result
       stdout = IO::Memory.new
       stderr = IO::Memory.new
 
       process = Process.new(
         @binary,
         arguments(video_id),
-        env: ENVIRONMENT,
+        env: {"HOME" => workspace, "TMPDIR" => workspace},
         output: stdout,
         error: stderr,
       )
 
       status = wait_within(process)
-      return Result.new(Outcome::Failed, "yt-dlp が #{@timeout.total_seconds.to_i} 秒で終わらない") if status.nil?
+      if status.nil?
+        return Result.new(Outcome::Unavailable, "yt-dlp が #{@timeout.total_seconds.to_i} 秒で終わらない")
+      end
       return judge_output(stdout.to_s) if status.success?
 
       judge_error(stderr.to_s)
     rescue error
-      Result.new(Outcome::Failed, "yt-dlp を起動できない（#{error.class.name}）")
+      Result.new(Outcome::Unavailable, "yt-dlp を起動できない（#{error.class.name}）")
     end
 
     # 仕様書 7.1 の引数。
@@ -143,27 +164,22 @@ module Ytdlp
     # プロセスグループを分けて一度に落とす手もあるが、Crystal の Process に
     # その口が無い。/proc から子を辿って集め、下から順に止める。
     private def kill_tree(pid : Int64) : Nil
-      # 止める前に集める。先に親を止めると、辿る手がかりが消える。
-      targets = descendants(pid)
-
-      # 親から止める。先に止めておけば、その先で新しい子が生まれない。
-      kill(pid)
-      targets.each { |target| kill(target) }
-    end
-
-    private def descendants(pid : Int64) : Array(Int64)
-      found = [] of Int64
-      queue = children_of(pid)
+      queue = [pid]
+      seen = [] of Int64
 
       until queue.empty?
         current = queue.shift
-        next if found.includes?(current)
+        next if seen.includes?(current)
 
-        found << current
+        seen << current
+
+        # 子を控えてから止める。
+        # 先に止めると、その子は引き取り手へ移って辿れなくなる。
+        # 逆に、控えてから止めるまでの隙に生まれた子は取りこぼす。
+        # 取り切るにはプロセスグループが要るが、そこへ届く口が無い。
         queue.concat(children_of(current))
+        kill(current)
       end
-
-      found
     end
 
     # Linux が見せている子の一覧。読めなければ空として扱う。
@@ -194,17 +210,24 @@ module Ytdlp
 
     # 終了コード 0 でも、formats が空なら解決できていない（仕様書 7.2）。
     private def judge_output(output : String) : Result
-      return Result.new(Outcome::Failed, "再生できる形式が無い") if Metadata.from_json(output).formats.empty?
+      return Result.new(Outcome::Unresolved, "再生できる形式が無い") if Metadata.from_json(output).formats.empty?
 
       Result.new(Outcome::Resolved)
     rescue
-      Result.new(Outcome::Failed, "yt-dlp の出力が JSON でない")
+      # 終わったのに読めるものが出ていない。動画の話ではなく、検査の話である。
+      Result.new(Outcome::Unavailable, "yt-dlp の出力が JSON でない")
     end
 
+    # 終了コードが 0 でない失敗を分ける。
+    #
+    # bot 検知だけを分け、残りは解決できなかったものとして扱う。
+    # yt-dlp 自身の不調（引数の取り違え、QuickJS の欠落）もここへ落ちるが、
+    # stderr の文面で見分けようとすると、上流の言い回しが変わるたびに崩れる。
+    # 見分けが要るほど頻れば、そのとき文言を足す。
     private def judge_error(message : String) : Result
       return Result.new(Outcome::Indeterminate, "YouTube が bot 検知を返した") if bot_detection?(message)
 
-      Result.new(Outcome::Failed, summarize(message))
+      Result.new(Outcome::Unresolved, summarize(message))
     end
 
     private def bot_detection?(message : String) : Bool

@@ -19,6 +19,7 @@ private def with_fake_ytdlp(
   out_path = "#{base}.out"
   err_path = "#{base}.err"
   args_path = "#{base}.args"
+  tmpdir_path = "#{base}.tmpdir"
   script = "#{base}.sh"
 
   File.write(out_path, stdout)
@@ -26,6 +27,9 @@ private def with_fake_ytdlp(
   fake = String.build do |io|
     io << "#!/bin/sh\n"
     io << %(printf '%s\\n' "$@" > #{args_path}\n)
+    # 渡された置き場所を控え、そこへ展開したふりをする。
+    io << %(printf '%s' "$TMPDIR" > #{tmpdir_path}\n)
+    io << %(mkdir -p "$TMPDIR/_MEI0000"\n)
     io << "sleep #{sleep_seconds}\n" if sleep_seconds
     io << "cat #{out_path}\n"
     io << "cat #{err_path} >&2\n"
@@ -36,9 +40,9 @@ private def with_fake_ytdlp(
   File.chmod(script, 0o755)
 
   begin
-    yield script, args_path
+    yield script, args_path, tmpdir_path
   ensure
-    [out_path, err_path, args_path, script].each { |path| File.delete?(path) }
+    [out_path, err_path, args_path, tmpdir_path, script].each { |path| File.delete?(path) }
   end
 end
 
@@ -49,10 +53,13 @@ end
 private def with_fake_ytdlp_spawning_child(&)
   base = File.tempname("ytdlp-fake")
   child_path = "#{base}.child"
+  tmpdir_path = "#{base}.tmpdir"
   script = "#{base}.sh"
 
   fake = String.build do |io|
     io << "#!/bin/sh\n"
+    io << %(printf '%s' "$TMPDIR" > #{tmpdir_path}\n)
+    io << %(mkdir -p "$TMPDIR/_MEI0000"\n)
     io << "sleep 30 &\n"
     io << "echo $! > #{child_path}\n"
     io << "sleep 30\n"
@@ -62,9 +69,9 @@ private def with_fake_ytdlp_spawning_child(&)
   File.chmod(script, 0o755)
 
   begin
-    yield script, child_path
+    yield script, child_path, tmpdir_path
   ensure
-    [child_path, script].each { |path| File.delete?(path) }
+    [child_path, tmpdir_path, script].each { |path| File.delete?(path) }
   end
 end
 
@@ -99,7 +106,7 @@ end
 describe Ytdlp::Repository do
   describe "#probe" do
     it "解決できれば成功とする" do
-      with_fake_ytdlp(stdout: metadata_json) do |binary, _|
+      with_fake_ytdlp(stdout: metadata_json) do |binary, _, _|
         result = Ytdlp::Repository.new(binary: binary).probe("abc")
 
         result.outcome.should eq Ytdlp::Outcome::Resolved
@@ -108,7 +115,7 @@ describe Ytdlp::Repository do
 
     # 仕様書 7.1 の引数をそのまま渡す。
     it "仕様どおりの引数で起動する" do
-      with_fake_ytdlp(stdout: metadata_json) do |binary, args_path|
+      with_fake_ytdlp(stdout: metadata_json) do |binary, args_path, _|
         Ytdlp::Repository.new(binary: binary, quickjs: "/opt/bin/qjs").probe("abc")
 
         args = File.read(args_path).lines.map(&.strip)
@@ -123,19 +130,20 @@ describe Ytdlp::Repository do
 
     # 終了コードが 0 でも、再生できる形式が無ければ解決できていない（仕様書 7.2）。
     it "formats が空なら解決できなかったものとする" do
-      with_fake_ytdlp(stdout: metadata_json(formats: 0)) do |binary, _|
+      with_fake_ytdlp(stdout: metadata_json(formats: 0)) do |binary, _, _|
         result = Ytdlp::Repository.new(binary: binary).probe("abc")
 
-        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.outcome.should eq Ytdlp::Outcome::Unresolved
         result.note.should eq "再生できる形式が無い"
       end
     end
 
     it "出力が JSON でなければ解決できなかったものとする" do
-      with_fake_ytdlp(stdout: "not json") do |binary, _|
+      with_fake_ytdlp(stdout: "not json") do |binary, _, _|
         result = Ytdlp::Repository.new(binary: binary).probe("abc")
 
-        result.outcome.should eq Ytdlp::Outcome::Failed
+        # 終わったのに読めるものが出ていない。動画の話ではなく、検査の話である。
+        result.outcome.should eq Ytdlp::Outcome::Unavailable
         result.note.should eq "yt-dlp の出力が JSON でない"
       end
     end
@@ -145,7 +153,7 @@ describe Ytdlp::Repository do
     it "bot 検知の文言があれば判定不能とする" do
       message = "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser"
 
-      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _|
+      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _, _|
         result = Ytdlp::Repository.new(binary: binary).probe("abc")
 
         result.outcome.should eq Ytdlp::Outcome::Indeterminate
@@ -157,43 +165,67 @@ describe Ytdlp::Repository do
     it "年齢制限は判定不能にしない" do
       message = "ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users."
 
-      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _|
+      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _, _|
         result = Ytdlp::Repository.new(binary: binary).probe("abc")
 
-        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.outcome.should eq Ytdlp::Outcome::Unresolved
       end
     end
 
     it "それ以外の失敗は理由を一行で残す" do
       message = "ERROR: [youtube] abc: Video unavailable\n  Traceback...\n"
 
-      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _|
+      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _, _|
         result = Ytdlp::Repository.new(binary: binary).probe("abc")
 
-        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.outcome.should eq Ytdlp::Outcome::Unresolved
         result.note.should eq "ERROR: [youtube] abc: Video unavailable"
       end
     end
 
     # 一つの取得元が居座ると、その実行では他のサービスも更新できない。
     it "上限を越えたら止める" do
-      with_fake_ytdlp(stdout: metadata_json, sleep_seconds: "10") do |binary, _|
+      with_fake_ytdlp(stdout: metadata_json, sleep_seconds: "10") do |binary, _, _|
         started = Time.instant
         result = Ytdlp::Repository.new(binary: binary, timeout: 200.milliseconds).probe("abc")
 
-        result.outcome.should eq Ytdlp::Outcome::Failed
+        # 動画を解決できなかったのではなく、検査が成り立たなかった。
+        result.outcome.should eq Ytdlp::Outcome::Unavailable
         result.note.should contain("終わらない")
         # 止めるまでを待つが、眠っている十秒には付き合わない。
         (Time.instant - started).should be < 5.seconds
       end
     end
 
+    # スタンドアロン版は起動のたびに自身を TMPDIR へ展開する。
+    # 実行ごとの置き場所を渡して畳まないと、ウォームな環境の /tmp が埋まる。
+    it "実行ごとの置き場所を畳む" do
+      with_fake_ytdlp(stdout: metadata_json) do |binary, _, tmpdir_path|
+        Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        workspace = File.read(tmpdir_path)
+        workspace.should_not eq ""
+        Dir.exists?(workspace).should be_false
+      end
+    end
+
+    # 途中で止めると、展開物を片付ける手続きも一緒に消える。畳むのはこちらの仕事になる。
+    it "止めたときも置き場所を畳む" do
+      with_fake_ytdlp_spawning_child do |binary, _, tmpdir_path|
+        Ytdlp::Repository.new(binary: binary, timeout: 300.milliseconds).probe("abc")
+
+        workspace = File.read(tmpdir_path)
+        workspace.should_not eq ""
+        Dir.exists?(workspace).should be_false
+      end
+    end
+
     # 親だけを止めると、子はパイプを握ったまま残り、毎分の実行で溜まっていく。
     it "止めるときは子まで落とす" do
-      with_fake_ytdlp_spawning_child do |binary, child_path|
+      with_fake_ytdlp_spawning_child do |binary, child_path, _|
         result = Ytdlp::Repository.new(binary: binary, timeout: 300.milliseconds).probe("abc")
 
-        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.outcome.should eq Ytdlp::Outcome::Unavailable
 
         child = File.read(child_path).strip.to_i64
         stopped?(child).should be_true
@@ -204,7 +236,7 @@ describe Ytdlp::Repository do
     it "実行ファイルが無くても例外を外に出さない" do
       result = Ytdlp::Repository.new(binary: "/nonexistent/yt-dlp").probe("abc")
 
-      result.outcome.should eq Ytdlp::Outcome::Failed
+      result.outcome.should eq Ytdlp::Outcome::Unavailable
       result.note.should contain("起動できない")
     end
   end

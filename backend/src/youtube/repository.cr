@@ -79,35 +79,38 @@ module Youtube
     private def judge(result : Ytdlp::Result, latency : Time::Span) : Status::Observation
       case result.outcome
       in Ytdlp::Outcome::Resolved
-        Status::Observation.new(
-          service_id: service_id,
-          outcome: Status::Outcome::Success,
-          checked_at: Time.utc,
-          latency: latency,
-        )
-      in Ytdlp::Outcome::Failed
+        observation(Status::Outcome::Success, latency)
+      in Ytdlp::Outcome::Unresolved
         # サイトは動いているのに解決できない。
         # 再生はできないが YouTube が落ちたわけではないので、
         # 失敗とは数えず一段の低下にとどめる。
-        Status::Observation.new(
-          service_id: service_id,
-          outcome: Status::Outcome::Success,
-          checked_at: Time.utc,
-          latency: latency,
-          note: result.note,
-          partial: true,
-        )
+        observation(Status::Outcome::Success, latency, note: result.note, partial: true)
+      in Ytdlp::Outcome::Unavailable
+        # 検査そのものが成り立っていない。
+        # 解決できなかったのと同じ顔をさせると、Layer が載っていない状態が
+        # 何日続いても「少し調子が悪い YouTube」としか出ない。
+        observation(Status::Outcome::Indeterminate, latency, note: result.note)
       in Ytdlp::Outcome::Indeterminate
         # AWS の IP からの取得は bot 検知を受けやすく、この誤判定は
         # 構造的に避けられない（仕様書 7.4）。赤くせず判定不能へ逃がす。
-        Status::Observation.new(
-          service_id: service_id,
-          outcome: Status::Outcome::Indeterminate,
-          checked_at: Time.utc,
-          latency: latency,
-          note: result.note,
-        )
+        observation(Status::Outcome::Indeterminate, latency, note: result.note)
       end
+    end
+
+    private def observation(
+      outcome : Status::Outcome,
+      latency : Time::Span,
+      note : String = "",
+      partial : Bool = false,
+    ) : Status::Observation
+      Status::Observation.new(
+        service_id: service_id,
+        outcome: outcome,
+        checked_at: Time.utc,
+        latency: latency,
+        note: note,
+        partial: partial,
+      )
     end
 
     # 動画が解決できたか。題が読めれば解決できている。

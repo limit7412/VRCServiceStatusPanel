@@ -72,7 +72,7 @@ describe Youtube::Repository do
   # サイトは動いているのに解決できない。
   # 再生はできないが YouTube が落ちたわけではない（仕様書 3.3）。
   it "解決できなければ一段下げる" do
-    ytdlp = FakeYtdlp.new(Ytdlp::Result.new(Ytdlp::Outcome::Failed, "再生できる形式が無い"))
+    ytdlp = FakeYtdlp.new(Ytdlp::Result.new(Ytdlp::Outcome::Unresolved, "再生できる形式が無い"))
 
     with_youtube(body: oembed_json, ytdlp: ytdlp) do |source, _|
       observation = source.observe
@@ -80,6 +80,22 @@ describe Youtube::Repository do
       observation.outcome.should eq Status::Outcome::Success
       observation.partial?.should be_true
       observation.note.should eq "再生できる形式が無い"
+    end
+  end
+
+  # 解決できなかったのと同じ顔をさせると、Layer が載っていない状態が
+  # 何日続いても「少し調子が悪い YouTube」としか出ない。
+  it "検査そのものが成り立たなければ判定不能とする" do
+    ytdlp = FakeYtdlp.new(
+      Ytdlp::Result.new(Ytdlp::Outcome::Unavailable, "yt-dlp を起動できない（File::NotFoundError）")
+    )
+
+    with_youtube(body: oembed_json, ytdlp: ytdlp) do |source, _|
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Indeterminate
+      observation.partial?.should be_false
+      observation.note.should contain("起動できない")
     end
   end
 
