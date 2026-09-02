@@ -8,6 +8,7 @@ require "./status/usecase"
 require "./statuspage/repository"
 require "./steam/repository"
 require "./youtube/repository"
+require "./ytdlp/repository"
 
 # 構成ルート（仕様書 11.2、11.7）。
 # コールドスタート時に一度だけ環境変数を解決し、依存を組み立てる。
@@ -50,7 +51,7 @@ sources = [
     # 上流が名称を変えても、そのサービスの level までは巻き添えにならない。
     component_names: ["API", "Auth", "Websocket", "Website"],
   ),
-  Youtube::Repository.new(config.youtube_probe_video_id),
+  Youtube::Repository.new(config.youtube_probe_video_id, Ytdlp::Repository.new),
   Steam::Repository.new,
   Booth::Repository.new(config.booth_probe_item_id),
   Statuspage::Repository.new(

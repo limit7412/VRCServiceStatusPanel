@@ -1,0 +1,151 @@
+require "../spec_helper"
+
+# 決めた出力と終了コードを返す偽の実行ファイルを置き、その場所を渡す。
+#
+# 本物の yt-dlp は Layer にしか無く、CI にも手元にも無い。
+# ここで確かめたいのは起動と後始末と出力の分類であって、
+# yt-dlp が YouTube を解決できるかではない。
+#
+# 出力はファイルへ書いてから読ませる。bot 検知の文言には引用符が入るので、
+# スクリプトへ直に埋め込むと、その引用符で壊れる。
+private def with_fake_ytdlp(
+  stdout : String = "",
+  stderr : String = "",
+  exit_code : Int32 = 0,
+  sleep_seconds : String? = nil,
+  &
+)
+  base = File.tempname("ytdlp-fake")
+  out_path = "#{base}.out"
+  err_path = "#{base}.err"
+  args_path = "#{base}.args"
+  script = "#{base}.sh"
+
+  File.write(out_path, stdout)
+  File.write(err_path, stderr)
+  fake = String.build do |io|
+    io << "#!/bin/sh\n"
+    io << %(printf '%s\\n' "$@" > #{args_path}\n)
+    io << "sleep #{sleep_seconds}\n" if sleep_seconds
+    io << "cat #{out_path}\n"
+    io << "cat #{err_path} >&2\n"
+    io << "exit #{exit_code}\n"
+  end
+
+  File.write(script, fake)
+  File.chmod(script, 0o755)
+
+  begin
+    yield script, args_path
+  ensure
+    [out_path, err_path, args_path, script].each { |path| File.delete?(path) }
+  end
+end
+
+private def metadata_json(formats : Int32 = 1) : String
+  entries = Array.new(formats) { |index| %({"format_id": "#{index}"}) }
+
+  %({"id": "abc", "title": "固定動画", "formats": [#{entries.join(",")}]})
+end
+
+describe Ytdlp::Repository do
+  describe "#probe" do
+    it "解決できれば成功とする" do
+      with_fake_ytdlp(stdout: metadata_json) do |binary, _|
+        result = Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Resolved
+      end
+    end
+
+    # 仕様書 7.1 の引数をそのまま渡す。
+    it "仕様どおりの引数で起動する" do
+      with_fake_ytdlp(stdout: metadata_json) do |binary, args_path|
+        Ytdlp::Repository.new(binary: binary, quickjs: "/opt/bin/qjs").probe("abc")
+
+        args = File.read(args_path).lines.map(&.strip)
+        args.should contain "--simulate"
+        args.should contain "-J"
+        args.should contain "--no-warnings"
+        args.should contain "quickjs:/opt/bin/qjs"
+        args.should contain Ytdlp::Repository::CACHE_DIR
+        args.should contain "https://www.youtube.com/watch?v=abc"
+      end
+    end
+
+    # 終了コードが 0 でも、再生できる形式が無ければ解決できていない（仕様書 7.2）。
+    it "formats が空なら解決できなかったものとする" do
+      with_fake_ytdlp(stdout: metadata_json(formats: 0)) do |binary, _|
+        result = Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.note.should eq "再生できる形式が無い"
+      end
+    end
+
+    it "出力が JSON でなければ解決できなかったものとする" do
+      with_fake_ytdlp(stdout: "not json") do |binary, _|
+        result = Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.note.should eq "yt-dlp の出力が JSON でない"
+      end
+    end
+
+    # AWS の IP からの取得は bot 検知を受けやすい（仕様書 7.4）。
+    # 赤くせず判定不能へ逃がす。
+    it "bot 検知の文言があれば判定不能とする" do
+      message = "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser"
+
+      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _|
+        result = Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Indeterminate
+      end
+    end
+
+    # 年齢制限は YouTube の障害ではなく、固定動画の設定が変わったことを表す。
+    # 判定不能へ逃がすと、直すべきものが見えなくなる。
+    it "年齢制限は判定不能にしない" do
+      message = "ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users."
+
+      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _|
+        result = Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Failed
+      end
+    end
+
+    it "それ以外の失敗は理由を一行で残す" do
+      message = "ERROR: [youtube] abc: Video unavailable\n  Traceback...\n"
+
+      with_fake_ytdlp(stderr: message, exit_code: 1) do |binary, _|
+        result = Ytdlp::Repository.new(binary: binary).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.note.should eq "ERROR: [youtube] abc: Video unavailable"
+      end
+    end
+
+    # 一つの取得元が居座ると、その実行では他のサービスも更新できない。
+    it "上限を越えたら止める" do
+      with_fake_ytdlp(stdout: metadata_json, sleep_seconds: "10") do |binary, _|
+        started = Time.instant
+        result = Ytdlp::Repository.new(binary: binary, timeout: 200.milliseconds).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Failed
+        result.note.should contain("終わらない")
+        # 止めるまでを待つが、眠っている十秒には付き合わない。
+        (Time.instant - started).should be < 5.seconds
+      end
+    end
+
+    # Layer が載っていない、名前が変わった、といったときにここへ来る。
+    it "実行ファイルが無くても例外を外に出さない" do
+      result = Ytdlp::Repository.new(binary: "/nonexistent/yt-dlp").probe("abc")
+
+      result.outcome.should eq Ytdlp::Outcome::Failed
+      result.note.should contain("起動できない")
+    end
+  end
+end
