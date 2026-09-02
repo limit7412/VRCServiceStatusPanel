@@ -78,6 +78,9 @@ module Runtime
 
     # 名前が `_HANDLER` と一致したときだけ、起動を受けては block へ渡す。
     #
+    # block には起動の中身と request id を渡す。
+    # 後者はアラートの本文に入る（仕様書 11.7）。使わない block は受けなくてよい。
+    #
     # block の例外はその起動の失敗として報告し、ループは続ける。
     # 一回の失敗でプロセスを終わらせると、次の 60 秒まで何も更新されない。
     def handler(name : String, &) : Nil
@@ -104,7 +107,7 @@ module Runtime
         end
 
         begin
-          body = yield JSON.parse(response.body)
+          body = yield JSON.parse(response.body), request_id
           post(client, "invocation/#{request_id}/response", body.to_json)
         rescue ex
           Log.error(exception: ex) { "起動の処理に失敗した request_id=#{request_id}" }
