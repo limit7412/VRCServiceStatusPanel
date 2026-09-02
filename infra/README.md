@@ -895,17 +895,25 @@ AWS の OIDC プロバイダを Pulumi に載せていないのと同じ形に�
 足すまでは、アラームが鳴っても誰にも届かない。
 
 ```
-aws sns subscribe \
-  --topic-arn "$(pulumi stack output alertTopicArn)" \
+region="$(pulumi config get aws:region)"
+topic="$(pulumi stack output alertTopicArn)"
+
+aws sns subscribe --region "$region" \
+  --topic-arn "$topic" \
   --protocol email --notification-endpoint <アドレス>
 ```
+
+**`--region` は省かない。**
+リージョンを固定しているのは Pulumi の AWS プロバイダだけで（`src/providers.ts`）、AWS CLI は自分の設定と環境変数から選ぶ。
+CLI の既定がスタックと違えば、`pulumi up` が通っていても、この購読は別のリージョンへ向かって落ちる。
+下のアラームの二つは名前しか渡さないので、なおさら効く。
 
 送ったあと、AWS からそのアドレスへ確認のメールが届く。
 中のリンクを開くまで購読は `PendingConfirmation` のままで、その間は何も届かない。
 
 ```
-aws sns list-subscriptions-by-topic \
-  --topic-arn "$(pulumi stack output alertTopicArn)" \
+aws sns list-subscriptions-by-topic --region "$region" \
+  --topic-arn "$topic" \
   --query 'Subscriptions[].[Protocol,Endpoint,SubscriptionArn]' --output table
 ```
 
@@ -920,10 +928,10 @@ SNS へ送られるのは状態が変わった瞬間だけなので、そのあ�
 ```
 alarm="$(pulumi stack output staleAlarmName)"
 
-aws cloudwatch describe-alarms --alarm-names "$alarm" \
+aws cloudwatch describe-alarms --region "$region" --alarm-names "$alarm" \
   --query 'MetricAlarms[0].StateValue' --output text
 
-aws cloudwatch set-alarm-state --alarm-name "$alarm" \
+aws cloudwatch set-alarm-state --region "$region" --alarm-name "$alarm" \
   --state-value OK --state-reason "届け先を足した"
 ```
 
