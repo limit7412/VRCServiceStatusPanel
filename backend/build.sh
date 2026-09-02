@@ -39,7 +39,12 @@ done
 # libxml2 と xz はそこに足したものである。awscr-s3 が S3 の応答を読むのに
 # Crystal の XML を使い、それが libxml2 を引く。alpine の libxml2 は
 # lzma 付きで作られているので、静的リンクには liblzma.a も要る。
-# -llzma を自分で渡すのは、Crystal が並べるのが -lxml2 -lz までだからである。
+#
+# その liblzma を --whole-archive で丸ごと取り込ませている。
+# --link-flags に置いたものは cc の引数で -lxml2 より前へ並ぶが、alpine の
+# GNU ld は一度読み終えたアーカイブへ戻らない。-llzma をそのまま渡しても、
+# あとから来る libxml2.a の xzlib.o が lzma_code を見つけられずに終わる。
+# 丸ごと取り込ませれば、順番によらず解決する。
 #
 # chmod と chown はコンテナ内(root)で実行する。
 # Linux ではコンテナが root として bind mount 上へ書くため、生成物が root 所有に
@@ -52,7 +57,9 @@ docker run --rm --platform linux/arm64 \
     sh -c "apk add --no-cache openssl-libs-static zlib-static libevent-static \
         libxml2-static xz-static \
         && shards install --production \
-        && crystal build --release --link-flags '-static -llzma' -o bootstrap src/main.cr \
+        && crystal build --release \
+            --link-flags '-static -Wl,--whole-archive -llzma -Wl,--no-whole-archive' \
+            -o bootstrap src/main.cr \
         && chmod +x bootstrap \
         && chown $(id -u):$(id -g) bootstrap"
 
