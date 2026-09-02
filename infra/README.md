@@ -99,6 +99,8 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
+| 止まったことを知らせる先（`qazx7412-vrc-service-status-panel-<スタック名>-alerts`） | `aws.sns.Topic` | 9 |
+| 5 分止まったら鳴るアラーム | `aws.cloudwatch.MetricAlarm` | 9 |
 
 OIDC プロバイダ、デプロイロール、権限境界はここに無い。
 CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
@@ -108,6 +110,31 @@ CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 
 カスタムドメインと Cache Rules は作らない。
 理由はどちらも下の「手で行う作業」にある。
+
+### 止まったことを知らせる経路
+
+通知の経路は二つある。どちらへ届くかで、何が起きたかが分かれる。
+
+| 経路 | 送る主体 | 何を知らせるか |
+| --- | --- | --- |
+| `ALERT_WEBHOOK_URL` | 関数自身（`backend/src/error/usecase.cr`） | `refresh` が例外を出した |
+| SNS のトピック | CloudWatch のアラーム | 5 分のあいだ一度も配信まで終えていない |
+
+前者は関数が上がっていることが前提である。
+Layer が壊れて `bootstrap` が起動しない、Scheduler が止まる、といった場合は何も送られない。
+止まったことを知らせるには、外から見ている誰かが要る。
+
+後者の届け先を webhook にしないのも同じ理由である。
+SNS から webhook へ渡すには転送する関数が要り、その関数は見張る相手と同じ足場に乗る。
+メールなら AWS の中だけで完結する。
+
+アラームは「5 分間の `RefreshSuccess` の合計が 1 未満」で鳴る。
+欠測を異常として扱っている（`treatMissingData: "breaching"`）。
+成功の行は成功したときにしか出ないので、関数が一度も上がっていなければ 0 が並ぶのではなくデータ点そのものが無く、既定のままでは鳴らずに `INSUFFICIENT_DATA` で止まる。
+
+**デプロイした直後は鳴る。**
+まだ一度も成功していないので、正しい振る舞いである。
+最初の実行が配信まで終えれば戻る。
 
 ### R2 のデータ用トークンの権限
 
@@ -849,6 +876,41 @@ Pulumi に載せていないのは、ゾーンに一つしか置けない共有�
 スタックを増やすたびに取り合いになり、`pulumi destroy` の射程に入れると、
 片方のスタックを畳んだだけでもう片方の配信のキャッシュ設定まで消える。
 AWS の OIDC プロバイダを Pulumi に載せていないのと同じ形にしてある（`docs/aws-oidc.md`）。
+
+**SNS のトピックに届け先を足す。**
+`pulumi up` が作るのはトピックとアラームだけで、届け先は入っていない。
+足すまでは、アラームが鳴っても誰にも届かない。
+
+```
+aws sns subscribe \
+  --topic-arn "$(pulumi stack output alertTopicArn)" \
+  --protocol email --notification-endpoint <アドレス>
+```
+
+送ったあと、AWS からそのアドレスへ確認のメールが届く。
+中のリンクを開くまで購読は `PendingConfirmation` のままで、その間は何も届かない。
+
+```
+aws sns list-subscriptions-by-topic \
+  --topic-arn "$(pulumi stack output alertTopicArn)" \
+  --query 'Subscriptions[].[Protocol,Endpoint,SubscriptionArn]' --output table
+```
+
+`SubscriptionArn` が `PendingConfirmation` のままなら、まだ確認していない。
+
+**届け先を設定に持たせていないのは、その値が commit されるためである。**
+このリポジトリは public なので（仕様書 9）、メールアドレスを設定へ置けばそのまま公開される。
+secret にすれば暗号文になるが、そうすると値が Output になり、
+「設定してあれば購読を作る」という条件そのものが書けなくなる。
+
+手作業が増えるわけでもない。
+上のとおり、確認のリンクを開くところはどのみち人の手が要る。
+Chatbot 経由の Slack のように、メール以外へ届けたい場合の余地も残る。
+
+**デプロイロールに SNS とアラームの権限を足す。**
+CI からデプロイする場合だけ要る。
+ロールは Pulumi の外にあり、CLI で作ってある（`docs/aws-oidc.md`）。
+`Alerts` と `Alarms` の二つの Sid が入っていないと、最初の `sns:CreateTopic` で止まる。
 
 ## 確かめ方
 

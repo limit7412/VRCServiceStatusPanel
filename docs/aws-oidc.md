@@ -168,6 +168,8 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 | `LogGroups` | ロググループの作成、削除、保持期間 |
 | `DescribeLogGroups` | 一覧。リソース単位で絞れない |
 | `Schedules` | EventBridge Scheduler の作成、削除、更新 |
+| `Alerts` | 止まったことを知らせる SNS のトピック |
+| `Alarms` | CloudWatch のアラームの作成、削除、読み取り |
 | `DenySelfEscalation` | このロール自身の権限を書き換える操作を塞ぐ |
 
 読み取りを `lambda:Get*` と `lambda:List*` でまとめてあるのは、Pulumi が指定していない
@@ -183,6 +185,12 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 緩くしても昇格には繋がらない。
 境界の無いロールは上の条件で作れないため、ここへ届く相手はどれも境界付きであり、
 信頼先を書き換えても上限は変わらない。
+
+`Alerts` に購読の操作は入れていない。
+トピックの届け先は Pulumi が持たず、手で足すためである（`infra/README.md` の「手で行う作業」）。
+
+`Alarms` の `cloudwatch:DescribeAlarms` はリソース単位で絞ってある。
+[複合アラーム](https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_DescribeAlarms.html)を読むには `*` に広げた権限が要るが、このプロジェクトが作るのはメトリクスアラームだけである。
 
 `DenySelfEscalation` があるので、**このロール自身の権限は CI から変えられない。**
 変えるときは手元から CLI で行う。
@@ -323,6 +331,33 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
         "scheduler:UntagResource"
       ],
       "Resource": "arn:aws:scheduler:ap-northeast-1:<アカウントID>:schedule/default/qazx7412-vrc-service-status-panel-*"
+    },
+    {
+      "Sid": "Alerts",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:TagResource",
+        "sns:UntagResource"
+      ],
+      "Resource": "arn:aws:sns:ap-northeast-1:<アカウントID>:qazx7412-vrc-service-status-panel-*"
+    },
+    {
+      "Sid": "Alarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:ap-northeast-1:<アカウントID>:alarm:qazx7412-vrc-service-status-panel-*"
     },
     {
       "Sid": "DenySelfEscalation",
