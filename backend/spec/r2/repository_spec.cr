@@ -1,26 +1,13 @@
-require "http/server"
 require "../spec_helper"
 
-# 受け取った要求を控えておく試験用のサーバーを立て、その URL を endpoint に渡す。
-# 署名は検証しない。鍵が正しいかは実機の R2 が答えることで、ここで見るのは
+# 受け取った要求を控えておく。署名は検証しない。
+# 鍵が正しいかは実機の R2 が答えることで、ここで見るのは
 # どのバケットのどのキーへ、どんなヘッダと本文を送ったかである。
 private record Received,
   method : String,
   path : String,
   headers : HTTP::Headers,
   body : String
-
-private def with_server(handler : HTTP::Server::Context -> Nil, &)
-  server = HTTP::Server.new { |context| handler.call(context) }
-  address = server.bind_unused_port("127.0.0.1")
-  spawn { server.listen }
-
-  begin
-    yield "http://127.0.0.1:#{address.port}"
-  ensure
-    server.close
-  end
-end
 
 private def recording_server(status : HTTP::Status = HTTP::Status::OK, body : String = "", &)
   received = [] of Received
@@ -40,7 +27,7 @@ private def recording_server(status : HTTP::Status = HTTP::Status::OK, body : St
     nil
   end
 
-  with_server(handler) do |endpoint|
+  with_stub_server(handler) do |endpoint|
     yield endpoint, received
   end
 end

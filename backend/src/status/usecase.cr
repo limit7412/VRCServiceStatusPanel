@@ -202,13 +202,11 @@ module Status
       history : History,
     ) : ServiceStatus
       latency = observation.latency
+      slow = !latency.nil? && latency >= LATENCY_THRESHOLD
 
       build(
         source,
-        level: Usecase.level_for_synthetic(
-          history,
-          latency_exceeded: !latency.nil? && latency >= LATENCY_THRESHOLD,
-        ),
+        level: Usecase.level_for_synthetic(history, degraded: observation.partial? || slow),
         note: observation.note,
         checked_at: observation.checked_at,
         components: observation.components,
@@ -245,15 +243,19 @@ module Status
     # | 二回以上失敗                                       | 2     |
     # | bot 検知に相当する応答                             | 3     |
     #
+    # degraded は、届いたが一段下げる理由があることを表す。
+    # レイテンシの超過と、経路の一部が落ちていること（Observation#partial?）を
+    # まとめて受ける。表の二行目はどちらも同じ扱いである。
+    #
     # 判定不能を先に見る。bot 検知は失敗とは別の扱いで、赤くしない。
     # 履歴が空のときは今回の結果だけで暫定判定する（仕様書 5.2）。
-    def self.level_for_synthetic(history : History, latency_exceeded : Bool = false) : Level
+    def self.level_for_synthetic(history : History, degraded : Bool = false) : Level
       return Level::Unknown if history.indeterminate?
 
       failures = history.failure_count
       return Level::MajorOutage if failures >= 2
       return Level::Degraded if failures == 1
-      return Level::Degraded if latency_exceeded
+      return Level::Degraded if degraded
 
       Level::Operational
     end

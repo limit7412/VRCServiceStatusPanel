@@ -1,27 +1,4 @@
-require "http/server"
 require "../spec_helper"
-
-# 応答を一つずつ返す試験用のサーバーを立て、その URL を渡す。
-# 上流を叩かずに、条件付き GET と失敗時の扱いを確かめるためのものである。
-private def with_server(handler : HTTP::Server::Context -> Nil, &)
-  server = HTTP::Server.new { |context| handler.call(context) }
-  address = server.bind_unused_port("127.0.0.1")
-  spawn { server.listen }
-
-  begin
-    yield "http://127.0.0.1:#{address.port}"
-  ensure
-    server.close
-  end
-end
-
-# 誰も待ち受けていない番号を得る。接続そのものが失敗する場合を試すために使う。
-private def unused_port : Int32
-  server = HTTP::Server.new { }
-  address = server.bind_unused_port("127.0.0.1")
-  server.close
-  address.port
-end
 
 private def summary_json : String
   <<-JSON
@@ -67,7 +44,7 @@ describe Statuspage::Repository do
       nil
     end
 
-    with_server(handler) do |page_url|
+    with_stub_server(handler) do |page_url|
       observation = repository(page_url).observe
 
       observation.outcome.should eq Status::Outcome::Success
@@ -100,7 +77,7 @@ describe Statuspage::Repository do
       nil
     end
 
-    with_server(handler) do |page_url|
+    with_stub_server(handler) do |page_url|
       source = repository(page_url)
       source.observe
 
@@ -119,7 +96,7 @@ describe Statuspage::Repository do
       nil
     end
 
-    with_server(handler) do |page_url|
+    with_stub_server(handler) do |page_url|
       observation = repository(page_url).observe
 
       observation.outcome.should eq Status::Outcome::Failure
@@ -135,7 +112,7 @@ describe Statuspage::Repository do
       nil
     end
 
-    with_server(handler) do |page_url|
+    with_stub_server(handler) do |page_url|
       repository(page_url).observe.outcome.should eq Status::Outcome::Failure
     end
   end

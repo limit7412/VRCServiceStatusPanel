@@ -39,6 +39,56 @@ module Upstream
     end
   end
 
+  # 複数の URL を並べて GET する（仕様書 5.2）。
+  #
+  # 合成監視は一つのサービスに二つの経路を持つ（仕様書 3.3）。
+  # 順に叩くと待ち時間が足し算になり、どちらも上限まで待てば 10 秒を使う。
+  # 一回の実行に与えられた時間を、一つのサービスで使い切ることになる。
+  #
+  # 例外は握らずそのまま返す。届かなかったことと 500 が返ったことでは
+  # 重みが違い、その違いをどう扱うかは経路ごとに決まる。
+  def self.get_all(urls : Array(String)) : Array(HTTP::Client::Response | Exception)
+    channel = Channel({Int32, HTTP::Client::Response | Exception}).new(urls.size)
+
+    urls.each_with_index do |url, index|
+      spawn do
+        result = begin
+          get(url)
+        rescue error
+          error
+        end
+
+        channel.send({index, result})
+      end
+    end
+
+    results = {} of Int32 => HTTP::Client::Response | Exception
+    urls.size.times do
+      index, result = channel.receive
+      results[index] = result
+    end
+
+    # 渡した順に戻す。届く順で並べると、経路と結果の対応が実行ごとに変わる。
+    Array.new(urls.size) do |index|
+      results[index]? || Exception.new("結果が返らなかった")
+    end
+  end
+
+  # 200 が返ったか。合成監視はこれを「届いた」の定めとする（仕様書 3.3）。
+  def self.ok?(result : HTTP::Client::Response | Exception) : Bool
+    result.is_a?(HTTP::Client::Response) && result.status_code == 200
+  end
+
+  # 届かなかった理由を一行にする。note とログに出す。
+  def self.reason(result : HTTP::Client::Response | Exception) : String
+    case result
+    in HTTP::Client::Response
+      "HTTP #{result.status_code}"
+    in Exception
+      result.message || result.class.name
+    end
+  end
+
   # URI からパス以降を取り出す。パスが空のときは "/" にする。
   private def self.request_target(uri : URI) : String
     target = uri.request_target
