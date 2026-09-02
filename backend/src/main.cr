@@ -1,3 +1,4 @@
+require "./booth/repository"
 require "./config"
 require "./r2/repository"
 require "./runtime/lambda"
@@ -5,6 +6,8 @@ require "./status/models"
 require "./status/repository"
 require "./status/usecase"
 require "./statuspage/repository"
+require "./steam/repository"
+require "./youtube/repository"
 
 # 構成ルート（仕様書 11.2、11.7）。
 # コールドスタート時に一度だけ環境変数を解決し、依存を組み立てる。
@@ -32,6 +35,9 @@ Log.info { "起動した handler=#{Runtime::Lambda.handler_name} #{config.to_log
 # この並びが、そのまま配信 JSON の services の並びになる（仕様書 4）。
 # 取得元を足すときは、表示したい位置へ挟む（仕様書 11.6）。
 #
+# 来訪者が最初に疑うもの（VRChat と、ワールドで使う三つ）を上に置き、
+# 公式ステータスページを持つ周辺サービスを下に置いた。
+#
 # 取得元のインスタンスはここで一度だけ作り、ウォームスタートのあいだ生かす。
 # Statuspage 系は前回の ETag と本文をインスタンスに持ち、条件付き GET に使う
 # （仕様書 5.4、11.7）。実行ごとに作り直すと、その控えが毎回捨てられる。
@@ -44,6 +50,9 @@ sources = [
     # 上流が名称を変えても、そのサービスの level までは巻き添えにならない。
     component_names: ["API", "Auth", "Websocket", "Website"],
   ),
+  Youtube::Repository.new(config.youtube_probe_video_id),
+  Steam::Repository.new,
+  Booth::Repository.new(config.booth_probe_item_id),
   Statuspage::Repository.new(
     service_id: "discord",
     display_name: "Discord",

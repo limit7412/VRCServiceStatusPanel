@@ -69,7 +69,13 @@ end
 
 private NOW = Time.unix(1_756_123_200)
 
-private def success(id : String, level : Status::Level, note : String = "", latency : Time::Span? = nil)
+private def success(
+  id : String,
+  level : Status::Level,
+  note : String = "",
+  latency : Time::Span? = nil,
+  partial : Bool = false,
+)
   Status::Observation.new(
     service_id: id,
     outcome: Status::Outcome::Success,
@@ -77,6 +83,7 @@ private def success(id : String, level : Status::Level, note : String = "", late
     latency: latency,
     note: note,
     level: level,
+    partial: partial,
   )
 end
 
@@ -235,6 +242,37 @@ describe Status::Usecase do
       service = feed.services.first
       service.level.should eq Status::Level::Degraded.value
       service.checked_unix.should eq NOW.to_unix
+    end
+
+    # Steam のストアだけ、BOOTH の商品ページだけが落ちた場合にあたる。
+    # 届いてはいるので失敗には数えず、レイテンシの超過と同じ扱いにする。
+    it "合成監視は経路の一部の停止を一段の低下として扱う" do
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational, partial: true),
+      )
+      feeds = FakeFeeds.new
+
+      feed = refresh([source] of Status::SourceRepository, feeds)
+
+      feed.services.first.level.should eq Status::Level::Degraded.value
+      # 届いてはいるので、履歴には成功として積む。
+      feeds.states.first.history_of("steam").outcomes.should eq [Status::Outcome::Success]
+    end
+
+    it "一部が止まっただけの取得元は記録に並べない" do
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational, partial: true),
+      )
+
+      Log.capture("status") do |logs|
+        refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+        logs.empty
+      end
     end
 
     it "合成監視はレイテンシの超過を一段の低下として扱う" do
@@ -439,7 +477,7 @@ describe Status::Usecase do
         Status::Outcome::Success,
       )
 
-      Status::Usecase.level_for_synthetic(history, latency_exceeded: true)
+      Status::Usecase.level_for_synthetic(history, degraded: true)
         .should eq Status::Level::Degraded
     end
 

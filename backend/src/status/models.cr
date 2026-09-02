@@ -75,6 +75,12 @@ module Status
     # 公式ステータスページから写した level（仕様書 11.5）。
     # 合成監視は履歴から決めるため、そちらの観測では nil になる。
     getter level : Level?
+    # 届いたが、一部の経路が落ちている（仕様書 3.3）。
+    #
+    # Steam はストアだけ、BOOTH は商品ページだけが落ちることがある。
+    # そのサービスが使えないわけではないので失敗とは数えず、合成監視は
+    # レイテンシの超過と同じ一段の低下として扱う。
+    getter? partial : Bool
 
     def initialize(
       @service_id : String,
@@ -84,6 +90,7 @@ module Status
       @note : String = "",
       @components : Array(Component)? = nil,
       @level : Level? = nil,
+      @partial : Bool = false,
     )
     end
 
