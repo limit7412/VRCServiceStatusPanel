@@ -20,10 +20,19 @@ module Status
     # 一回の実行（仕様書 5.2、11.5）。
     #
     # now を引数で受けるのは、前回値をいつまで引き継ぐかの境界を spec から
-    # 確かめるためである。呼び出し側は既定のまま使う。
-    def refresh(now : Time = Time.utc) : Feed
+    # 確かめるためである。呼び出し側は省いて使う。
+    def refresh(now : Time? = nil) : Feed
       previous = @feeds.load_state || State.new
       observations = observe_all
+
+      # 時刻は観測を終えてから採る。
+      #
+      # 先に採ると、上流を待った数秒のぶんだけ古い値が配信の生成時刻になり、
+      # 成功した観測の checked_unix より generated_unix が前に出る。
+      # 前回値をいつまで引き継ぐかの判定も、同じだけ甘くなる。
+      generated_at = now || Time.utc
+
+      report_failures(observations)
 
       histories = {} of String => History
       services = [] of ServiceStatus
@@ -34,11 +43,11 @@ module Status
         history = previous.history_of(source.service_id).push(observation.outcome)
         histories[source.service_id] = history
 
-        services << status_for(source, observation, history, previous, now)
+        services << status_for(source, observation, history, previous, generated_at)
       end
 
       feed = Feed.new(
-        generated_at: now,
+        generated_at: generated_at,
         stale: observations.none?(&.success?),
         services: services,
       )
@@ -53,6 +62,24 @@ module Status
       @feeds.save_feed(feed)
 
       feed
+    end
+
+    # 取れなかった取得元を一行にまとめて残す。
+    #
+    # official の失敗は前回値へ戻るだけで、表示にも stale にも出ない
+    # （仕様書 5.3、4）。他が取れていれば stale も偽のままである。
+    # ここで残さなければ、一つの取得元が何日落ちていても記録のどこにも現れない。
+    #
+    # 一件を一行に収めるのは CloudWatch が改行で記録を割るためで、
+    # runtime/lambda.cr の整形と同じ都合である。
+    private def report_failures(observations : Array(Observation)) : Nil
+      failed = observations.reject(&.success?)
+      return if failed.empty?
+
+      Log.warn do
+        details = failed.map { |observation| "#{observation.service_id}=#{observation.note}" }
+        "取れなかった #{details.join(" ")}"
+      end
     end
 
     # 取得元をファイバーで並べて呼び、全部の結果を待ち合わせる（仕様書 5.2）。

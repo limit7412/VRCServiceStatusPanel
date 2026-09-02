@@ -5,7 +5,11 @@ private def history_of(*outcomes : Status::Outcome) : Status::History
 end
 
 # 決めた結果だけを返す取得元。判定の規則そのものを試すために使う。
-# 遅らせるのは、結果の届く順が配信 JSON の並びを動かさないことを見るためである。
+#
+# started、release、finished を渡すと、呼ばれたことを報せ、合図を待ち、
+# 返す直前にもう一度報せる。
+# 実行の重なりと結果の届く順を、経過時間ではなく順序で確かめるための仕掛けである。
+# 時間で測ると、混んでいるランナーで待ち時間が延びただけで赤くなる。
 private class FakeSource < Status::SourceRepository
   getter service_id : String
   getter display_name : String
@@ -17,22 +21,25 @@ private class FakeSource < Status::SourceRepository
     @source_kind : Status::SourceKind = Status::SourceKind::Official,
     @observation : Status::Observation? = nil,
     @error : Exception? = nil,
-    @delay : Time::Span? = nil,
+    @started : Channel(Nil)? = nil,
+    @release : Channel(Nil)? = nil,
+    @finished : Channel(Nil)? = nil,
     @display_name : String = "表示名",
     @display_url : String = "https://example.test",
   )
   end
 
   def observe : Status::Observation
-    if delay = @delay
-      sleep delay
-    end
+    @started.try(&.send(nil))
+    @release.try(&.receive)
 
     if error = @error
       raise error
     end
 
-    @observation || raise "観測を渡していない"
+    observation = @observation || raise "観測を渡していない"
+    @finished.try(&.send(nil))
+    observation
   end
 end
 
@@ -96,6 +103,17 @@ end
 
 private def refresh(sources : Array(Status::SourceRepository), feeds : FakeFeeds) : Status::Feed
   Status::Usecase.new(sources, feeds).refresh(NOW)
+end
+
+# 待って受け取る。来なければ spec を落とす。
+# 期待が外れたときに spec 全体が止まったままにならないようにする。
+private def receive_within(channel : Channel(T), reason : String) : T forall T
+  select
+  when value = channel.receive
+    value
+  when timeout(5.seconds)
+    fail reason
+  end
 end
 
 describe Status::Usecase do
@@ -246,6 +264,42 @@ describe Status::Usecase do
       feed.services.last.level.should eq Status::Level::Operational.value
     end
 
+    # official の失敗は前回値へ戻るだけで、表示にも stale にも出ない。
+    # 記録が唯一の手がかりなので、そこに何が落ちたかを残す。
+    it "取れなかった取得元を記録に残す" do
+      sources = [
+        FakeSource.new(service_id: "vrchat", observation: failure("vrchat", "HTTP 500")),
+        FakeSource.new(
+          service_id: "discord",
+          observation: success("discord", Status::Level::Operational),
+        ),
+      ] of Status::SourceRepository
+
+      Log.capture("status") do |logs|
+        refresh(sources, FakeFeeds.new)
+
+        logs.check(:warn, /vrchat/)
+        message = logs.entry.message
+        message.should contain("vrchat")
+        message.should contain("HTTP 500")
+        # 取れたものは並べない。読む相手が要るのは落ちたほうである。
+        message.should_not contain("discord")
+      end
+    end
+
+    it "すべて取れたときは何も残さない" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Operational),
+      )
+
+      Log.capture("status") do |logs|
+        refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+        logs.empty
+      end
+    end
+
     it "ひとつも取れなければ stale にする" do
       source = FakeSource.new(service_id: "vrchat", observation: failure("vrchat"))
 
@@ -261,43 +315,71 @@ describe Status::Usecase do
       refresh(sources, FakeFeeds.new).stale?.should be_false
     end
 
-    # 結果は先に終わったものから届く。そのまま並べると、実行のたびに
-    # パネルの行が入れ替わることになる。
-    it "渡された順に並べる" do
+    # 結果は先に終わったものから届く。
+    # 並びは渡した順に戻し、level はそれを返した取得元へ結びつける。
+    # 名前だけを見ても足りない。名前は取得元から取るので、観測と取り違えても
+    # 並びは渡した順のままに見え、色だけが入れ替わる。
+    it "届いた順によらず、結果を返した取得元に結びつける" do
+      hold = Channel(Nil).new
+      second_done = Channel(Nil).new(1)
       sources = [
         FakeSource.new(
-          service_id: "slow",
-          observation: success("slow", Status::Level::Operational),
-          delay: 20.milliseconds,
+          service_id: "first",
+          observation: success("first", Status::Level::Operational),
+          release: hold,
         ),
         FakeSource.new(
-          service_id: "fast",
-          observation: success("fast", Status::Level::Operational),
+          service_id: "second",
+          observation: success("second", Status::Level::MajorOutage),
+          finished: second_done,
         ),
       ] of Status::SourceRepository
+      done = Channel(Status::Feed).new
 
-      refresh(sources, FakeFeeds.new).services.map(&.id).should eq ["slow", "fast"]
+      spawn { done.send(Status::Usecase.new(sources, FakeFeeds.new).refresh(NOW)) }
+
+      # 二つ目が返すまで一つ目を止めておく。結果は渡した順の逆で届く。
+      receive_within(second_done, "二つ目が返らなかった")
+      hold.send(nil)
+
+      feed = receive_within(done, "refresh が終わらなかった")
+
+      feed.services.map(&.id).should eq ["first", "second"]
+      feed.services.map(&.level).should eq [
+        Status::Level::Operational.value,
+        Status::Level::MajorOutage.value,
+      ]
     end
 
     it "取得元を並列に呼ぶ" do
+      started = Channel(Nil).new(2)
+      release = Channel(Nil).new(2)
       sources = [
         FakeSource.new(
           service_id: "a",
           observation: success("a", Status::Level::Operational),
-          delay: 30.milliseconds,
+          started: started,
+          release: release,
         ),
         FakeSource.new(
           service_id: "b",
           observation: success("b", Status::Level::Operational),
-          delay: 30.milliseconds,
+          started: started,
+          release: release,
         ),
       ] of Status::SourceRepository
+      done = Channel(Status::Feed).new
 
-      started = Time.instant
-      refresh(sources, FakeFeeds.new)
+      spawn { done.send(Status::Usecase.new(sources, FakeFeeds.new).refresh(NOW)) }
 
-      # 順に呼べば 60 ミリ秒かかる。並べて呼べば 30 ミリ秒ほどで終わる。
-      (Time.instant - started).should be < 55.milliseconds
+      # どちらも解放しないまま、二つとも始まることを見る。
+      # 順に呼んでいれば、一つ目が解放を待つあいだ二つ目は始まらないので、
+      # 二度目の受け取りが空振りする。
+      2.times { receive_within(started, "取得元が並んで始まらなかった") }
+
+      2.times { release.send(nil) }
+
+      receive_within(done, "refresh が終わらなかった").services.size.should eq 2
     end
 
     # 配信を先にすると、その間に落ちたとき、配っている内容の根拠が内部に残らない。
