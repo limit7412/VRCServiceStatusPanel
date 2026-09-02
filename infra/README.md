@@ -147,7 +147,7 @@ CloudWatch は欠測があると、指定した期間より広い範囲まで遡
 届け先を足すのはデプロイのあとであり、SNS へ送られるのは状態が変わった瞬間だけだからである。
 `ALARM` のまま留まっているあいだは、購読を足しても何も来ない。
 最初から壊れていて一度も成功しない、というこの監視がいちばん捕まえたい形が、それにあたる。
-届け先を足したあとに状態を張り直す（下の「手で行う作業」）。
+届け先を足したあとに `OK` へ張り直す（下の「手で行う作業」）。
 
 ### R2 のデータ用トークンの権限
 
@@ -911,31 +911,33 @@ aws sns list-subscriptions-by-topic \
 
 `SubscriptionArn` が `PendingConfirmation` のままなら、まだ確認していない。
 
-**届け先を足したら、アラームの状態を張り直す。**
+**届け先を足したら、アラームを `OK` へ張り直す。**
 `pulumi up` の直後、アラームはもう `ALARM` に入っている（まだ一度も成功していないため）。
 SNS へ送られるのは状態が変わった瞬間だけなので、そのあとに購読を足しても、`ALARM` のまま留まっているかぎり何も来ない。
 
-まず一度鳴らして、届くことを確かめる。
+いまの状態を見てから張り直す。
 
 ```
 alarm="$(pulumi stack output staleAlarmName)"
 
+aws cloudwatch describe-alarms --alarm-names "$alarm" \
+  --query 'MetricAlarms[0].StateValue' --output text
+
 aws cloudwatch set-alarm-state --alarm-name "$alarm" \
-  --state-value ALARM --state-reason "届け先の確認"
-```
-
-ここで通知が来なければ、購読がまだ確認されていない。
-
-確かめたら `OK` へ戻す。
-
-```
-aws cloudwatch set-alarm-state --alarm-name "$alarm" \
-  --state-value OK --state-reason "届け先を確かめた"
+  --state-value OK --state-reason "届け先を足した"
 ```
 
 `set-alarm-state` が変えるのは状態だけで、次の評価では実際のメトリクスから作り直される。
 まだ動いていなければ、そこで `OK` から `ALARM` へ移り、今度は通知が届く。
 動いていれば `OK` のままになる。
+
+**`ALARM` から張り直したなら、この時点で一通届く。**
+`ALARM` から `OK` への遷移になるので、復旧の知らせが飛ぶ。
+それが来なければ、購読がまだ確認されていない。
+
+すでに `OK` だった場合（最初の実行が成功していれば、そうなる）は遷移が起きないので、何も届かない。
+届け先を確かめたいときは、いまの状態と違う値を指定する。
+同じ値を指定しても、[`SetAlarmState`](https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_SetAlarmState.html) は遷移として扱わず、通知も送らない。
 
 **届け先を設定に持たせていないのは、その値が commit されるためである。**
 このリポジトリは public なので（仕様書 9）、メールアドレスを設定へ置けばそのまま公開される。
