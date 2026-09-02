@@ -19,7 +19,7 @@ const NAMESPACE = "VRCServiceStatusPanel";
 const METRIC = "RefreshSuccess";
 
 /** 何分止まったら知らせるか（仕様書 9） */
-const WINDOW_SECONDS = 300;
+const WINDOW_MINUTES = 5;
 
 export const alertTopic = new aws.sns.Topic("alerts", { name: `${prefix}-alerts` }, onAws);
 
@@ -38,28 +38,52 @@ export const staleAlarm = new aws.cloudwatch.MetricAlarm(
     "refresh-stale",
     {
         name: `${prefix}-refresh-stale`,
-        alarmDescription: `${stack} の配信が ${WINDOW_SECONDS / 60} 分止まっている`,
+        alarmDescription: `${stack} の配信が ${WINDOW_MINUTES} 分止まっている`,
 
-        namespace: NAMESPACE,
-        metricName: METRIC,
-        // 名前空間が同じでもスタックが違えば別の系列になる。
-        dimensions: { Env: stack },
+        // 一分ごとの成功の数を、欠測を 0 に埋めてから見る。
+        //
+        // 5 分をひとつの期間にして evaluationPeriods を 1 にすると、止まったことに
+        // 気付くのが遅れる。CloudWatch は欠測があると、指定した期間より広い範囲
+        // （evaluation range）まで遡って実データ点を探し、evaluationPeriods の
+        // ぶんだけ見つかれば treatMissingData を使わずにその古い点で判定する。
+        // 止まる直前の成功が範囲に残っているあいだ、OK のままになる。
+        // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html
+        //
+        // FILL で欠測を 0 に変えれば、埋めた 0 がそのまま実データ点として数えられ、
+        // 遡る必要そのものが無くなる。
+        metricQueries: [
+            {
+                id: "successes",
+                expression: "FILL(m1, 0)",
+                label: `${METRIC}（欠測は 0）`,
+                returnData: true,
+            },
+            {
+                id: "m1",
+                metric: {
+                    namespace: NAMESPACE,
+                    metricName: METRIC,
+                    // 名前空間が同じでもスタックが違えば別の系列になる。
+                    dimensions: { Env: stack },
+                    period: 60,
+                    stat: "Sum",
+                },
+                returnData: false,
+            },
+        ],
 
-        // 60 秒ごとに一つ出るはずのものを、5 分ぶん足す。
-        // 一度でも配信まで終えていれば 1 以上になる。
-        statistic: "Sum",
-        period: WINDOW_SECONDS,
-        evaluationPeriods: 1,
+        // 一分ごとの点が 5 つ続けて 1 未満なら鳴る。
+        evaluationPeriods: WINDOW_MINUTES,
+        datapointsToAlarm: WINDOW_MINUTES,
         threshold: 1,
         comparisonOperator: "LessThanThreshold",
 
-        // 欠測を異常として扱う。
+        // 一度も出ていなければ FILL も埋められない。
         //
-        // 成功の行は成功したときにしか出ない。関数が一度も上がっていなければ、
-        // 0 が並ぶのではなくデータ点そのものが無い。
-        // 既定の missing は「判定しない」なので、そのままだと、いちばん知りたい
-        // 「まったく動いていない」場合にアラームが鳴らずに INSUFFICIENT_DATA で
-        // 止まる。
+        // FILL が埋める相手はメトリクスの側にあるデータ点なので、範囲に一つも
+        // 無ければ何も返さない。関数が一度も上がっていない、いちばん知りたい
+        // 場合がこれにあたる。欠測を異常として扱い、INSUFFICIENT_DATA で
+        // 止まらないようにする。
         treatMissingData: "breaching",
 
         alarmActions: [alertTopic.arn],

@@ -128,13 +128,26 @@ Layer が壊れて `bootstrap` が起動しない、Scheduler が止まる、と
 SNS から webhook へ渡すには転送する関数が要り、その関数は見張る相手と同じ足場に乗る。
 メールなら AWS の中だけで完結する。
 
-アラームは「5 分間の `RefreshSuccess` の合計が 1 未満」で鳴る。
-欠測を異常として扱っている（`treatMissingData: "breaching"`）。
-成功の行は成功したときにしか出ないので、関数が一度も上がっていなければ 0 が並ぶのではなくデータ点そのものが無く、既定のままでは鳴らずに `INSUFFICIENT_DATA` で止まる。
+アラームは「一分ごとの `RefreshSuccess` が 5 つ続けて 1 未満」で鳴る。
+
+5 分をひとつの期間にして一度だけ見る形は採っていない。
+CloudWatch は欠測があると、指定した期間より広い範囲まで遡って実データ点を探し、評価期間のぶんだけ見つかれば `treatMissingData` を使わずにその古い点で判定する（[Configuring how CloudWatch alarms treat missing data](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html)）。
+止まる直前の成功が範囲に残っているあいだ、`OK` のままになってしまう。
+一分ごとに刻み、`FILL` で欠測を 0 に変えれば、埋めた 0 がそのまま実データ点として数えられ、遡る必要そのものが無くなる。
+
+`FILL` で埋まらない場合のために `treatMissingData: "breaching"` も置いてある。
+埋める相手はメトリクスの側にあるデータ点なので、範囲に一つも無ければ何も返さない。
+関数が一度も上がっていない場合がこれにあたり、そのままでは鳴らずに `INSUFFICIENT_DATA` で止まる。
 
 **デプロイした直後は鳴る。**
 まだ一度も成功していないので、正しい振る舞いである。
 最初の実行が配信まで終えれば戻る。
+
+ただし、その最初の `ALARM` は誰にも届かない。
+届け先を足すのはデプロイのあとであり、SNS へ送られるのは状態が変わった瞬間だけだからである。
+`ALARM` のまま留まっているあいだは、購読を足しても何も来ない。
+最初から壊れていて一度も成功しない、というこの監視がいちばん捕まえたい形が、それにあたる。
+届け先を足したあとに状態を張り直す（下の「手で行う作業」）。
 
 ### R2 のデータ用トークンの権限
 
@@ -897,6 +910,32 @@ aws sns list-subscriptions-by-topic \
 ```
 
 `SubscriptionArn` が `PendingConfirmation` のままなら、まだ確認していない。
+
+**届け先を足したら、アラームの状態を張り直す。**
+`pulumi up` の直後、アラームはもう `ALARM` に入っている（まだ一度も成功していないため）。
+SNS へ送られるのは状態が変わった瞬間だけなので、そのあとに購読を足しても、`ALARM` のまま留まっているかぎり何も来ない。
+
+まず一度鳴らして、届くことを確かめる。
+
+```
+alarm="$(pulumi stack output staleAlarmName)"
+
+aws cloudwatch set-alarm-state --alarm-name "$alarm" \
+  --state-value ALARM --state-reason "届け先の確認"
+```
+
+ここで通知が来なければ、購読がまだ確認されていない。
+
+確かめたら `OK` へ戻す。
+
+```
+aws cloudwatch set-alarm-state --alarm-name "$alarm" \
+  --state-value OK --state-reason "届け先を確かめた"
+```
+
+`set-alarm-state` が変えるのは状態だけで、次の評価では実際のメトリクスから作り直される。
+まだ動いていなければ、そこで `OK` から `ALARM` へ移り、今度は通知が届く。
+動いていれば `OK` のままになる。
 
 **届け先を設定に持たせていないのは、その値が commit されるためである。**
 このリポジトリは public なので（仕様書 9）、メールアドレスを設定へ置けばそのまま公開される。
