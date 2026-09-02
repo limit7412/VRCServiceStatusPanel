@@ -4,7 +4,413 @@ private def history_of(*outcomes : Status::Outcome) : Status::History
   outcomes.reduce(Status::History.new) { |history, outcome| history.push(outcome) }
 end
 
+# 決めた結果だけを返す取得元。判定の規則そのものを試すために使う。
+#
+# started、release、finished を渡すと、呼ばれたことを報せ、合図を待ち、
+# 返す直前にもう一度報せる。
+# 実行の重なりと結果の届く順を、経過時間ではなく順序で確かめるための仕掛けである。
+# 時間で測ると、混んでいるランナーで待ち時間が延びただけで赤くなる。
+private class FakeSource < Status::SourceRepository
+  getter service_id : String
+  getter display_name : String
+  getter display_url : String
+  getter source_kind : Status::SourceKind
+
+  def initialize(
+    @service_id : String,
+    @source_kind : Status::SourceKind = Status::SourceKind::Official,
+    @observation : Status::Observation? = nil,
+    @error : Exception? = nil,
+    @started : Channel(Nil)? = nil,
+    @release : Channel(Nil)? = nil,
+    @finished : Channel(Nil)? = nil,
+    @display_name : String = "表示名",
+    @display_url : String = "https://example.test",
+  )
+  end
+
+  def observe : Status::Observation
+    @started.try(&.send(nil))
+    @release.try(&.receive)
+
+    if error = @error
+      raise error
+    end
+
+    observation = @observation || raise "観測を渡していない"
+    @finished.try(&.send(nil))
+    observation
+  end
+end
+
+# 書いたものと、その順番を覚えておく書き出し先。
+private class FakeFeeds < Status::FeedRepository
+  getter states = [] of Status::State
+  getter feeds = [] of Status::Feed
+  getter calls = [] of String
+
+  def initialize(@state : Status::State? = nil)
+  end
+
+  def load_state : Status::State?
+    @state
+  end
+
+  def save_state(state : Status::State) : Nil
+    @calls << "state"
+    @states << state
+  end
+
+  def save_feed(feed : Status::Feed) : Nil
+    @calls << "feed"
+    @feeds << feed
+  end
+end
+
+private NOW = Time.unix(1_756_123_200)
+
+private def success(id : String, level : Status::Level, note : String = "", latency : Time::Span? = nil)
+  Status::Observation.new(
+    service_id: id,
+    outcome: Status::Outcome::Success,
+    checked_at: NOW,
+    latency: latency,
+    note: note,
+    level: level,
+  )
+end
+
+private def failure(id : String, note : String = "HTTP 500")
+  Status::Observation.new(
+    service_id: id,
+    outcome: Status::Outcome::Failure,
+    checked_at: NOW,
+    note: note,
+  )
+end
+
+private def previous_status(id : String, level : Status::Level, note : String, checked_at : Time)
+  Status::ServiceStatus.new(
+    id: id,
+    name: "表示名",
+    level: level,
+    source: Status::SourceKind::Official,
+    url: "https://example.test",
+    checked_at: checked_at,
+    note: note,
+  )
+end
+
+private def refresh(sources : Array(Status::SourceRepository), feeds : FakeFeeds) : Status::Feed
+  Status::Usecase.new(sources, feeds).refresh(NOW)
+end
+
+# 待って受け取る。来なければ spec を落とす。
+# 期待が外れたときに spec 全体が止まったままにならないようにする。
+private def receive_within(channel : Channel(T), reason : String) : T forall T
+  select
+  when value = channel.receive
+    value
+  when timeout(5.seconds)
+    fail reason
+  end
+end
+
 describe Status::Usecase do
+  describe "#refresh" do
+    it "公式ステータスページの応答をそのまま写す" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Degraded, "Websocket: Partial Outage"),
+      )
+      feeds = FakeFeeds.new
+
+      feed = refresh([source] of Status::SourceRepository, feeds)
+
+      service = feed.services.first
+      service.id.should eq "vrchat"
+      service.level.should eq Status::Level::Degraded.value
+      service.note.should eq "Websocket: Partial Outage"
+      service.checked_unix.should eq NOW.to_unix
+      feed.stale?.should be_false
+    end
+
+    # 取得の失敗はこちら側の事情であって、上流が落ちたことではない（仕様書 5.3）。
+    it "公式ステータスページを取れなければ前回値を引き継ぐ" do
+      checked_at = NOW - 1.minute
+      state = Status::State.new(
+        services: {
+          "vrchat" => previous_status("vrchat", Status::Level::Degraded, "前回の note", checked_at),
+        }
+      )
+      source = FakeSource.new(service_id: "vrchat", observation: failure("vrchat"))
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      service = feed.services.first
+      service.level.should eq Status::Level::Degraded.value
+      service.note.should eq "前回の note"
+      service.checked_unix.should eq checked_at.to_unix
+    end
+
+    it "五分取れないままなら判定不能にする" do
+      checked_at = NOW - 5.minutes
+      state = Status::State.new(
+        services: {
+          "vrchat" => previous_status("vrchat", Status::Level::Operational, "前回の note", checked_at),
+        }
+      )
+      source = FakeSource.new(service_id: "vrchat", observation: failure("vrchat"))
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      service = feed.services.first
+      service.level.should eq Status::Level::Unknown.value
+      # 判定できないと言いながら中身を説明し続けることになるので、note も落とす。
+      service.note.should eq ""
+      # 最後に取れた時刻だけは動かさない。
+      service.checked_unix.should eq checked_at.to_unix
+    end
+
+    it "境界の手前では前回値を保つ" do
+      checked_at = NOW - 5.minutes + 1.second
+      state = Status::State.new(
+        services: {
+          "vrchat" => previous_status("vrchat", Status::Level::Operational, "", checked_at),
+        }
+      )
+      source = FakeSource.new(service_id: "vrchat", observation: failure("vrchat"))
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      feed.services.first.level.should eq Status::Level::Operational.value
+    end
+
+    it "一度も取れていなければ判定不能から始める" do
+      source = FakeSource.new(service_id: "vrchat", observation: failure("vrchat"))
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+      service = feed.services.first
+      service.level.should eq Status::Level::Unknown.value
+      # 取得できた時刻が無いことを 0 で表す。
+      service.checked_unix.should eq 0
+      # 失敗の理由はログに残すもので、表示には出さない。
+      service.note.should eq ""
+    end
+
+    it "合成監視は履歴から決める" do
+      state = Status::State.new(
+        histories: {"steam" => history_of(Status::Outcome::Failure)}
+      )
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: failure("steam"),
+      )
+      feeds = FakeFeeds.new(state)
+
+      feed = refresh([source] of Status::SourceRepository, feeds)
+
+      # 前回と今回で二回失敗しているので全断とみなす（仕様書 3.3）。
+      feed.services.first.level.should eq Status::Level::MajorOutage.value
+      feeds.states.first.history_of("steam").outcomes.size.should eq 2
+    end
+
+    # 届かなかったこと自体が判定の材料なので、前回値へは戻さない。
+    it "合成監視は失敗しても最後に見た時刻を進める" do
+      state = Status::State.new(
+        services: {
+          "steam" => previous_status("steam", Status::Level::Operational, "", NOW - 1.hour),
+        }
+      )
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: failure("steam"),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      service = feed.services.first
+      service.level.should eq Status::Level::Degraded.value
+      service.checked_unix.should eq NOW.to_unix
+    end
+
+    it "合成監視はレイテンシの超過を一段の低下として扱う" do
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational, latency: 3.seconds),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+      feed.services.first.level.should eq Status::Level::Degraded.value
+    end
+
+    # observe は例外を出さない契約だが（仕様書 11.4）、破られても他は止めない。
+    it "一つの取得元が例外を出しても他のサービスを更新する" do
+      broken = FakeSource.new(service_id: "vrchat", error: Exception.new("壊れている"))
+      working = FakeSource.new(
+        service_id: "discord",
+        observation: success("discord", Status::Level::Operational),
+      )
+
+      feed = refresh([broken, working] of Status::SourceRepository, FakeFeeds.new)
+
+      feed.services.map(&.id).should eq ["vrchat", "discord"]
+      feed.services.first.level.should eq Status::Level::Unknown.value
+      feed.services.last.level.should eq Status::Level::Operational.value
+    end
+
+    # official の失敗は前回値へ戻るだけで、表示にも stale にも出ない。
+    # 記録が唯一の手がかりなので、そこに何が落ちたかを残す。
+    it "取れなかった取得元を記録に残す" do
+      sources = [
+        FakeSource.new(service_id: "vrchat", observation: failure("vrchat", "HTTP 500")),
+        FakeSource.new(
+          service_id: "discord",
+          observation: success("discord", Status::Level::Operational),
+        ),
+      ] of Status::SourceRepository
+
+      Log.capture("status") do |logs|
+        refresh(sources, FakeFeeds.new)
+
+        logs.check(:warn, /vrchat/)
+        message = logs.entry.message
+        message.should contain("vrchat")
+        message.should contain("HTTP 500")
+        # 取れたものは並べない。読む相手が要るのは落ちたほうである。
+        message.should_not contain("discord")
+      end
+    end
+
+    it "すべて取れたときは何も残さない" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Operational),
+      )
+
+      Log.capture("status") do |logs|
+        refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+        logs.empty
+      end
+    end
+
+    it "ひとつも取れなければ stale にする" do
+      source = FakeSource.new(service_id: "vrchat", observation: failure("vrchat"))
+
+      refresh([source] of Status::SourceRepository, FakeFeeds.new).stale?.should be_true
+    end
+
+    it "ひとつでも取れれば stale にしない" do
+      sources = [
+        FakeSource.new(service_id: "vrchat", observation: failure("vrchat")),
+        FakeSource.new(service_id: "discord", observation: success("discord", Status::Level::Operational)),
+      ] of Status::SourceRepository
+
+      refresh(sources, FakeFeeds.new).stale?.should be_false
+    end
+
+    # 結果は先に終わったものから届く。
+    # 並びは渡した順に戻し、level はそれを返した取得元へ結びつける。
+    # 名前だけを見ても足りない。名前は取得元から取るので、観測と取り違えても
+    # 並びは渡した順のままに見え、色だけが入れ替わる。
+    it "届いた順によらず、結果を返した取得元に結びつける" do
+      hold = Channel(Nil).new
+      second_done = Channel(Nil).new(1)
+      sources = [
+        FakeSource.new(
+          service_id: "first",
+          observation: success("first", Status::Level::Operational),
+          release: hold,
+        ),
+        FakeSource.new(
+          service_id: "second",
+          observation: success("second", Status::Level::MajorOutage),
+          finished: second_done,
+        ),
+      ] of Status::SourceRepository
+      done = Channel(Status::Feed).new
+
+      spawn { done.send(Status::Usecase.new(sources, FakeFeeds.new).refresh(NOW)) }
+
+      # 二つ目が返すまで一つ目を止めておく。結果は渡した順の逆で届く。
+      receive_within(second_done, "二つ目が返らなかった")
+      hold.send(nil)
+
+      feed = receive_within(done, "refresh が終わらなかった")
+
+      feed.services.map(&.id).should eq ["first", "second"]
+      feed.services.map(&.level).should eq [
+        Status::Level::Operational.value,
+        Status::Level::MajorOutage.value,
+      ]
+    end
+
+    it "取得元を並列に呼ぶ" do
+      started = Channel(Nil).new(2)
+      release = Channel(Nil).new(2)
+      sources = [
+        FakeSource.new(
+          service_id: "a",
+          observation: success("a", Status::Level::Operational),
+          started: started,
+          release: release,
+        ),
+        FakeSource.new(
+          service_id: "b",
+          observation: success("b", Status::Level::Operational),
+          started: started,
+          release: release,
+        ),
+      ] of Status::SourceRepository
+      done = Channel(Status::Feed).new
+
+      spawn { done.send(Status::Usecase.new(sources, FakeFeeds.new).refresh(NOW)) }
+
+      # どちらも解放しないまま、二つとも始まることを見る。
+      # 順に呼んでいれば、一つ目が解放を待つあいだ二つ目は始まらないので、
+      # 二度目の受け取りが空振りする。
+      2.times { receive_within(started, "取得元が並んで始まらなかった") }
+
+      2.times { release.send(nil) }
+
+      receive_within(done, "refresh が終わらなかった").services.size.should eq 2
+    end
+
+    # 配信を先にすると、その間に落ちたとき、配っている内容の根拠が内部に残らない。
+    it "状態を書いてから配信する" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Operational),
+      )
+      feeds = FakeFeeds.new
+
+      refresh([source] of Status::SourceRepository, feeds)
+
+      feeds.calls.should eq ["state", "feed"]
+    end
+
+    it "次の実行へ引き継ぐ状態を書く" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Degraded, "note"),
+      )
+      feeds = FakeFeeds.new
+
+      refresh([source] of Status::SourceRepository, feeds)
+
+      state = feeds.states.first
+      state.version.should eq Status::State::SCHEMA_VERSION
+      state.service_of("vrchat").try(&.note).should eq "note"
+      state.history_of("vrchat").outcomes.should eq [Status::Outcome::Success]
+    end
+  end
+
   describe ".level_for_synthetic" do
     it "is operational when every recent check succeeded" do
       history = history_of(

@@ -232,6 +232,21 @@ module Status
   struct State
     include JSON::Serializable
 
+    # 保存する形の版。中身の意味が変わる直しで増やす。
+    #
+    # 配信 JSON の v とは別に数える。外へ配るものと内部の記録は変わる理由が
+    # 違い、片方の都合でもう片方の版を動かすと、読み手の判断がずれる。
+    SCHEMA_VERSION = 1
+
+    # 版を持たない記録は 0 として読む。
+    #
+    # JSON::Serializable は知らないキーを読み捨てるので、版を持たせずに形を
+    # 変えると、古い記録が「履歴が空」として通ってしまう。合成監視の判定が
+    # 黙って振り出しに戻るだけなので、気付く手がかりが残らない。
+    # 既定値を置けば、版の無い記録を読めないものとして弾ける。
+    @[JSON::Field(key: "v")]
+    getter version : Int32 = 0
+
     getter histories : Hash(String, History)
     getter services : Hash(String, ServiceStatus)
 
@@ -239,6 +254,12 @@ module Status
       @histories : Hash(String, History) = {} of String => History,
       @services : Hash(String, ServiceStatus) = {} of String => ServiceStatus,
     )
+      @version = SCHEMA_VERSION
+    end
+
+    # このコードが読める版か。
+    def supported? : Bool
+      version == SCHEMA_VERSION
     end
 
     def history_of(service_id : String) : History
