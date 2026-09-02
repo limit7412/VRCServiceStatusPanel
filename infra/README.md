@@ -959,7 +959,10 @@ Chatbot 経由の Slack のように、メール以外へ届けたい場合の�
 **デプロイロールに SNS とアラームの権限を足す。**
 CI からデプロイする場合だけ要る。
 ロールは Pulumi の外にあり、CLI で作ってある（`docs/aws-oidc.md`）。
-`Alerts` と `Alarms` の二つの Sid が入っていないと、最初の `sns:CreateTopic` で止まる。
+
+足すのは `Alerts`、`CreateAlarms`、`Alarms` の三つの Sid である。
+`Alerts` が無ければ最初の `sns:CreateTopic` で止まり、`CreateAlarms` が無ければその次の `cloudwatch:PutMetricAlarm` で止まる。
+`PutMetricAlarm` だけを分けてあるのは、鳴らす先を絞る条件が、そのアクションにしか掛からないためである。
 
 ## 確かめ方
 
