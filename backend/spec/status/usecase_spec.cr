@@ -148,7 +148,9 @@ describe Status::Usecase do
 
       service = feed.services.first
       service.level.should eq Status::Level::Unknown.value
-      # 引き継ぐのをやめるのは level だけで、最後に取れた時刻は動かさない。
+      # 判定できないと言いながら中身を説明し続けることになるので、note も落とす。
+      service.note.should eq ""
+      # 最後に取れた時刻だけは動かさない。
       service.checked_unix.should eq checked_at.to_unix
     end
 

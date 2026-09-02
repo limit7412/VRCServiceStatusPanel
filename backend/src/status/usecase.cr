@@ -144,16 +144,19 @@ module Status
       return build(source, level: Level::Unknown, note: "", checked_at: Time.unix(0)) if last.nil?
 
       checked_at = Time.unix(last.checked_unix)
-      level = if now - checked_at >= UNKNOWN_AFTER
-                # 引き継げる前回値はあるが、古すぎて今を語れない（仕様書 5.3）。
-                Level::Unknown
-              else
-                Level.from_value?(last.level) || Level::Unknown
-              end
+
+      # 引き継げる前回値はあるが、古すぎて今を語れない（仕様書 5.3）。
+      #
+      # note と components も落とす。level だけを判定不能にして説明を残すと、
+      # 「判定できない」と言いながら「Websocket が部分障害」と続けることになり、
+      # パネルの一行が自分と食い違う。
+      if now - checked_at >= UNKNOWN_AFTER
+        return build(source, level: Level::Unknown, note: "", checked_at: checked_at)
+      end
 
       build(
         source,
-        level: level,
+        level: Level.from_value?(last.level) || Level::Unknown,
         note: last.note,
         checked_at: checked_at,
         components: last.components,
