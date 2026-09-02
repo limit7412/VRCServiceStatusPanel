@@ -62,7 +62,10 @@ describe Youtube::Repository do
 
   it "本文が JSON でなければ届かなかったものとする" do
     with_youtube(body: "<html>error</html>") do |source, _|
-      source.observe.outcome.should eq Status::Outcome::Failure
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Failure
+      observation.note.should eq "oEmbed の応答が JSON でない"
     end
   end
 
@@ -72,6 +75,7 @@ describe Youtube::Repository do
     observation = source.observe
 
     observation.outcome.should eq Status::Outcome::Failure
-    observation.note.should_not eq ""
+    # 断られたのではなく届かなかったことが分かるようにする。
+    observation.note.should contain("届かない")
   end
 end

@@ -52,11 +52,12 @@ module Youtube
       response = Upstream.get(oembed_url)
       latency = Time.instant - started
 
+      # 届かなかったのか、断られたのか、返ってきたものが読めなかったのかで、
+      # 次に見る先が変わる。言い分けて残す。
       unless response.status_code == 200
         return failure("oEmbed が応答しない（HTTP #{response.status_code}）")
       end
-
-      OEmbed.from_json(response.body)
+      return failure("oEmbed の応答が JSON でない") unless resolved?(response.body)
 
       Status::Observation.new(
         service_id: service_id,
@@ -65,7 +66,15 @@ module Youtube
         latency: latency,
       )
     rescue error
-      failure(error.message || error.class.name)
+      failure("oEmbed に届かない（#{error.message || error.class.name}）")
+    end
+
+    # 動画が解決できたか。題が読めれば解決できている。
+    private def resolved?(body : String) : Bool
+      OEmbed.from_json(body)
+      true
+    rescue
+      false
     end
 
     private def failure(reason : String) : Status::Observation

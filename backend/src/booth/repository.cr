@@ -51,8 +51,9 @@ module Booth
       item_ok = Upstream.ok?(item)
 
       # 両方落ちて初めて届かなかったとみなす（仕様書 3.3）。
+      # 二つとも理由を残す。片方だけを出すと、もう片方が何で落ちたか分からない。
       unless top_ok || item_ok
-        return failure("BOOTH に届かない（#{Upstream.reason(top)}）")
+        return failure("BOOTH に届かない（#{Upstream.reason(top)} / #{Upstream.reason(item)}）")
       end
 
       Status::Observation.new(

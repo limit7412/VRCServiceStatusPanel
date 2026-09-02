@@ -58,13 +58,15 @@ describe Booth::Repository do
 
   it "両方落ちていれば届かなかったものとする" do
     top = Stub.new(status: HTTP::Status::BAD_GATEWAY)
-    item = Stub.new(status: HTTP::Status::BAD_GATEWAY)
+    item = Stub.new(status: HTTP::Status::NOT_FOUND)
 
     with_booth(top, item) do |source|
       observation = source.observe
 
       observation.outcome.should eq Status::Outcome::Failure
+      # 片方だけを出すと、もう片方が何で落ちたか分からない。
       observation.note.should contain("502")
+      observation.note.should contain("404")
     end
   end
 

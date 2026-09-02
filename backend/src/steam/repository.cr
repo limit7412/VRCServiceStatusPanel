@@ -50,7 +50,9 @@ module Steam
       # どちらかが遅ければ利用者の体感も遅いので、主指標だけを測り直さない。
       latency = Time.instant - started
 
-      return failure("Web API が応答しない（#{Upstream.reason(web_api)}）") unless alive?(web_api)
+      if reason = web_api_failure(web_api)
+        return failure(reason)
+      end
 
       store_down = !Upstream.ok?(store)
 
@@ -66,13 +68,31 @@ module Steam
       failure(error.message || error.class.name)
     end
 
-    # 200 で、しかも読める JSON が返ることまでを見る。
-    # 上流がエラーページを 200 で返すことがあり、状態コードだけでは足りない。
-    private def alive?(result : HTTP::Client::Response | Exception) : Bool
-      return false unless Upstream.ok?(result)
-      return false unless result.is_a?(HTTP::Client::Response)
+    # Web API が使えるかを見て、駄目なら表示に出す一行を返す。使えれば nil を返す。
+    #
+    # 200 でも本文が読めなければ使えないものとする。上流がエラーページを
+    # 200 で返すことがあり、状態コードだけでは足りない。
+    #
+    # 三つを言い分けるのは、「HTTP 200」とだけ書いた失敗が、応答があったことしか
+    # 伝えないためである。届かなかったのか、断られたのか、返ってきたものが
+    # 読めなかったのかで、次に見る先が変わる。
+    private def web_api_failure(result : HTTP::Client::Response | Exception) : String?
+      case result
+      in Exception
+        "Web API に届かない（#{Upstream.reason(result)}）"
+      in HTTP::Client::Response
+        if result.status_code != 200
+          "Web API が応答しない（HTTP #{result.status_code}）"
+        elsif readable?(result.body)
+          nil
+        else
+          "Web API の応答が JSON でない"
+        end
+      end
+    end
 
-      ServerInfo.from_json(result.body)
+    private def readable?(body : String) : Bool
+      ServerInfo.from_json(body)
       true
     rescue
       false

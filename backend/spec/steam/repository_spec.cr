@@ -72,9 +72,16 @@ describe Steam::Repository do
   end
 
   # 上流がエラーページを 200 で返すことがある。状態コードだけでは足りない。
+  #
+  # このとき「HTTP 200」とだけ残すと、応答があったことしか伝わらない。
+  # 返ってきたものが読めなかったのだと分かる一行を出す。
   it "Web API が JSON を返さなければ届かなかったものとする" do
     with_steam(Stub.new(body: "<html>maintenance</html>"), Stub.new) do |source|
-      source.observe.outcome.should eq Status::Outcome::Failure
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Failure
+      observation.note.should eq "Web API の応答が JSON でない"
+      observation.note.should_not contain("200")
     end
   end
 
@@ -88,6 +95,7 @@ describe Steam::Repository do
     observation = source.observe
 
     observation.outcome.should eq Status::Outcome::Failure
-    observation.note.should_not eq ""
+    # 断られたのではなく届かなかったことが分かるようにする。
+    observation.note.should contain("届かない")
   end
 end
