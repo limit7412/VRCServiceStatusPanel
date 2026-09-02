@@ -79,6 +79,12 @@ jobs:
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
 
+      # awscr-s3 は S3 の応答を読むのに Crystal の XML を使い、それが libxml2 を引く。
+      # ランナーには入っていることが多いが、イメージから外れると spec は
+      # 走る手前のリンクで落ちる。入っていなければそのときだけ入れる。
+      - name: ensure libxml2 headers
+        run: dpkg -s libxml2-dev >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y libxml2-dev)
+
       - name: install shards
         run: shards install
 
@@ -97,3 +103,25 @@ jobs:
 
       - name: run specs
         run: crystal spec
+
+  # Lambda へ載せる形で組み立てられるかを見る（仕様書 5.1）。
+  #
+  # spec は動的リンクで走るので、静的リンクだけで出る不足はここでしか出ない。
+  # awscr-s3 を足して libxml2 が依存に入り、その静的ライブラリと liblzma を
+  # 揃える必要ができたため、検査に加えた。
+  #
+  # 出来た zip は使わない。deploy のワークフローが自分で作り直す。
+  # ここで見たいのは、リンクが通ることだけである。
+  build:
+    name: static build
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
+    # build.sh は linux/arm64 のイメージを走らせる。
+    # arm のランナーなら、その場の命令セットのまま動く。
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: build bootstrap.zip
+        run: backend/build.sh

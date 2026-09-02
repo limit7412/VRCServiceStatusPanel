@@ -36,6 +36,11 @@ done
 # 現行イメージには同梱されているが、将来外れてもリンクエラーにならないよう
 # apk add で明示的に入れておく。
 #
+# libxml2 と xz はそこに足したものである。awscr-s3 が S3 の応答を読むのに
+# Crystal の XML を使い、それが libxml2 を引く。alpine の libxml2 は
+# lzma 付きで作られているので、静的リンクには liblzma.a も要る。
+# -llzma を自分で渡すのは、Crystal が並べるのが -lxml2 -lz までだからである。
+#
 # chmod と chown はコンテナ内(root)で実行する。
 # Linux ではコンテナが root として bind mount 上へ書くため、生成物が root 所有に
 # なる。所有者でなければ chmod も touch -t も通らず、この先で止まってしまう。
@@ -45,8 +50,9 @@ docker run --rm --platform linux/arm64 \
     -v "$here":/work -w /work \
     "crystallang/crystal:$CRYSTAL_VERSION-alpine" \
     sh -c "apk add --no-cache openssl-libs-static zlib-static libevent-static \
+        libxml2-static xz-static \
         && shards install --production \
-        && crystal build --release --link-flags -static -o bootstrap src/main.cr \
+        && crystal build --release --link-flags '-static -llzma' -o bootstrap src/main.cr \
         && chmod +x bootstrap \
         && chown $(id -u):$(id -g) bootstrap"
 

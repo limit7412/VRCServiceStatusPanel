@@ -34,6 +34,11 @@ module Statuspage
       Status::SourceKind::Official
     end
 
+    # 人が開くのはステータスページそのものである。
+    def display_url : String
+      page_url
+    end
+
     def summary_url : String
       "#{page_url}/api/v2/summary.json"
     end

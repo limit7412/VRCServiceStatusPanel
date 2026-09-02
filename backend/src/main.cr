@@ -1,6 +1,10 @@
 require "./config"
+require "./r2/repository"
 require "./runtime/lambda"
 require "./status/models"
+require "./status/repository"
+require "./status/usecase"
+require "./statuspage/repository"
 
 # 構成ルート（仕様書 11.2、11.7）。
 # コールドスタート時に一度だけ環境変数を解決し、依存を組み立てる。
@@ -9,10 +13,6 @@ require "./status/models"
 # 参考リポジトリ（limit7412/github_notifications_slack）と同じである。
 # 関数を増やすときは、ここへ handler を足し、HANDLERS と infra/index.ts の
 # FUNCTIONS にも同じ名前を足す。
-#
-# 取得元のアダプタは statuspage だけがある。observe を呼ぶ Usecase#refresh と、
-# 書き出し先の r2 がまだ無いため、いまの refresh は空の Feed を返すだけで、
-# R2 へは書かない。デプロイの経路と Runtime API のやり取りを先に通すための形である。
 
 HANDLERS = %w[refresh]
 
@@ -27,18 +27,65 @@ end
 
 Log.info { "起動した handler=#{Runtime::Lambda.handler_name} #{config.to_log}" }
 
+# 取得元（仕様書 3.2）。
+#
+# この並びが、そのまま配信 JSON の services の並びになる（仕様書 4）。
+# 取得元を足すときは、表示したい位置へ挟む（仕様書 11.6）。
+#
+# 取得元のインスタンスはここで一度だけ作り、ウォームスタートのあいだ生かす。
+# Statuspage 系は前回の ETag と本文をインスタンスに持ち、条件付き GET に使う
+# （仕様書 5.4、11.7）。実行ごとに作り直すと、その控えが毎回捨てられる。
+sources = [
+  Statuspage::Repository.new(
+    service_id: "vrchat",
+    display_name: "VRChat",
+    page_url: "https://status.vrchat.com",
+    # 仕様書 3.2 が挙げる四つ。応答に無い名前は黙って落ちるので、
+    # 上流が名称を変えても、そのサービスの level までは巻き添えにならない。
+    component_names: ["API", "Auth", "Websocket", "Website"],
+  ),
+  Statuspage::Repository.new(
+    service_id: "discord",
+    display_name: "Discord",
+    page_url: "https://discordstatus.com",
+  ),
+  Statuspage::Repository.new(
+    service_id: "cloudflare",
+    display_name: "Cloudflare",
+    page_url: "https://www.cloudflarestatus.com",
+  ),
+  Statuspage::Repository.new(
+    service_id: "twitch",
+    display_name: "Twitch",
+    page_url: "https://status.twitch.com",
+  ),
+] of Status::SourceRepository
+
+feeds = R2::Repository.new(
+  endpoint: config.r2_endpoint,
+  access_key_id: config.r2_access_key_id,
+  secret_access_key: config.r2_secret_access_key,
+  public_bucket: config.r2_public_bucket,
+  state_bucket: config.r2_state_bucket,
+)
+
+usecase = Status::Usecase.new(sources, feeds)
+
 Runtime::Lambda.handler "refresh" do |_event|
-  # 観測がまだ無いので、サービスの並びは空になる。
-  # 上流をひとつも取れていない状態なので stale を真にする（仕様書 4）。
-  feed = Status::Feed.new(
-    generated_at: Time.utc,
-    stale: true,
-    services: [] of Status::ServiceStatus,
-  )
+  feed = usecase.refresh
 
-  Log.info { "feed を組み立てた generated_unix=#{feed.generated_unix}" }
+  Log.info do
+    "配信した generated_unix=#{feed.generated_unix} " \
+    "stale=#{feed.stale?} services=#{feed.services.size}"
+  end
 
-  feed
+  # Runtime API へ返したものを読む相手はいない。記録に残るだけなので、
+  # 配信物そのものではなく、その実行が何をしたかの要約を返す。
+  {
+    generated_unix: feed.generated_unix,
+    stale:          feed.stale?,
+    services:       feed.services.size,
+  }
 end
 
 # ここへ到達するのは `_HANDLER` がどの handler とも一致しなかったときである。

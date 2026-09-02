@@ -152,4 +152,57 @@ describe Status::State do
     Status::State.new.history_of("youtube").empty?.should be_true
     Status::State.new.service_of("youtube").should be_nil
   end
+
+  it "carries the schema version it was written with" do
+    state = Status::State.new
+
+    state.version.should eq Status::State::SCHEMA_VERSION
+    state.supported?.should be_true
+    JSON.parse(state.to_json)["v"].should eq Status::State::SCHEMA_VERSION
+  end
+
+  # 版を持たない記録を読めてしまうと、履歴が空のまま通り、
+  # 合成監視の判定が黙って振り出しに戻る。
+  it "refuses a record written without a version" do
+    state = Status::State.from_json(%({"histories": {}, "services": {}}))
+
+    state.version.should eq 0
+    state.supported?.should be_false
+  end
+
+  it "refuses a version it does not know" do
+    state = Status::State.from_json(%({"v": 99, "histories": {}, "services": {}}))
+
+    state.supported?.should be_false
+  end
+
+  # 次の実行はこれを読んでヒステリシスを続ける。書けても読めなければ意味がない。
+  it "survives a round trip" do
+    service = Status::ServiceStatus.new(
+      id: "vrchat",
+      name: "VRChat",
+      level: Status::Level::Degraded,
+      source: Status::SourceKind::Official,
+      url: "https://status.vrchat.com",
+      checked_at: Time.unix(1756123180),
+      note: "Websocket: Partial Outage",
+    )
+    history = Status::History.new
+      .push(Status::Outcome::Success)
+      .push(Status::Outcome::Indeterminate)
+    state = Status::State.new(
+      histories: {"youtube" => history},
+      services: {"vrchat" => service},
+    )
+
+    restored = Status::State.from_json(state.to_json)
+
+    restored.supported?.should be_true
+    restored.history_of("youtube").outcomes.should eq [
+      Status::Outcome::Success,
+      Status::Outcome::Indeterminate,
+    ]
+    restored.service_of("vrchat").try(&.level).should eq Status::Level::Degraded.value
+    restored.service_of("vrchat").try(&.note).should eq "Websocket: Partial Outage"
+  end
 end

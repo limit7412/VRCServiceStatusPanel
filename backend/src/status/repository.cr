@@ -5,6 +5,9 @@ module Status
   abstract class SourceRepository
     abstract def service_id : String
     abstract def display_name : String
+    # 配信 JSON の url に入れる、人が開く先（仕様書 4）。
+    # 取得先とは限らない。Statuspage 系は summary.json ではなくページを指す。
+    abstract def display_url : String
     abstract def source_kind : SourceKind
     # 例外を外に出さず、失敗は Observation の outcome として返す（仕様書 11.4）。
     # 一つの取得元の例外で実行全体が止まると、他のサービスまで更新が止まる。
