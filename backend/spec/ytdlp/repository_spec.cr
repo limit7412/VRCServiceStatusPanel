@@ -232,6 +232,29 @@ describe Ytdlp::Repository do
       end
     end
 
+    # /tmp が埋まっている、書けない。検査を始める前に終わっている。
+    #
+    # ここで例外を漏らすと、oEmbed が通っていても YouTube の観測が失敗になり、
+    # 二回続けば全断として扱われる。YouTube は何ともなっていないのに。
+    it "置き場所を作れなくても例外を外に出さない" do
+      original = ENV["TMPDIR"]?
+      # /proc の下には作れない。
+      ENV["TMPDIR"] = "/proc/cannot-create-here"
+
+      begin
+        result = Ytdlp::Repository.new(binary: "/bin/true").probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Unavailable
+        result.note.should contain("置き場所")
+      ensure
+        if original
+          ENV["TMPDIR"] = original
+        else
+          ENV.delete("TMPDIR")
+        end
+      end
+    end
+
     # Layer が載っていない、名前が変わった、といったときにここへ来る。
     it "実行ファイルが無くても例外を外に出さない" do
       result = Ytdlp::Repository.new(binary: "/nonexistent/yt-dlp").probe("abc")

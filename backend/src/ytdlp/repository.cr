@@ -94,13 +94,27 @@ module Ytdlp
     # やがて何も検査できなくなる。
     def probe(video_id : String) : Result
       workspace = File.tempname("ytdlp-run")
-      Dir.mkdir_p(workspace)
+
+      begin
+        Dir.mkdir_p(workspace)
+      rescue error
+        # /tmp が埋まっている、書けない。検査を始める前に終わっている。
+        return Result.new(Outcome::Unavailable, "置き場所を作れない（#{error.class.name}）")
+      end
 
       begin
         run(video_id, workspace)
       ensure
-        FileUtils.rm_rf(workspace)
+        discard(workspace)
       end
+    end
+
+    # 畳めなくても、そこで実行を終わらせない。
+    # 置き場所が残るのは困るが、それを理由に観測を落とすほどではない。
+    private def discard(workspace : String) : Nil
+      FileUtils.rm_rf(workspace)
+    rescue error
+      Log.warn(exception: error) { "置き場所を畳めなかった #{workspace}" }
     end
 
     private def run(video_id : String, workspace : String) : Result

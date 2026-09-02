@@ -56,7 +56,14 @@ module Youtube
 
     def observe : Status::Observation
       started = Time.instant
-      response = Upstream.get(oembed_url)
+
+      # 例外を拾う範囲は、この取得だけにする。
+      # 広げると、二段目で起きたことまで「oEmbed に届かない」と言い出す。
+      response = begin
+        Upstream.get(oembed_url)
+      rescue error
+        return failure("oEmbed に届かない（#{error.message || error.class.name}）")
+      end
 
       # レイテンシは oEmbed の分だけを測る。
       # yt-dlp のほうには自身の展開にかかる時間が含まれ、それは YouTube の
@@ -71,8 +78,6 @@ module Youtube
       return failure("oEmbed の応答が JSON でない") unless resolved?(response.body)
 
       judge(@ytdlp.probe(@video_id), latency)
-    rescue error
-      failure("oEmbed に届かない（#{error.message || error.class.name}）")
     end
 
     # 二段目の結果を観測に写す（仕様書 3.3、7.2）。
