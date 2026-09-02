@@ -42,6 +42,54 @@ private def with_fake_ytdlp(
   end
 end
 
+# 子を残したまま眠る偽物。止めるときに子まで落とせるかを見るために使う。
+#
+# 本物の yt-dlp はスタンドアロン版で、自身を /tmp へ展開してそちらを実行し、
+# QuickJS も別に起こす。親だけを止めても子が残る形は、本番でも起こりうる。
+private def with_fake_ytdlp_spawning_child(&)
+  base = File.tempname("ytdlp-fake")
+  child_path = "#{base}.child"
+  script = "#{base}.sh"
+
+  fake = String.build do |io|
+    io << "#!/bin/sh\n"
+    io << "sleep 30 &\n"
+    io << "echo $! > #{child_path}\n"
+    io << "sleep 30\n"
+  end
+
+  File.write(script, fake)
+  File.chmod(script, 0o755)
+
+  begin
+    yield script, child_path
+  ensure
+    [child_path, script].each { |path| File.delete?(path) }
+  end
+end
+
+# 止まるまで少し待つ。KILL が届いても、止まるのは次の瞬間とは限らない。
+#
+# Process.exists? では見分けられない。あれはシグナルが届くかを見るもので、
+# 終わったが引き取り手が刈り取っていないもの（ゾンビ）にも真を返す。
+# 動いていないことを見たいので、状態そのものを読む。
+private def stopped?(pid : Int64) : Bool
+  20.times do
+    return true if zombie_or_gone?(pid)
+    sleep 20.milliseconds
+  end
+
+  zombie_or_gone?(pid)
+end
+
+private def zombie_or_gone?(pid : Int64) : Bool
+  # /proc の stat は「pid (名前) 状態 ...」で、名前に空白が入りうる。
+  File.read("/proc/#{pid}/stat").split(") ").last[0] == 'Z'
+rescue
+  # 読めないなら、もう居ない。
+  true
+end
+
 private def metadata_json(formats : Int32 = 1) : String
   entries = Array.new(formats) { |index| %({"format_id": "#{index}"}) }
 
@@ -137,6 +185,18 @@ describe Ytdlp::Repository do
         result.note.should contain("終わらない")
         # 止めるまでを待つが、眠っている十秒には付き合わない。
         (Time.instant - started).should be < 5.seconds
+      end
+    end
+
+    # 親だけを止めると、子はパイプを握ったまま残り、毎分の実行で溜まっていく。
+    it "止めるときは子まで落とす" do
+      with_fake_ytdlp_spawning_child do |binary, child_path|
+        result = Ytdlp::Repository.new(binary: binary, timeout: 300.milliseconds).probe("abc")
+
+        result.outcome.should eq Ytdlp::Outcome::Failed
+
+        child = File.read(child_path).strip.to_i64
+        stopped?(child).should be_true
       end
     end
 

@@ -50,10 +50,6 @@ module Ytdlp
     TIMEOUT = 20.seconds
 
     # 止めたあと、後始末に付き合う時間。
-    #
-    # 送った KILL は起動した相手にしか届かない。その相手が作った孫が
-    # 出力のパイプを握ったままだと、wait はいつまでも返らない。
-    # そこで待ち続けると、上限を置いた意味が消える。
     GRACE = 1.second
 
     # bot 検知やサインイン要求を示す文言（仕様書 7.2）。
@@ -122,11 +118,6 @@ module Ytdlp
     end
 
     # 上限まで待ち、越えたら止める（仕様書 5.2）。
-    #
-    # 止めたあとも少しは待つ。待たずに戻ると、後始末の済んでいない子が
-    # ウォームスタートのあいだ溜まっていく。
-    # ただし待ち切らない。KILL は起動した相手にしか届かず、その相手が作った
-    # 孫がパイプを握っていると wait は返らないままになる。
     private def wait_within(process : Process) : Process::Status?
       done = Channel(Process::Status).new(1)
       spawn { done.send(process.wait) }
@@ -136,12 +127,63 @@ module Ytdlp
         status
       when timeout(@timeout)
         Log.warn { "yt-dlp が終わらないので止める 上限=#{@timeout}" }
-        process.signal(Signal::KILL)
+        kill_tree(process.pid)
         wait_for_exit(done)
         nil
       end
     end
 
+    # 起動した相手と、その下にぶら下がったものをまとめて止める。
+    #
+    # signal が届くのは起動した相手だけである。yt-dlp のスタンドアロン版は
+    # 自身を /tmp へ展開してそちらを実行し、そこから QuickJS も起こすので、
+    # 相手の下に子が生まれる。親だけを止めると、子は出力のパイプを握ったまま
+    # 残り、毎分の実行でウォームな環境に溜まっていく。
+    #
+    # プロセスグループを分けて一度に落とす手もあるが、Crystal の Process に
+    # その口が無い。/proc から子を辿って集め、下から順に止める。
+    private def kill_tree(pid : Int64) : Nil
+      # 止める前に集める。先に親を止めると、辿る手がかりが消える。
+      targets = descendants(pid)
+
+      # 親から止める。先に止めておけば、その先で新しい子が生まれない。
+      kill(pid)
+      targets.each { |target| kill(target) }
+    end
+
+    private def descendants(pid : Int64) : Array(Int64)
+      found = [] of Int64
+      queue = children_of(pid)
+
+      until queue.empty?
+        current = queue.shift
+        next if found.includes?(current)
+
+        found << current
+        queue.concat(children_of(current))
+      end
+
+      found
+    end
+
+    # Linux が見せている子の一覧。読めなければ空として扱う。
+    private def children_of(pid : Int64) : Array(Int64)
+      File.read("/proc/#{pid}/task/#{pid}/children").split.compact_map(&.to_i64?)
+    rescue
+      [] of Int64
+    end
+
+    # 止めた相手は、引き取り手が刈り取るまで PID の表に残ることがある。
+    # 動いてはおらず、握っていたパイプも閉じているので、そこまでは追わない。
+    private def kill(pid : Int64) : Nil
+      Process.signal(Signal::KILL, pid)
+    rescue
+      # もう終わっている。
+    end
+
+    # 止めたあとも少しは待つ。待たずに戻ると、後始末の済んでいない子が残る。
+    # ただし待ち切らない。取りこぼした孫がパイプを握っていれば wait は返らず、
+    # そこで待ち続けると上限を置いた意味が消える。
     private def wait_for_exit(done : Channel(Process::Status)) : Nil
       select
       when done.receive
