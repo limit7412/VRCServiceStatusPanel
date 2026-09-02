@@ -1,7 +1,9 @@
 require "./booth/repository"
 require "./config"
+require "./error/usecase"
 require "./r2/repository"
 require "./runtime/lambda"
+require "./runtime/metrics"
 require "./status/models"
 require "./status/repository"
 require "./status/usecase"
@@ -80,9 +82,23 @@ feeds = R2::Repository.new(
 )
 
 usecase = Status::Usecase.new(sources, feeds)
+errors = Error::Usecase.new(config.env, config.alert_webhook_url)
+metrics = Runtime::Metrics.new(config.env)
 
-Runtime::Lambda.handler "refresh" do |_event|
-  feed = usecase.refresh
+Runtime::Lambda.handler "refresh" do |_event, request_id|
+  feed = begin
+    usecase.refresh
+  rescue ex
+    # 失敗の記録と Lambda への報告は runtime が行う（仕様書 11.7）。
+    # ここで足すのは、人へ届ける経路だけである。
+    errors.alert("refresh", ex, request_id)
+    raise ex
+  end
+
+  # 配信まで終えた実行を数える（仕様書 9）。
+  # 上流の一部が取れなくても、前回値を継いで配り切れていれば成功である。
+  # 止まったことを見たいのであって、上流の調子はメトリクスの外にある。
+  metrics.success
 
   Log.info do
     "配信した generated_unix=#{feed.generated_unix} " \
