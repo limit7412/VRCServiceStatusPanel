@@ -26,6 +26,16 @@ module Error
     # そのときは一通余分に届く。
     INTERVAL = 10.minutes
 
+    # Discord の上限。越えると 400 で断られ、届かないことだけが残る。
+    # https://discord.com/developers/docs/resources/message#embed-object-embed-limits
+    CONTENT_LIMIT     = 2000
+    TITLE_LIMIT       =  256
+    DESCRIPTION_LIMIT = 4096
+    FIELD_LIMIT       = 1024
+
+    # 埋め込みの左端の色。赤系にしておく。
+    COLOR = 0xE74C3C
+
     def initialize(@env : String, @webhook_url : String)
       @last_sent = {} of String => Time
     end
@@ -54,15 +64,38 @@ module Error
       last.nil? || at - last >= INTERVAL
     end
 
-    # 仕様書 11.7 の五つ。
+    # Discord の webhook が受け取る形。
+    # https://discord.com/developers/docs/resources/webhook#execute-webhook
+    #
+    # 仕様書 11.2 は「JSON を POST する」とだけ定めていて、形は送信先が決める。
+    # Discord は content か embeds のどちらかを求め、平らな JSON は 400 で断る。
+    # 仕様書 11.7 の五つは、種類を title に、文面を description に、残りを fields に置く。
+    #
+    # content は通知の一行目になる。押し通知に出るのはここなので、
+    # どこの何が落ちたかを、開かずに分かる形にする。
     private def body(handler : String, error : Exception, kind : String, request_id : String?) : String
       {
-        env:        @env,
-        handler:    handler,
-        error_type: kind,
-        message:    error.message.to_s,
-        request_id: request_id,
+        content: clip("#{@env} の #{handler} が失敗した", CONTENT_LIMIT),
+        embeds:  [{
+          title:       clip(kind, TITLE_LIMIT),
+          description: clip(error.message.to_s, DESCRIPTION_LIMIT),
+          color:       COLOR,
+          fields:      [
+            {name: "env", value: clip(@env, FIELD_LIMIT), inline: true},
+            {name: "handler", value: clip(handler, FIELD_LIMIT), inline: true},
+            # 空の value は断られる。request id は runtime が必ず付けるが、型は nil を許す。
+            {name: "request_id", value: clip(request_id || "-", FIELD_LIMIT), inline: false},
+          ],
+        }],
       }.to_json
+    end
+
+    # 上限を越えた分を落とす。Discord は超過を切り詰めず、400 で丸ごと断る。
+    # 数えるのは文字であってバイトではない。
+    private def clip(text : String, limit : Int32) : String
+      return text if text.size <= limit
+
+      text[0, limit - 1] + "…"
     end
 
     private def post(body : String) : Nil

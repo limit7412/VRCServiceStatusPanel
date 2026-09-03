@@ -17,7 +17,7 @@ end
 
 describe Error::Usecase do
   describe "#alert" do
-    it "仕様書 11.7 の五つを JSON で送る" do
+    it "仕様書 11.7 の五つを Discord の形で送る" do
       inbox = Inbox.new
 
       with_stub_server(inbox.handler) do |url|
@@ -28,11 +28,47 @@ describe Error::Usecase do
       inbox.content_types.first.should eq("application/json")
 
       body = JSON.parse(inbox.bodies.first)
-      body["env"].should eq("dev")
-      body["handler"].should eq("refresh")
-      body["error_type"].should eq("ArgumentError")
-      body["message"].should eq("鍵が違う")
-      body["request_id"].should eq("req-1")
+
+      # 押し通知に出る一行。開かずに、どこの何が落ちたかが分かる。
+      body["content"].as_s.should contain("dev")
+      body["content"].as_s.should contain("refresh")
+
+      embed = body["embeds"][0]
+      embed["title"].should eq("ArgumentError")
+      embed["description"].should eq("鍵が違う")
+
+      fields = embed["fields"].as_a.to_h { |field| {field["name"].as_s, field["value"].as_s} }
+      fields["env"].should eq("dev")
+      fields["handler"].should eq("refresh")
+      fields["request_id"].should eq("req-1")
+    end
+
+    it "Discord の上限を越える文面を切り詰める" do
+      inbox = Inbox.new
+      long = "あ" * 5000
+
+      with_stub_server(inbox.handler) do |url|
+        usecase = Error::Usecase.new("dev", url)
+        usecase.alert("refresh", ArgumentError.new(long), "req-1")
+      end
+
+      # 越えたまま送ると 400 で丸ごと断られ、届かないことだけが残る。
+      description = JSON.parse(inbox.bodies.first)["embeds"][0]["description"].as_s
+      description.size.should eq(Error::Usecase::DESCRIPTION_LIMIT)
+      description.should end_with("…")
+    end
+
+    it "request id が無くても空の field を送らない" do
+      inbox = Inbox.new
+
+      with_stub_server(inbox.handler) do |url|
+        usecase = Error::Usecase.new("dev", url)
+        usecase.alert("refresh", ArgumentError.new("鍵が違う"), nil)
+      end
+
+      # Discord は空の value を断る。
+      fields = JSON.parse(inbox.bodies.first)["embeds"][0]["fields"].as_a
+      fields.find! { |field| field["name"] == "request_id" }["value"].as_s.should_not be_empty
     end
 
     it "同じ種類が続くあいだは 10 分に一通しか送らない" do
