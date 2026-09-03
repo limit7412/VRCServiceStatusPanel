@@ -28,13 +28,6 @@ module Main
     # 合成監視の対象（仕様書 3.3）
     getter youtube_probe_video_id : String
     getter booth_probe_item_id : String
-    # 載せた yt-dlp の版。/config の値と比べる（仕様書 7.3）
-    #
-    # 食い違いは note に出すだけで、再ビルドはここからは起こさない。
-    # 起点は定期実行のワークフローへ移す予定で、そちらが /config を自分で読む。
-    # そのワークフローはまだ無い（#20）。それまでは、食い違いに気付いたら
-    # infra/deploy.sh --ytdlp <版> を手で流す。
-    getter ytdlp_version : String
     # 失敗時のアラート送信先（仕様書 11.2 の error/usecase.cr）
     getter alert_webhook_url : String
 
@@ -47,7 +40,6 @@ module Main
       R2_SECRET_ACCESS_KEY
       YOUTUBE_PROBE_VIDEO_ID
       BOOTH_PROBE_ITEM_ID
-      YTDLP_VERSION
       ALERT_WEBHOOK_URL
     ]
 
@@ -66,7 +58,6 @@ module Main
         r2_secret_access_key: source["R2_SECRET_ACCESS_KEY"],
         youtube_probe_video_id: source["YOUTUBE_PROBE_VIDEO_ID"],
         booth_probe_item_id: source["BOOTH_PROBE_ITEM_ID"],
-        ytdlp_version: source["YTDLP_VERSION"],
         alert_webhook_url: source["ALERT_WEBHOOK_URL"],
       )
     end
@@ -84,14 +75,13 @@ module Main
       @r2_secret_access_key : String,
       @youtube_probe_video_id : String,
       @booth_probe_item_id : String,
-      @ytdlp_version : String,
       @alert_webhook_url : String,
     )
     end
 
     # ログに出せる範囲だけを返す。鍵は含めない。
     def to_log : String
-      "env=#{env} public=#{r2_public_bucket} state=#{r2_state_bucket} ytdlp=#{ytdlp_version}"
+      "env=#{env} public=#{r2_public_bucket} state=#{r2_state_bucket}"
     end
   end
 end

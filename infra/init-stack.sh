@@ -408,7 +408,8 @@ create_stack "$here" && created_main=yes
 drop_config "$here" githubDispatchToken "GitHub 側でこのトークンを失効させること。commit 済みの履歴からは消えない"
 drop_config "$here" ytdlpLayerArn "Layer は pulumi up が作るので、ARN を設定に持たない"
 drop_config "$here" cloudflare:apiToken "CLOUDFLARE_API_TOKEN で渡す。commit 済みの履歴に暗号文が残っているなら、トークンを作り直すこと"
-rename_config "$here" ytdlpLayerVersion ytdlpVersion
+drop_config "$here" ytdlpLayerVersion "yt-dlp の検査は取り下げた（仕様書 7）"
+drop_config "$here" ytdlpVersion "yt-dlp の検査は取り下げた（仕様書 7）"
 
 # 権限境界を ARN ではなく名前で持つように変えた（#26）。
 #
@@ -428,8 +429,7 @@ if has_config "$here" workloadBoundaryArn; then
 fi
 
 # 二度目の実行で Enter を押したときに、既定のリージョンで上書きしない。
-# 別のリージョンで作ってあると、AWS のリソースが置き換わり、
-# 発行済みの Layer とも食い違う。
+# 別のリージョンで作ってあると、AWS のリソースが置き換わる。
 region_default=$(current_config "$here" aws:region)
 [ -n "$region_default" ] || region_default="ap-northeast-1"
 
@@ -457,8 +457,7 @@ set_required "$here" youtubeProbeVideoId "YouTube の固定動画 ID"
 set_required "$here" boothProbeItemId "BOOTH の商品 ID"
 
 echo
-echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
-set_required "$here" ytdlpVersion "Layer に載せる yt-dlp の版（VRChat の /config の player-url-resolver-version に合わせる）"
+echo "--- 集約サーバー（仕様書 9.3、11.7） ---"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
 # CI から流すかどうかは、権限境界を入れるかどうかで決まる。
@@ -511,12 +510,10 @@ echo "  $here/Pulumi.$stack.yaml"
 echo
 echo "次にやること"
 
-# Layer は pulumi up が作るので、初回と二度目で案内は変わらない。
-#
 # Cloudflare のトークンは設定に入らないので、流す前に環境変数へ入れてもらう（#24）。
 deploy_line="       printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
        CLOUDFLARE_API_TOKEN=\"\$cloudflare_token\" \"$here/deploy.sh\""
-deploy_label="本体を流す（Layer もここで作られる）"
+deploy_label="本体を流す"
 
 echo "  1. 出来た Pulumi.$stack.yaml を commit する（#12）"
 echo "  2. $deploy_label"

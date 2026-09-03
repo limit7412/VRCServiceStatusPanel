@@ -10,7 +10,6 @@ private def full_env : Hash(String, String)
     "R2_SECRET_ACCESS_KEY"   => "secret",
     "YOUTUBE_PROBE_VIDEO_ID" => "video",
     "BOOTH_PROBE_ITEM_ID"    => "item",
-    "YTDLP_VERSION"          => "2025.09.26",
     "ALERT_WEBHOOK_URL"      => "https://example.test/hook",
   }
 end
@@ -22,7 +21,6 @@ describe Main::Config do
 
       config.env.should eq("dev")
       config.r2_public_bucket.should eq("status-public")
-      config.ytdlp_version.should eq("2025.09.26")
     end
 
     it "欠けていれば落とす" do

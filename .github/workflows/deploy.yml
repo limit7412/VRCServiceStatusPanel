@@ -95,28 +95,6 @@ jobs:
           requested-token-type: urn:pulumi:token-type:access_token:personal
           scope: user:limit7412
 
-      # Layer の zip も .gitignore の対象で、checkout には入っていない。
-      # src/layer.ts が FileArchive として開くので、bootstrap.zip と同じく
-      # 無いと pulumi up はファイル未検出で止まる。
-      #
-      # 版は出す相手のスタックから読む。別のスタックの版を渡すと、
-      # 中身と description と YTDLP_VERSION が食い違う。
-      # config get は Pulumi CLI と Pulumi Cloud への資格情報を要るので、
-      # このステップは上の二つより後に置く。
-      - name: build ytdlp layer zip
-        run: |
-          version=$(pulumi -C infra config get --stack "$ORG/$STACK" ytdlpVersion)
-          if [ -z "$version" ]; then
-            echo "ytdlpVersion が未設定である。Pulumi.$STACK.yaml を確かめること" >&2
-            exit 1
-          fi
-          echo "yt-dlp $version"
-          backend/layer/build.sh "$version" "" backend/ytdlp-layer.zip
-        env:
-          STACK: ${{ inputs.stack }}
-          # 設定は checkout した Pulumi.<スタック名>.yaml から読まれる。
-          # 暗号文で入っている値を開けるのに要る（infra/README.md の「設定の置き場所」）
-          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
 
       - name: pulumi up
         run: pulumi up --yes --stack "$ORG/$STACK"

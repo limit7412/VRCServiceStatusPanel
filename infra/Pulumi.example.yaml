@@ -42,12 +42,6 @@ config:
   # vrc-service-status-panel:stateBucket: qazx7412-vrc-service-status-panel-dev-state
   vrc-service-status-panel:bucketLocation: apac
 
-  # Layer に載せる yt-dlp の版（仕様書 7.1、7.3）。
-  # VRChat の /config の player-url-resolver-version に合わせる。
-  # Layer は pulumi up が作り、その ARN は src/compute.ts が関数へ渡す。
-  # ここに置くのは版だけで、ARN は設定に持たない（#21）
-  vrc-service-status-panel:ytdlpVersion: ""
-
   # 合成監視の対象（仕様書 3.3）。
   # どちらも作者自身のもので、上流の都合で消えないものを選ぶ
   vrc-service-status-panel:youtubeProbeVideoId: ""

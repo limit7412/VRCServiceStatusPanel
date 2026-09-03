@@ -51,9 +51,6 @@ handler 名にも同じ事情がある。
 関数名の上限は 64 文字で、`dev` なら 26 文字ほど残る。
 外れていればこちらも `pulumi up` の最初で止まる。
 
-Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`）。
-中身はスタックによらず同じだが、Pulumi が持つので、名前を共有すると dev と prod が同じ Layer 名へ別々に版を積むことになる。
-
 **一度出したあとで名前を変えると、作り直しになる。**
 バケットもロールも関数も、名前は置き換えでしか変えられない。
 バケットには `protect: true` を付けてあるので、置き換えは削除の段階で止まる。
@@ -95,7 +92,6 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | 配信バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-public`） | `cloudflare.R2Bucket` | 6 |
 | 内部バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-state`） | `cloudflare.R2Bucket` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
-| yt-dlp と QuickJS の Layer（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`） | `aws.lambda.LayerVersion` | 7.1、7.3 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
@@ -121,7 +117,7 @@ CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 | SNS のトピック | CloudWatch のアラーム | 5 分のあいだ一度も配信まで終えていない |
 
 前者は関数が上がっていることが前提である。
-Layer が壊れて `bootstrap` が起動しない、Scheduler が止まる、といった場合は何も送られない。
+バイナリが壊れて `bootstrap` が起動しない、Scheduler が止まる、といった場合は何も送られない。
 止まったことを知らせるには、外から見ている誰かが要る。
 
 後者の届け先を webhook にしないのも同じ理由である。
@@ -353,7 +349,7 @@ config:
 ```
 
 平文で入るのは識別子のほうである。
-アカウント ID、ゾーン ID、配信ホスト名、バケット名、yt-dlp の版。
+アカウント ID、ゾーン ID、配信ホスト名、バケット名。
 
 commit するのは、CI へ渡すものを減らすためである。
 ファイルを持たせない道もあるが、その場合は値を GitHub の Secrets と Variables へ並べ直すことになり、設定を足すたびにワークフローも直すことになる。
@@ -382,7 +378,6 @@ commit されているほうには作者のアカウント ID と、作者のパ
 printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
 
 CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh
-CLOUDFLARE_API_TOKEN="$cloudflare_token" infra/deploy.sh --ytdlp 2025.09.26
 ```
 
 `CLOUDFLARE_API_TOKEN` はスタックの設定に入らないので、流すときに渡す（#24）。
@@ -410,7 +405,7 @@ R2 に state を持つスタックは、`pulumi login` した先から見えな�
 
 `deploy.sh` の前に `init-stack.sh` を流し直す。
 
-設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` を落として `ytdlpLayerVersion` を `ytdlpVersion` へ引き継ぐのも、`workloadBoundaryArn` を `workloadBoundaryName` へ移すのも、短いパスフレーズの入れ替えを案内するのも `init-stack.sh` の中にある。
+設定から `cloudflare:apiToken` を落とすのも、`ytdlpLayerArn` と `ytdlpVersion` を落とすのも、`workloadBoundaryArn` を `workloadBoundaryName` へ移すのも、短いパスフレーズの入れ替えを案内するのも `init-stack.sh` の中にある。
 `deploy.sh` だけを流すと、設定ファイルにトークンの暗号文が残り、アカウント ID も入ったままになる。
 
 ```
@@ -423,13 +418,7 @@ infra/init-stack.sh dev
 聞かれる値には、いま入っているものが既定として出る。
 Enter で通せばそのまま残る。
 
-`--ytdlp` は `ytdlpVersion` を書き換えるだけである。
-Layer そのものは Pulumi が持つので、発行と関数への反映は同じ `pulumi up` の中で揃う（#8）。
-
-Layer の zip は毎回用意される。
-`backend/layer/build.sh` は同じ版の zip が既にあれば何もしないので、36 MiB を取り直すのは版を変えたときだけである。
-
-`--ytdlp` 以外の引数はそのまま `pulumi up` へ渡る（`--yes` など）。
+引数はそのまま `pulumi up` へ渡る（`--yes` など）。
 
 commit はしない。
 設定が変わったら `Pulumi.<スタック名>.yaml` を自分で残す。
@@ -482,14 +471,6 @@ CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh
 
 トークンを export せずにこの呼び出しへだけ渡すのは「デプロイ」に書いたとおりである。
 
-Layer は `deploy.sh` の中の `pulumi up` が作る。
-版は `init-stack.sh` で入れた `ytdlpVersion` を使うので、初回でも `--ytdlp` は要らない。
-あとから版を変えるときだけ渡す。
-
-```
-CLOUDFLARE_API_TOKEN="$cloudflare_token" ./deploy.sh --ytdlp 2025.09.26
-```
-
 #### GitHub Actions からも流す場合
 
 権限境界の ARN が要る。
@@ -525,19 +506,11 @@ printf 'CLOUDFLARE_API_TOKEN: '; read -rs cloudflare_token && echo
 # 1. バイナリを作る（docker が要る）
 ../backend/build.sh
 
-# 2. Layer の zip を用意する（仕様書 7.1、7.3）
-#    版は ytdlpVersion と揃える。揃っていないと、実行時の比較が
-#    載せた版ではなく設定の版を見ることになる。
-../backend/layer/build.sh "$(pulumi config get ytdlpVersion)" "" ../backend/ytdlp-layer.zip
-
-# 3. 反映する
+# 2. 反映する
 CLOUDFLARE_API_TOKEN="$cloudflare_token" pulumi up
 ```
 
-`pulumi up` は `../backend/bootstrap.zip` と `../backend/ytdlp-layer.zip` を読むので、1 か 2 を飛ばすとそこで止まる。
-
-Layer の発行は 3 の中で起きる。
-zip が前回と同じなら新しい版は作られない。
+`pulumi up` は `../backend/bootstrap.zip` を読むので、1 を飛ばすとそこで止まる。
 
 OIDC のロールと権限境界はこのスクリプトの対象外である。
 あちらは CI の権限そのものを決める場所で、Pulumi に載せていない（「GitHub Actions から AWS へ入る」を参照）。
@@ -635,21 +608,6 @@ steps:
       requested-token-type: urn:pulumi:token-type:access_token:personal
       scope: user:limit7412
 
-  # Layer の zip も .gitignore の対象で、checkout には入っていない。
-  # src/layer.ts が FileArchive として開くので、bootstrap.zip と同じく
-  # 無いと pulumi up はファイル未検出で止まる。
-  #
-  # 版は流す相手のスタックから読む。ここで別のスタックの版を渡すと、
-  # 中身と description と YTDLP_VERSION が食い違う。
-  # config get は Pulumi CLI と Pulumi Cloud への資格情報を要るので、
-  # このステップは pulumi/actions と auth-actions の後に置く。
-  - run: |
-      backend/layer/build.sh \
-        "$(pulumi -C infra config get --stack "$ORG/prod" ytdlpVersion)" \
-        "" backend/ytdlp-layer.zip
-    env:
-      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-
   # スタック名は commit してある Pulumi.<スタック名>.yaml のものにする
   - run: pulumi up --yes --stack "$ORG/prod"
     working-directory: infra
@@ -677,18 +635,13 @@ GitHub Actions を OIDC issuer として登録する。
 動かすには `prod` のスタックを作り、その `Pulumi.prod.yaml` を commit しておく必要がある。
 デプロイロールは `dev` と `prod` のどちらにも届くので、ロールの側で用意するものは無い。
 
-Layer を Pulumi に持たせたことで、デプロイロールには Layer の発行と削除も要る。
-読み取りだけのままだと、最初の `PublishLayerVersion` で `AccessDenied` になる。
-`docs/aws-oidc.md` のポリシーには入れてあり、実物のロールにも反映済みである。
+デプロイロールには Layer の発行と削除が残っている。
+yt-dlp の Layer を Pulumi が持っていたころのもので（仕様書 7）、発行済みの Layer を `pulumi up` が消すのに `DeleteLayerVersion` が要るので、消し終えるまでは外さない。
 ロールは CI から更新できない設計なので、権限を変えるときは手元から CLI で流す。
 
 `pulumi login` のステップも、`pulumi config set` を並べるステップも要らない。
 置き場所は `Pulumi.yaml` に、設定は `Pulumi.<スタック名>.yaml` にあり、どちらも checkout した時点でそろっている。
 **そろっていないのはバイナリだけ**で、これは `.gitignore` の対象なので毎回作る。
-
-Layer の zip もバイナリと同じ扱いになる。
-どちらも `.gitignore` の対象なので、`pulumi up` の前に作る（仕様書 7.1、7.3）。
-発行そのものは `pulumi up` の中で起きるので、デプロイロールには Layer の発行と削除も与えてある。
 
 実体は `.github/workflows/deploy.yml` にある。
 上の並びをそのまま書いたものである。
