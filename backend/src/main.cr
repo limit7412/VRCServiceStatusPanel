@@ -9,6 +9,7 @@ require "./status/repository"
 require "./status/usecase"
 require "./statuspage/repository"
 require "./steam/repository"
+require "./vrchat_api/repository"
 require "./youtube/repository"
 require "./ytdlp/repository"
 
@@ -53,7 +54,13 @@ sources = [
     # 上流が名称を変えても、そのサービスの level までは巻き添えにならない。
     component_names: ["API", "Auth", "Websocket", "Website"],
   ),
-  Youtube::Repository.new(config.youtube_probe_video_id, Ytdlp::Repository.new),
+  # 同梱版の照合（仕様書 7.3）。/config は一時間に一度しか取らない。
+  Youtube::Repository.new(
+    config.youtube_probe_video_id,
+    Ytdlp::Repository.new,
+    bundled: VrchatApi::Repository.new,
+    layer_version: config.ytdlp_version,
+  ),
   Steam::Repository.new,
   Booth::Repository.new(config.booth_probe_item_id),
   Statuspage::Repository.new(

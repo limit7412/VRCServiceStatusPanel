@@ -2,6 +2,7 @@ require "uri"
 require "../status/models"
 require "../status/repository"
 require "../upstream"
+require "../vrchat_api/repository"
 require "../ytdlp/repository"
 require "./models"
 
@@ -19,12 +20,20 @@ module Youtube
   class Repository < Status::SourceRepository
     OEMBED_URL = "https://www.youtube.com/oembed"
 
+    # 同梱版と食い違っているときに note へ出す文言（仕様書 7.3）。
+    MISMATCH = "VRChat 同梱版と不一致"
+
     # endpoint を受け取るのは spec から差し替えるためである。
     # 表示に出す url は定数のままにする（仕様書 4）。
+    #
+    # bundled と layer_version は同梱版の照合に使う（仕様書 7.3）。
+    # bundled が nil なら照合しない。
     def initialize(
       @video_id : String,
       @ytdlp : Ytdlp::Repository = Ytdlp::Repository.new,
       @endpoint : String = OEMBED_URL,
+      @bundled : VrchatApi::Repository? = nil,
+      @layer_version : String = "",
     )
     end
 
@@ -84,12 +93,15 @@ module Youtube
     private def judge(result : Ytdlp::Result, latency : Time::Span) : Status::Observation
       case result.outcome
       in Ytdlp::Outcome::Resolved
-        observation(Status::Outcome::Success, latency)
+        observation(Status::Outcome::Success, latency, note: mismatch_note)
       in Ytdlp::Outcome::Unresolved
         # サイトは動いているのに解決できない。
         # 再生はできないが YouTube が落ちたわけではないので、
         # 失敗とは数えず一段の低下にとどめる。
-        observation(Status::Outcome::Success, latency, note: result.note, partial: true)
+        #
+        # 解決できない理由のほうが、版の食い違いより先に読まれるべきものである。
+        # yt-dlp の note が空のときだけ、食い違いを出す。
+        observation(Status::Outcome::Success, latency, note: result.note.presence || mismatch_note, partial: true)
       in Ytdlp::Outcome::Unavailable
         # 検査そのものが成り立っていない。
         # 解決できなかったのと同じ顔をさせると、Layer が載っていない状態が
@@ -116,6 +128,17 @@ module Youtube
         note: note,
         partial: partial,
       )
+    end
+
+    # 同梱版と Layer の版が食い違っていれば、その旨（仕様書 7.3）。
+    #
+    # /config が取れなかったときは何も出さない。
+    # 照合できなかったことは、YouTube の状態ではない。
+    private def mismatch_note : String
+      bundled = @bundled.try(&.version)
+      return "" if bundled.nil? || bundled == @layer_version
+
+      "#{MISMATCH}（同梱 #{bundled}）"
     end
 
     # 動画が解決できたか。題が読めれば解決できている。
