@@ -99,6 +99,8 @@ Layer も同じ規則に従う（`qazx7412-vrc-service-status-panel-<スタッ�
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
+| 止まったことを知らせる先（`qazx7412-vrc-service-status-panel-<スタック名>-alerts`） | `aws.sns.Topic` | 9 |
+| 5 分止まったら鳴るアラーム | `aws.cloudwatch.MetricAlarm` | 9 |
 
 OIDC プロバイダ、デプロイロール、権限境界はここに無い。
 CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
@@ -108,6 +110,44 @@ CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 
 カスタムドメインと Cache Rules は作らない。
 理由はどちらも下の「手で行う作業」にある。
+
+### 止まったことを知らせる経路
+
+通知の経路は二つある。どちらへ届くかで、何が起きたかが分かれる。
+
+| 経路 | 送る主体 | 何を知らせるか |
+| --- | --- | --- |
+| `ALERT_WEBHOOK_URL` | 関数自身（`backend/src/error/usecase.cr`） | `refresh` が例外を出した |
+| SNS のトピック | CloudWatch のアラーム | 5 分のあいだ一度も配信まで終えていない |
+
+前者は関数が上がっていることが前提である。
+Layer が壊れて `bootstrap` が起動しない、Scheduler が止まる、といった場合は何も送られない。
+止まったことを知らせるには、外から見ている誰かが要る。
+
+後者の届け先を webhook にしないのも同じ理由である。
+SNS から webhook へ渡すには転送する関数が要り、その関数は見張る相手と同じ足場に乗る。
+メールなら AWS の中だけで完結する。
+
+アラームは「一分ごとの `RefreshSuccess` が 5 つ続けて 1 未満」で鳴る。
+
+5 分をひとつの期間にして一度だけ見る形は採っていない。
+CloudWatch は欠測があると、指定した期間より広い範囲まで遡って実データ点を探し、評価期間のぶんだけ見つかれば `treatMissingData` を使わずにその古い点で判定する（[Configuring how CloudWatch alarms treat missing data](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html)）。
+止まる直前の成功が範囲に残っているあいだ、`OK` のままになってしまう。
+一分ごとに刻み、`FILL` で欠測を 0 に変えれば、埋めた 0 がそのまま実データ点として数えられ、遡る必要そのものが無くなる。
+
+`FILL` で埋まらない場合のために `treatMissingData: "breaching"` も置いてある。
+埋める相手はメトリクスの側にあるデータ点なので、範囲に一つも無ければ何も返さない。
+関数が一度も上がっていない場合がこれにあたり、そのままでは鳴らずに `INSUFFICIENT_DATA` で止まる。
+
+**デプロイした直後は鳴る。**
+まだ一度も成功していないので、正しい振る舞いである。
+最初の実行が配信まで終えれば戻る。
+
+ただし、その最初の `ALARM` は誰にも届かない。
+届け先を足すのはデプロイのあとであり、SNS へ送られるのは状態が変わった瞬間だけだからである。
+`ALARM` のまま留まっているあいだは、購読を足しても何も来ない。
+最初から壊れていて一度も成功しない、というこの監視がいちばん捕まえたい形が、それにあたる。
+届け先を足したあとに `OK` へ張り直す（下の「手で行う作業」）。
 
 ### R2 のデータ用トークンの権限
 
@@ -849,6 +889,80 @@ Pulumi に載せていないのは、ゾーンに一つしか置けない共有�
 スタックを増やすたびに取り合いになり、`pulumi destroy` の射程に入れると、
 片方のスタックを畳んだだけでもう片方の配信のキャッシュ設定まで消える。
 AWS の OIDC プロバイダを Pulumi に載せていないのと同じ形にしてある（`docs/aws-oidc.md`）。
+
+**SNS のトピックに届け先を足す。**
+`pulumi up` が作るのはトピックとアラームだけで、届け先は入っていない。
+足すまでは、アラームが鳴っても誰にも届かない。
+
+```
+region="$(pulumi config get aws:region)"
+topic="$(pulumi stack output alertTopicArn)"
+
+aws sns subscribe --region "$region" \
+  --topic-arn "$topic" \
+  --protocol email --notification-endpoint <アドレス>
+```
+
+**`--region` は省かない。**
+リージョンを固定しているのは Pulumi の AWS プロバイダだけで（`src/providers.ts`）、AWS CLI は自分の設定と環境変数から選ぶ。
+CLI の既定がスタックと違えば、`pulumi up` が通っていても、この購読は別のリージョンへ向かって落ちる。
+下のアラームの二つは名前しか渡さないので、なおさら効く。
+
+送ったあと、AWS からそのアドレスへ確認のメールが届く。
+中のリンクを開くまで購読は `PendingConfirmation` のままで、その間は何も届かない。
+
+```
+aws sns list-subscriptions-by-topic --region "$region" \
+  --topic-arn "$topic" \
+  --query 'Subscriptions[].[Protocol,Endpoint,SubscriptionArn]' --output table
+```
+
+`SubscriptionArn` が `PendingConfirmation` のままなら、まだ確認していない。
+
+**届け先を足したら、アラームを `OK` へ張り直す。**
+`pulumi up` の直後、アラームはもう `ALARM` に入っている（まだ一度も成功していないため）。
+SNS へ送られるのは状態が変わった瞬間だけなので、そのあとに購読を足しても、`ALARM` のまま留まっているかぎり何も来ない。
+
+いまの状態を見てから張り直す。
+
+```
+alarm="$(pulumi stack output staleAlarmName)"
+
+aws cloudwatch describe-alarms --region "$region" --alarm-names "$alarm" \
+  --query 'MetricAlarms[0].StateValue' --output text
+
+aws cloudwatch set-alarm-state --region "$region" --alarm-name "$alarm" \
+  --state-value OK --state-reason "届け先を足した"
+```
+
+`set-alarm-state` が変えるのは状態だけで、次の評価では実際のメトリクスから作り直される。
+まだ動いていなければ、そこで `OK` から `ALARM` へ移り、今度は通知が届く。
+動いていれば `OK` のままになる。
+
+**`ALARM` から張り直したなら、この時点で一通届く。**
+`ALARM` から `OK` への遷移になるので、復旧の知らせが飛ぶ。
+それが来なければ、購読がまだ確認されていない。
+
+すでに `OK` だった場合（最初の実行が成功していれば、そうなる）は遷移が起きないので、何も届かない。
+届け先を確かめたいときは、いまの状態と違う値を指定する。
+同じ値を指定しても、[`SetAlarmState`](https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_SetAlarmState.html) は遷移として扱わず、通知も送らない。
+
+**届け先を設定に持たせていないのは、その値が commit されるためである。**
+このリポジトリは public なので（仕様書 9）、メールアドレスを設定へ置けばそのまま公開される。
+secret にすれば暗号文になるが、そうすると値が Output になり、
+「設定してあれば購読を作る」という条件そのものが書けなくなる。
+
+手作業が増えるわけでもない。
+上のとおり、確認のリンクを開くところはどのみち人の手が要る。
+Chatbot 経由の Slack のように、メール以外へ届けたい場合の余地も残る。
+
+**デプロイロールに SNS とアラームの権限を足す。**
+CI からデプロイする場合だけ要る。
+ロールは Pulumi の外にあり、CLI で作ってある（`docs/aws-oidc.md`）。
+
+足すのは `Alerts`、`CreateAlarms`、`Alarms` の三つの Sid である。
+`Alerts` が無ければ最初の `sns:CreateTopic` で止まり、`CreateAlarms` が無ければその次の `cloudwatch:PutMetricAlarm` で止まる。
+`PutMetricAlarm` だけを分けてあるのは、鳴らす先を絞る条件が、そのアクションにしか掛からないためである。
 
 ## 確かめ方
 

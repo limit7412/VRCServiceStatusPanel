@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 
+import { alertTopic, staleAlarm } from "./src/alarm";
 import { createFunctions, Environment } from "./src/compute";
 import { r2AccessKeyId, r2Endpoint, r2SecretAccessKey } from "./src/credentials";
 import { publicBucket, stateBucket } from "./src/delivery";
@@ -28,6 +29,7 @@ import {
 //   functions.ts    関数の一覧。増やすときはここ
 //   roles.ts        実行時のロール
 //   compute.ts      Lambda、ロググループ、Scheduler（仕様書 5.1）
+//   alarm.ts        止まったことを知らせる SNS とアラーム（仕様書 9）
 //
 // このファイルは、それらを繋いで出力を並べるだけである。
 
@@ -59,3 +61,6 @@ export const functionNames = pulumi.all(compute.functions.map((fn) => fn.name));
 export const logGroupNames = pulumi.all(compute.logGroups.map((group) => group.name));
 // カスタムドメインを手で繋ぐときの相手。
 export const deliveryUrl = `https://${deliveryHost}/v1/status.json`;
+// 届け先を手で足すときの相手（infra/README.md の「手で行う作業」）。
+export const alertTopicArn = alertTopic.arn;
+export const staleAlarmName = staleAlarm.name;

@@ -168,6 +168,9 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 | `LogGroups` | ロググループの作成、削除、保持期間 |
 | `DescribeLogGroups` | 一覧。リソース単位で絞れない |
 | `Schedules` | EventBridge Scheduler の作成、削除、更新 |
+| `Alerts` | 止まったことを知らせる SNS のトピック |
+| `CreateAlarms` | アラームの作成。鳴らす先をこのプロジェクトの SNS に限る |
+| `Alarms` | アラームの削除と読み取り |
 | `DenySelfEscalation` | このロール自身の権限を書き換える操作を塞ぐ |
 
 読み取りを `lambda:Get*` と `lambda:List*` でまとめてあるのは、Pulumi が指定していない
@@ -183,6 +186,23 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
 緩くしても昇格には繋がらない。
 境界の無いロールは上の条件で作れないため、ここへ届く相手はどれも境界付きであり、
 信頼先を書き換えても上限は変わらない。
+
+`Alerts` に購読の操作は入れていない。
+トピックの届け先は Pulumi が持たず、手で足すためである（`infra/README.md` の「手で行う作業」）。
+
+`CreateAlarms` だけが条件付きである。
+**アラームを作る権限は、`Resource` を絞っても、そのアラームが何を鳴らすかまでは絞れない。**
+名前がこの接頭辞に合っていれば、監視する相手も鳴らす先も自由に選べてしまう。
+CloudWatch のアラームアクションには
+[`arn:aws:automate:<リージョン>:ec2:terminate`](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/UsingAlarmActions.html)
+のような EC2 の操作も指定できるので、このプロジェクトと無関係なインスタンスを落とす道が残る。
+
+[アラームアクションを絞る条件キー](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/iam-cw-condition-keys-alarm-actions.html)で、
+鳴らす先をこのプロジェクトの SNS トピックに限ってある。
+三つとも掛けるのは、`OKActions` と `InsufficientDataActions` にも同じ ARN を書けるためである。
+
+`Alarms` の `cloudwatch:DescribeAlarms` はリソース単位で絞ってある。
+[複合アラーム](https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_DescribeAlarms.html)を読むには `*` に広げた権限が要るが、このプロジェクトが作るのはメトリクスアラームだけである。
 
 `DenySelfEscalation` があるので、**このロール自身の権限は CI から変えられない。**
 変えるときは手元から CLI で行う。
@@ -323,6 +343,45 @@ Pulumi が組み立てていたころは `aws:region` から取っていたが�
         "scheduler:UntagResource"
       ],
       "Resource": "arn:aws:scheduler:ap-northeast-1:<アカウントID>:schedule/default/qazx7412-vrc-service-status-panel-*"
+    },
+    {
+      "Sid": "Alerts",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:TagResource",
+        "sns:UntagResource"
+      ],
+      "Resource": "arn:aws:sns:ap-northeast-1:<アカウントID>:qazx7412-vrc-service-status-panel-*"
+    },
+    {
+      "Sid": "CreateAlarms",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricAlarm",
+      "Resource": "arn:aws:cloudwatch:ap-northeast-1:<アカウントID>:alarm:qazx7412-vrc-service-status-panel-*",
+      "Condition": {
+        "ForAllValues:StringLike": {
+          "cloudwatch:AlarmActions": "arn:aws:sns:ap-northeast-1:<アカウントID>:qazx7412-vrc-service-status-panel-*",
+          "cloudwatch:OKActions": "arn:aws:sns:ap-northeast-1:<アカウントID>:qazx7412-vrc-service-status-panel-*",
+          "cloudwatch:InsufficientDataActions": "arn:aws:sns:ap-northeast-1:<アカウントID>:qazx7412-vrc-service-status-panel-*"
+        }
+      }
+    },
+    {
+      "Sid": "Alarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:ap-northeast-1:<アカウントID>:alarm:qazx7412-vrc-service-status-panel-*"
     },
     {
       "Sid": "DenySelfEscalation",
