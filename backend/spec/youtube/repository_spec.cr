@@ -14,6 +14,17 @@ private class FakeYtdlp < Ytdlp::Repository
   end
 end
 
+# 決めた版を返す /config。VRChat API そのものは spec/vrchat_api/ で見る。
+private class FakeBundled < VrchatApi::Repository
+  def initialize(@bundled : String?)
+    super()
+  end
+
+  def version(now : Time = Time.utc) : String?
+    @bundled
+  end
+end
+
 private def oembed_json : String
   <<-JSON
     { "title": "固定動画", "author_name": "作者" }
@@ -24,6 +35,8 @@ private def with_youtube(
   status : HTTP::Status = HTTP::Status::OK,
   body : String = "",
   ytdlp : FakeYtdlp = FakeYtdlp.new,
+  bundled : VrchatApi::Repository? = nil,
+  layer_version : String = "",
   &
 )
   queries = [] of String
@@ -36,7 +49,14 @@ private def with_youtube(
   end
 
   with_stub_server(handler) do |endpoint|
-    yield Youtube::Repository.new("dQw4w9WgXcQ", ytdlp, endpoint: "#{endpoint}/oembed"), queries
+    source = Youtube::Repository.new(
+      "dQw4w9WgXcQ",
+      ytdlp,
+      endpoint: "#{endpoint}/oembed",
+      bundled: bundled,
+      layer_version: layer_version,
+    )
+    yield source, queries
   end
 end
 
@@ -111,6 +131,45 @@ describe Youtube::Repository do
 
       observation.outcome.should eq Status::Outcome::Indeterminate
       observation.note.should eq "YouTube が bot 検知を返した"
+    end
+  end
+
+  # 検査に使う版が VRChat と違えば、こちらで再生できても向こうで再生できない
+  # 期間ができる（仕様書 7.3）。
+  it "同梱版と食い違っていれば note に出す" do
+    bundled = FakeBundled.new("2025.10.22")
+
+    with_youtube(body: oembed_json, bundled: bundled, layer_version: "2025.09.26") do |source, _|
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Success
+      observation.note.should contain("VRChat 同梱版と不一致")
+      observation.note.should contain("2025.10.22")
+    end
+  end
+
+  it "同梱版と揃っていれば何も出さない" do
+    bundled = FakeBundled.new("2025.09.26")
+
+    with_youtube(body: oembed_json, bundled: bundled, layer_version: "2025.09.26") do |source, _|
+      source.observe.note.should eq ""
+    end
+  end
+
+  # 照合できなかったことは、YouTube の状態ではない。
+  it "/config が取れなければ照合しない" do
+    with_youtube(body: oembed_json, bundled: FakeBundled.new(nil), layer_version: "2025.09.26") do |source, _|
+      source.observe.note.should eq ""
+    end
+  end
+
+  # 解決できない理由のほうが、版の食い違いより先に読まれるべきものである。
+  it "解決できない理由があれば、食い違いより先に出す" do
+    ytdlp = FakeYtdlp.new(Ytdlp::Result.new(Ytdlp::Outcome::Unresolved, "再生できる形式が無い"))
+    bundled = FakeBundled.new("2025.10.22")
+
+    with_youtube(body: oembed_json, ytdlp: ytdlp, bundled: bundled, layer_version: "2025.09.26") do |source, _|
+      source.observe.note.should eq "再生できる形式が無い"
     end
   end
 
