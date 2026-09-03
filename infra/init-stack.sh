@@ -458,7 +458,7 @@ set_required "$here" boothProbeItemId "BOOTH の商品 ID"
 
 echo
 echo "--- 集約サーバー（仕様書 7.3、11.7） ---"
-set_required "$here" ytdlpVersion "Layer に載せる yt-dlp の版（VRChat の /config の youtubedl_version に合わせる）"
+set_required "$here" ytdlpVersion "Layer に載せる yt-dlp の版（VRChat の /config の player-url-resolver-version に合わせる）"
 set_secret "$here" alertWebhookUrl "失敗時のアラート送信先 URL"
 
 # CI から流すかどうかは、権限境界を入れるかどうかで決まる。

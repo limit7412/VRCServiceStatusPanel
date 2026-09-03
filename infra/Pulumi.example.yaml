@@ -43,7 +43,7 @@ config:
   vrc-service-status-panel:bucketLocation: apac
 
   # Layer に載せる yt-dlp の版（仕様書 7.1、7.3）。
-  # VRChat の /config の youtubedl_version に合わせる。
+  # VRChat の /config の player-url-resolver-version に合わせる。
   # Layer は pulumi up が作り、その ARN は src/compute.ts が関数へ渡す。
   # ここに置くのは版だけで、ARN は設定に持たない（#21）
   vrc-service-status-panel:ytdlpVersion: ""
