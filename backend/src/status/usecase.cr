@@ -22,8 +22,11 @@ module Status
     # now を引数で受けるのは、前回値をいつまで引き継ぐかの境界を spec から
     # 確かめるためである。呼び出し側は省いて使う。
     def refresh(now : Time? = nil) : Feed
+      started = Time.instant
       previous = @feeds.load_state || State.new
+      loaded = Time.instant
       observations = observe_all
+      observed = Time.instant
 
       # 時刻は観測を終えてから採る。
       #
@@ -61,7 +64,29 @@ module Status
       @feeds.save_state(state)
       @feeds.save_feed(feed)
 
+      report_timing(observations, load: loaded - started, observe: observed - loaded, save: Time.instant - observed)
+
       feed
+    end
+
+    # 一回の実行の内訳を一行に残す。
+    #
+    # Lambda の REPORT 行には実行全体の時間しか出ない。dev で毎回 4.5 秒かかって
+    # いたとき、それが合成監視なのか Statuspage なのか R2 なのかを、その行からは
+    # 言い分けられなかった。取得は並列なので、上流ごとの所要時間が無いと
+    # いちばん遅い一つが分からない。
+    private def report_timing(observations : Array(Observation), load : Time::Span, observe : Time::Span, save : Time::Span) : Nil
+      Log.info do
+        latencies = observations.map { |observation| "#{observation.service_id}=#{format_span(observation.latency)}" }
+        "所要 load=#{format_span(load)} observe=#{format_span(observe)} save=#{format_span(save)} #{latencies.join(" ")}"
+      end
+    end
+
+    # 取れなかった観測は latency を持たない。
+    private def format_span(span : Time::Span?) : String
+      return "-" if span.nil?
+
+      "#{span.total_milliseconds.round.to_i}ms"
     end
 
     # 取れなかった取得元を一行にまとめて残す。

@@ -268,7 +268,7 @@ describe Status::Usecase do
         observation: success("steam", Status::Level::Operational, partial: true),
       )
 
-      Log.capture("status") do |logs|
+      Log.capture("status", :warn) do |logs|
         refresh([source] of Status::SourceRepository, FakeFeeds.new)
 
         logs.empty
@@ -325,16 +325,39 @@ describe Status::Usecase do
       end
     end
 
-    it "すべて取れたときは何も残さない" do
+    it "すべて取れたときは警告を残さない" do
       source = FakeSource.new(
         service_id: "vrchat",
         observation: success("vrchat", Status::Level::Operational),
       )
 
-      Log.capture("status") do |logs|
+      # 所要時間は INFO で毎回残るので、警告以上だけを捕まえる。
+      Log.capture("status", :warn) do |logs|
         refresh([source] of Status::SourceRepository, FakeFeeds.new)
 
         logs.empty
+      end
+    end
+
+    # REPORT 行には実行全体の時間しか出ない。どの上流が遅いかは、ここにしか残らない。
+    it "一回の実行の内訳を記録に残す" do
+      sources = [
+        FakeSource.new(
+          service_id: "vrchat",
+          observation: success("vrchat", Status::Level::Operational, latency: 412.milliseconds),
+        ),
+        FakeSource.new(service_id: "discord", observation: failure("discord", "HTTP 500")),
+      ] of Status::SourceRepository
+
+      Log.capture("status") do |logs|
+        refresh(sources, FakeFeeds.new)
+
+        logs.check(:info, /所要/)
+        message = logs.entry.message
+        message.should match(/load=\d+ms observe=\d+ms save=\d+ms/)
+        message.should match(/vrchat=\d+ms/)
+        # 取れなかったものは所要時間を持たない。
+        message.should contain("discord=-")
       end
     end
 
