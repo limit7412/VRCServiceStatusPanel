@@ -142,12 +142,10 @@ gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'
 すべて `qazx7412-vrc-service-status-panel-` で始まる名前に絞ってあり、
 同じアカウントの他のものへは届かない。
 
-Layer に発行と削除まで与えているのは、yt-dlp の Layer を Pulumi が持つためである
-（`infra/src/layer.ts`）。中身が変われば新しい版が出来て、関数を新しい ARN へ
-繋ぎ替えてから古い版が消える。
-Layer 名は `qazx7412-vrc-service-status-panel-<スタック名>-ytdlp` だが、ここは
-スタック名を挟まない形で絞ってある。ロールを `dev` と `prod` で共有しているので、
-どちらの Layer にも届く必要がある。
+`Layers` は、yt-dlp の Layer を Pulumi が持っていたころの名残である（仕様書 7）。
+発行済みの Layer（`qazx7412-vrc-service-status-panel-<スタック名>-ytdlp`）を
+`pulumi up` が消すのに `DeleteLayerVersion` が要るので、`dev` と `prod` の両方で
+消し終えるまでは残す。外すときは、このポリシーと実物のロールを揃えて直す。
 
 Lambda、Logs、Scheduler の ARN にはリージョンが入る。
 Pulumi が組み立てていたころは `aws:region` から取っていたが、いまは書き下してある。

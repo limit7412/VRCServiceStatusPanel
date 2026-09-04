@@ -12,9 +12,7 @@ require "../src/status/usecase"
 require "../src/statuspage/models"
 require "../src/statuspage/repository"
 require "../src/steam/repository"
-require "../src/vrchat_api/repository"
 require "../src/youtube/repository"
-require "../src/ytdlp/repository"
 
 # 決めた応答を返す試験用のサーバーを立て、その URL を渡す。
 #

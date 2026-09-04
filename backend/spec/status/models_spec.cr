@@ -106,7 +106,7 @@ describe Status::ServiceStatus do
   it "omits components when the source has none" do
     service = Status::ServiceStatus.new(
       id: "youtube",
-      name: "YouTube (yt-dlp解決)",
+      name: "YouTube",
       level: Status::Level::Operational,
       source: Status::SourceKind::Synthetic,
       url: "https://www.youtube.com",

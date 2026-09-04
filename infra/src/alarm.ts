@@ -7,7 +7,7 @@ import { prefix, stack } from "./settings";
 //
 // これは backend の error/usecase.cr が送るアラートとは別の経路である。
 // あちらは refresh が例外を出したときに関数が自分で送るので、関数が起動しない、
-// Scheduler が止まる、Layer が壊れて bootstrap が上がらない、という場合は
+// Scheduler が止まる、バイナリが壊れて bootstrap が上がらない、という場合は
 // 何も送られない。止まったことを知らせるには、外から見ている誰かが要る。
 //
 // 送り先も分ける。関数が死んでいるときに関数へ転送させる形にすると、

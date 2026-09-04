@@ -25,7 +25,8 @@ export const FUNCTIONS: FunctionSpec[] = [
         description: "上流を取得して配信 JSON を書き出す",
         // 60 秒間隔で起動する（仕様書 5.1）
         schedule: "rate(1 minute)",
-        // yt-dlp を動かす余裕を見込む（仕様書 5.1）
+        // yt-dlp を動かしていたころの値である（仕様書 5.1）。
+        // 外したあとの実測を見てから減らす
         memorySize: 512,
         timeout: 40,
     },
