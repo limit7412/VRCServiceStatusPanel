@@ -11,6 +11,8 @@ module Statuspage
   # 名前だけで、取得と判定は共通である。取得元を増やすときは、この四つを渡して
   # 作るだけで済む（仕様書 11.6）。
   class Repository < Status::SourceRepository
+    Log = ::Log.for("statuspage")
+
     getter service_id : String
     getter display_name : String
     getter page_url : String
@@ -21,6 +23,10 @@ module Statuspage
     # ウォームスタートのあいだ生き続ける（仕様書 11.7）。
     @etag : String?
     @cached : Summary?
+
+    # 条件付き GET が効いていないことは、インスタンスごとに一度だけ知らせる。
+    # 効いていなくても取得は成り立つので、毎分は出さない。
+    @warned_conditional = false
 
     def initialize(
       @service_id : String,
@@ -66,12 +72,33 @@ module Statuspage
       case response.status_code
       when 200
         summary = Summary.from_json(response.body)
-        @etag = response.headers["ETag"]?
+        etag = response.headers["ETag"]?
+        check_conditional(etag)
+        @etag = etag
         @cached = summary
         summary
       when 304
         @cached
       end
+    end
+
+    # 304 が返ったかはログに出さない。毎分四行増えるだけで、読む相手がいない。
+    # 出すのは条件付き GET が効いていないときで、それには二つの形がある。
+    # 上流が ETag を返さない形と、If-None-Match を送ったのに同じ ETag で
+    # 200 を返す形である。内容が変わって新しい ETag が付くのは正常なので、出さない。
+    private def check_conditional(etag : String?) : Nil
+      return if @warned_conditional
+
+      reason =
+        if etag.nil?
+          "ETag が無い"
+        elsif etag == @etag
+          "If-None-Match に同じ ETag の 200 が返った"
+        end
+      return if reason.nil?
+
+      @warned_conditional = true
+      Log.warn { "条件付き GET が効いていない service_id=#{service_id} #{reason}" }
     end
 
     # 前回の ETag があれば条件付き GET にする（仕様書 5.4）。

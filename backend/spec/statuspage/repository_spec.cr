@@ -79,15 +79,90 @@ describe Statuspage::Repository do
 
     with_stub_server(handler) do |page_url|
       source = repository(page_url)
-      source.observe
 
-      observation = source.observe
+      # 条件付き GET が効いているあいだは、何も知らせない。
+      Log.capture("statuspage", :warn) do |logs|
+        source.observe
 
-      observation.outcome.should eq Status::Outcome::Success
-      observation.note.should eq "Websocket: Partial Outage"
+        observation = source.observe
+
+        observation.outcome.should eq Status::Outcome::Success
+        observation.note.should eq "Websocket: Partial Outage"
+
+        logs.empty
+      end
     end
 
     etags.should eq [nil, %("v1")]
+  end
+
+  # 304 が返ったことは記録に残さない。効いていないことだけを、一度知らせる。
+  it "warns once when the upstream returns no ETag" do
+    handler = ->(context : HTTP::Server::Context) do
+      context.response.content_type = "application/json"
+      context.response.print summary_json
+      nil
+    end
+
+    with_stub_server(handler) do |page_url|
+      source = repository(page_url)
+
+      Log.capture("statuspage") do |logs|
+        3.times { source.observe.outcome.should eq Status::Outcome::Success }
+
+        logs.check(:warn, /vrchat/)
+        logs.entry.message.should contain("ETag が無い")
+        logs.empty
+      end
+    end
+  end
+
+  it "warns once when the upstream ignores If-None-Match" do
+    etags = [] of String?
+
+    handler = ->(context : HTTP::Server::Context) do
+      etags << context.request.headers["If-None-Match"]?
+      context.response.headers["ETag"] = %("v1")
+      context.response.content_type = "application/json"
+      context.response.print summary_json
+      nil
+    end
+
+    with_stub_server(handler) do |page_url|
+      source = repository(page_url)
+
+      Log.capture("statuspage") do |logs|
+        3.times { source.observe.outcome.should eq Status::Outcome::Success }
+
+        logs.check(:warn, /vrchat/)
+        logs.entry.message.should contain("同じ ETag")
+        logs.empty
+      end
+    end
+
+    etags.should eq [nil, %("v1"), %("v1")]
+  end
+
+  it "stays quiet when the content changes with a new ETag" do
+    count = 0
+
+    handler = ->(context : HTTP::Server::Context) do
+      count += 1
+      context.response.headers["ETag"] = %("v#{count}")
+      context.response.content_type = "application/json"
+      context.response.print summary_json
+      nil
+    end
+
+    with_stub_server(handler) do |page_url|
+      source = repository(page_url)
+
+      Log.capture("statuspage", :warn) do |logs|
+        3.times { source.observe }
+
+        logs.empty
+      end
+    end
   end
 
   it "fails without raising when the upstream answers with an error" do
