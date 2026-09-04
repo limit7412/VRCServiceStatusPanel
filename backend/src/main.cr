@@ -48,9 +48,20 @@ sources = [
     service_id: "vrchat",
     display_name: "VRChat",
     page_url: "https://status.vrchat.com",
-    # 仕様書 3.2 が挙げる四つ。応答に無い名前は黙って落ちるので、
-    # 上流が名称を変えても、そのサービスの level までは巻き添えにならない。
-    component_names: ["API", "Auth", "Websocket", "Website"],
+    # status.vrchat.com の実応答（2026-09-04）にある component をすべて挙げる。
+    # 箱（API / Website、Realtime Networking）は中身の写しなので入れない。
+    # 応答に無い名前は黙って落ちるので、上流が名称を変えても、
+    # そのサービスの level までは巻き添えにならない。
+    component_names: [
+      "Authentication / Login",
+      "Social / Friends List",
+      "SDK Asset Uploads",
+      "Realtime Player State Changes",
+      "USA, West (San José)",
+      "USA, East (Washington D.C.)",
+      "Europe (Amsterdam)",
+      "Japan (Tokyo)",
+    ],
   ),
   Youtube::Repository.new(config.youtube_probe_video_id),
   Steam::Repository.new,
