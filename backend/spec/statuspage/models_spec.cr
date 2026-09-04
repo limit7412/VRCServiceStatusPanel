@@ -134,5 +134,27 @@ describe Statuspage::Summary do
     it "is nil when nothing was asked for" do
       Statuspage::Summary.from_json(summary_json).components_for([] of String).should be_nil
     end
+
+    # status.vrchat.com の実応答（2026-09-04、ブラウザから取得）。
+    # 名前を見当で書いた最初の四つは一つも一致せず、dev の配信 JSON から
+    # components が丸ごと消えていた。main.cr に並べる名前はここから取る。
+    it "picks every VRChat component from the real summary" do
+      summary = Statuspage::Summary.from_json(File.read(File.join(__DIR__, "fixtures", "vrchat-summary.json")))
+      names = [
+        "Authentication / Login",
+        "Social / Friends List",
+        "SDK Asset Uploads",
+        "Realtime Player State Changes",
+        "USA, West (San José)",
+        "USA, East (Washington D.C.)",
+        "Europe (Amsterdam)",
+        "Japan (Tokyo)",
+      ]
+
+      components = summary.components_for(names) || [] of Status::Component
+
+      components.map(&.name).should eq names
+      components.map(&.level).should eq [Status::Level::Operational.value] * 8
+    end
   end
 end
