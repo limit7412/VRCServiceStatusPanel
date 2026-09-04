@@ -67,6 +67,13 @@ private class FakeFeeds < Status::FeedRepository
   end
 end
 
+# 書き出しで落ちる書き出し先。R2 の PUT が失敗した場合を模す。
+private class BrokenFeeds < FakeFeeds
+  def save_feed(feed : Status::Feed) : Nil
+    raise IO::Error.new("PUT が失敗した")
+  end
+end
+
 private NOW = Time.unix(1_756_123_200)
 
 private def success(
@@ -268,7 +275,7 @@ describe Status::Usecase do
         observation: success("steam", Status::Level::Operational, partial: true),
       )
 
-      Log.capture("status") do |logs|
+      Log.capture("status", :warn) do |logs|
         refresh([source] of Status::SourceRepository, FakeFeeds.new)
 
         logs.empty
@@ -325,16 +332,55 @@ describe Status::Usecase do
       end
     end
 
-    it "すべて取れたときは何も残さない" do
+    it "すべて取れたときは警告を残さない" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Operational),
+      )
+
+      # 所要時間は INFO で毎回残るので、警告以上だけを捕まえる。
+      Log.capture("status", :warn) do |logs|
+        refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+        logs.empty
+      end
+    end
+
+    # REPORT 行には実行全体の時間しか出ない。どの上流が遅いかは、ここにしか残らない。
+    it "一回の実行の内訳を記録に残す" do
+      sources = [
+        FakeSource.new(
+          service_id: "vrchat",
+          observation: success("vrchat", Status::Level::Operational, latency: 412.milliseconds),
+        ),
+        FakeSource.new(service_id: "discord", observation: failure("discord", "HTTP 500")),
+      ] of Status::SourceRepository
+
+      Log.capture("status") do |logs|
+        refresh(sources, FakeFeeds.new)
+
+        logs.check(:info, /所要/)
+        message = logs.entry.message
+        message.should match(/load=\d+ms observe=\d+ms save=\d+ms/)
+        message.should match(/vrchat=\d+ms/)
+        # 取れなかったものにも時間が付く。タイムアウトで落ちた一つがいちばん知りたいものである。
+        message.should match(/discord=\d+ms/)
+      end
+    end
+
+    # R2 が遅延源のときほど書き出しで落ちる。そのときに限って内訳が抜けてはならない。
+    it "書き出しが落ちても内訳を残してから例外を出す" do
       source = FakeSource.new(
         service_id: "vrchat",
         observation: success("vrchat", Status::Level::Operational),
       )
 
       Log.capture("status") do |logs|
-        refresh([source] of Status::SourceRepository, FakeFeeds.new)
+        expect_raises(IO::Error, "PUT が失敗した") do
+          refresh([source] of Status::SourceRepository, BrokenFeeds.new)
+        end
 
-        logs.empty
+        logs.check(:info, /所要 .*save=\d+ms/)
       end
     end
 

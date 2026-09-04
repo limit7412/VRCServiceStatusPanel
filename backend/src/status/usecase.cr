@@ -22,8 +22,11 @@ module Status
     # now を引数で受けるのは、前回値をいつまで引き継ぐかの境界を spec から
     # 確かめるためである。呼び出し側は省いて使う。
     def refresh(now : Time? = nil) : Feed
+      started = Time.instant
       previous = @feeds.load_state || State.new
-      observations = observe_all
+      loaded = Time.instant
+      observations, elapsed = observe_all
+      observed = Time.instant
 
       # 時刻は観測を終えてから採る。
       #
@@ -58,10 +61,46 @@ module Status
 
       # 状態を先に書く（仕様書 11.5）。
       # 配信を先にすると、その間に落ちたとき、配っている内容の根拠が内部に残らない。
-      @feeds.save_state(state)
-      @feeds.save_feed(feed)
+      # 書き出しが落ちても内訳は残す。
+      # R2 が遅延源のときほど書き出しで落ちやすく、そのときに限って
+      # save の値が記録から抜けるのでは、この行を置いた意味が無い。
+      begin
+        @feeds.save_state(state)
+        @feeds.save_feed(feed)
+      ensure
+        report_timing(observations, elapsed, load: loaded - started, observe: observed - loaded, save: Time.instant - observed)
+      end
 
       feed
+    end
+
+    # 一回の実行の内訳を一行に残す。
+    #
+    # Lambda の REPORT 行には実行全体の時間しか出ない。dev で毎回 4.5 秒かかって
+    # いたとき、それが合成監視なのか Statuspage なのか R2 なのかを、その行からは
+    # 言い分けられなかった。取得は並列なので、上流ごとの所要時間が無いと
+    # いちばん遅い一つが分からない。
+    #
+    # 上流ごとの値は Observation#latency ではなく、observe を呼んでから返るまでを
+    # こちらで測ったものである。latency は取れたときにしか入らないので、
+    # タイムアウトで落ちた一つ、つまりいちばん知りたいものが抜ける。
+    private def report_timing(
+      observations : Array(Observation),
+      elapsed : Array(Time::Span),
+      load : Time::Span,
+      observe : Time::Span,
+      save : Time::Span,
+    ) : Nil
+      Log.info do
+        per_source = observations.map_with_index do |observation, index|
+          "#{observation.service_id}=#{format_span(elapsed[index])}"
+        end
+        "所要 load=#{format_span(load)} observe=#{format_span(observe)} save=#{format_span(save)} #{per_source.join(" ")}"
+      end
+    end
+
+    private def format_span(span : Time::Span) : String
+      "#{span.total_milliseconds.round.to_i}ms"
     end
 
     # 取れなかった取得元を一行にまとめて残す。
@@ -89,22 +128,31 @@ module Status
     #
     # 結果は渡された順に並べ直す。Channel から届く順は先に終わったものからで、
     # そのまま並べると配信 JSON の services の並びが実行ごとに変わってしまう。
-    private def observe_all : Array(Observation)
-      channel = Channel({Int32, Observation}).new(@sources.size)
+    #
+    # 取得元ごとの所要時間も一緒に返す。成否によらず observe の前後で測る。
+    private def observe_all : {Array(Observation), Array(Time::Span)}
+      channel = Channel({Int32, Observation, Time::Span}).new(@sources.size)
 
       @sources.each_with_index do |source, index|
-        spawn { channel.send({index, observe_safely(source)}) }
+        spawn do
+          started = Time.instant
+          observation = observe_safely(source)
+          channel.send({index, observation, Time.instant - started})
+        end
       end
 
       slots = Array(Observation?).new(@sources.size, nil)
+      elapsed = Array(Time::Span).new(@sources.size, Time::Span.zero)
       @sources.size.times do
-        index, observation = channel.receive
+        index, observation, span = channel.receive
         slots[index] = observation
+        elapsed[index] = span
       end
 
-      @sources.map_with_index do |source, index|
+      observations = @sources.map_with_index do |source, index|
         slots[index] || failed(source, "観測が結果を返さなかった")
       end
+      {observations, elapsed}
     end
 
     # observe は例外を外に出さない契約である（仕様書 11.4）。
