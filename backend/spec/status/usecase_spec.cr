@@ -67,6 +67,13 @@ private class FakeFeeds < Status::FeedRepository
   end
 end
 
+# 書き出しで落ちる書き出し先。R2 の PUT が失敗した場合を模す。
+private class BrokenFeeds < FakeFeeds
+  def save_feed(feed : Status::Feed) : Nil
+    raise IO::Error.new("PUT が失敗した")
+  end
+end
+
 private NOW = Time.unix(1_756_123_200)
 
 private def success(
@@ -358,6 +365,22 @@ describe Status::Usecase do
         message.should match(/vrchat=\d+ms/)
         # 取れなかったものにも時間が付く。タイムアウトで落ちた一つがいちばん知りたいものである。
         message.should match(/discord=\d+ms/)
+      end
+    end
+
+    # R2 が遅延源のときほど書き出しで落ちる。そのときに限って内訳が抜けてはならない。
+    it "書き出しが落ちても内訳を残してから例外を出す" do
+      source = FakeSource.new(
+        service_id: "vrchat",
+        observation: success("vrchat", Status::Level::Operational),
+      )
+
+      Log.capture("status") do |logs|
+        expect_raises(IO::Error, "PUT が失敗した") do
+          refresh([source] of Status::SourceRepository, BrokenFeeds.new)
+        end
+
+        logs.check(:info, /所要 .*save=\d+ms/)
       end
     end
 

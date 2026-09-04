@@ -61,10 +61,15 @@ module Status
 
       # 状態を先に書く（仕様書 11.5）。
       # 配信を先にすると、その間に落ちたとき、配っている内容の根拠が内部に残らない。
-      @feeds.save_state(state)
-      @feeds.save_feed(feed)
-
-      report_timing(observations, elapsed, load: loaded - started, observe: observed - loaded, save: Time.instant - observed)
+      # 書き出しが落ちても内訳は残す。
+      # R2 が遅延源のときほど書き出しで落ちやすく、そのときに限って
+      # save の値が記録から抜けるのでは、この行を置いた意味が無い。
+      begin
+        @feeds.save_state(state)
+        @feeds.save_feed(feed)
+      ensure
+        report_timing(observations, elapsed, load: loaded - started, observe: observed - loaded, save: Time.instant - observed)
+      end
 
       feed
     end
