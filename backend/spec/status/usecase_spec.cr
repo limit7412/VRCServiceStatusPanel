@@ -356,8 +356,8 @@ describe Status::Usecase do
         message = logs.entry.message
         message.should match(/load=\d+ms observe=\d+ms save=\d+ms/)
         message.should match(/vrchat=\d+ms/)
-        # 取れなかったものは所要時間を持たない。
-        message.should contain("discord=-")
+        # 取れなかったものにも時間が付く。タイムアウトで落ちた一つがいちばん知りたいものである。
+        message.should match(/discord=\d+ms/)
       end
     end
 

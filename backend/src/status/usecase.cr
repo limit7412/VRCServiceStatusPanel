@@ -25,7 +25,7 @@ module Status
       started = Time.instant
       previous = @feeds.load_state || State.new
       loaded = Time.instant
-      observations = observe_all
+      observations, elapsed = observe_all
       observed = Time.instant
 
       # 時刻は観測を終えてから採る。
@@ -64,7 +64,7 @@ module Status
       @feeds.save_state(state)
       @feeds.save_feed(feed)
 
-      report_timing(observations, load: loaded - started, observe: observed - loaded, save: Time.instant - observed)
+      report_timing(observations, elapsed, load: loaded - started, observe: observed - loaded, save: Time.instant - observed)
 
       feed
     end
@@ -75,17 +75,26 @@ module Status
     # いたとき、それが合成監視なのか Statuspage なのか R2 なのかを、その行からは
     # 言い分けられなかった。取得は並列なので、上流ごとの所要時間が無いと
     # いちばん遅い一つが分からない。
-    private def report_timing(observations : Array(Observation), load : Time::Span, observe : Time::Span, save : Time::Span) : Nil
+    #
+    # 上流ごとの値は Observation#latency ではなく、observe を呼んでから返るまでを
+    # こちらで測ったものである。latency は取れたときにしか入らないので、
+    # タイムアウトで落ちた一つ、つまりいちばん知りたいものが抜ける。
+    private def report_timing(
+      observations : Array(Observation),
+      elapsed : Array(Time::Span),
+      load : Time::Span,
+      observe : Time::Span,
+      save : Time::Span,
+    ) : Nil
       Log.info do
-        latencies = observations.map { |observation| "#{observation.service_id}=#{format_span(observation.latency)}" }
-        "所要 load=#{format_span(load)} observe=#{format_span(observe)} save=#{format_span(save)} #{latencies.join(" ")}"
+        per_source = observations.map_with_index do |observation, index|
+          "#{observation.service_id}=#{format_span(elapsed[index])}"
+        end
+        "所要 load=#{format_span(load)} observe=#{format_span(observe)} save=#{format_span(save)} #{per_source.join(" ")}"
       end
     end
 
-    # 取れなかった観測は latency を持たない。
-    private def format_span(span : Time::Span?) : String
-      return "-" if span.nil?
-
+    private def format_span(span : Time::Span) : String
       "#{span.total_milliseconds.round.to_i}ms"
     end
 
@@ -114,22 +123,31 @@ module Status
     #
     # 結果は渡された順に並べ直す。Channel から届く順は先に終わったものからで、
     # そのまま並べると配信 JSON の services の並びが実行ごとに変わってしまう。
-    private def observe_all : Array(Observation)
-      channel = Channel({Int32, Observation}).new(@sources.size)
+    #
+    # 取得元ごとの所要時間も一緒に返す。成否によらず observe の前後で測る。
+    private def observe_all : {Array(Observation), Array(Time::Span)}
+      channel = Channel({Int32, Observation, Time::Span}).new(@sources.size)
 
       @sources.each_with_index do |source, index|
-        spawn { channel.send({index, observe_safely(source)}) }
+        spawn do
+          started = Time.instant
+          observation = observe_safely(source)
+          channel.send({index, observation, Time.instant - started})
+        end
       end
 
       slots = Array(Observation?).new(@sources.size, nil)
+      elapsed = Array(Time::Span).new(@sources.size, Time::Span.zero)
       @sources.size.times do
-        index, observation = channel.receive
+        index, observation, span = channel.receive
         slots[index] = observation
+        elapsed[index] = span
       end
 
-      @sources.map_with_index do |source, index|
+      observations = @sources.map_with_index do |source, index|
         slots[index] || failed(source, "観測が結果を返さなかった")
       end
+      {observations, elapsed}
     end
 
     # observe は例外を外に出さない契約である（仕様書 11.4）。
