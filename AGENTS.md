@@ -18,3 +18,8 @@ Always review in Japanese.
   - 付いた指摘に対してはcommit idをつけて返答をしてresolveする
 - PRのスコープ外の問題が発覚した場合は別途issueを作成する
 - issueの解決を目的とした場合は修正中都度issueの本文を更新し必要に応じてコメントをつける
+
+## deploy
+
+- dev環境へはgithub actionsを通して（他タスクと競合しない限り）自由にデプロイして構わない
+- 必要であればdev環境へmaster以外のブランチの内容をデプロイしても構わない
