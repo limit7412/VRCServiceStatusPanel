@@ -122,7 +122,12 @@ describe Booth::Repository do
   end
 
   it "誰も答えなくても例外を外に出さない" do
-    source = Booth::Repository.new("123456", top_url: "http://127.0.0.1:#{unused_port}")
+    # お知らせページも手元へ向ける。省略すると実サイトへ送ってしまう。
+    source = Booth::Repository.new(
+      "123456",
+      top_url: "http://127.0.0.1:#{unused_port}",
+      announcements_url: "http://127.0.0.1:#{unused_port}",
+    )
 
     observation = source.observe
 
