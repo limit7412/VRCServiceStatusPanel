@@ -24,9 +24,9 @@ module Statuspage
     @etag : String?
     @cached : Summary?
 
-    # 条件付き GET が効いていないことは、インスタンスごとに一度だけ知らせる。
-    # 効いていなくても取得は成り立つので、毎分は出さない。
-    @warned_conditional = false
+    # 上流が ETag を返さなくなったことは、インスタンスごとに一度だけ知らせる。
+    # 返さなくても取得は成り立つので、毎分は出さない。
+    @warned_no_etag = false
 
     def initialize(
       @service_id : String,
@@ -83,22 +83,18 @@ module Statuspage
     end
 
     # 304 が返ったかはログに出さない。毎分四行増えるだけで、読む相手がいない。
-    # 出すのは条件付き GET が効いていないときで、それには二つの形がある。
-    # 上流が ETag を返さない形と、If-None-Match を送ったのに同じ ETag で
-    # 200 を返す形である。内容が変わって新しい ETag が付くのは正常なので、出さない。
+    # 出すのは上流が ETag を返さなくなったときだけである。
+    #
+    # If-None-Match を送ったのに同じ ETag で 200 が返ることは、正常な範囲で起きる。
+    # Statuspage は CloudFront 越しで、縁の写しが古い（s-maxage=10 を過ぎた）ときに
+    # 当たると、条件を見ずに 200 が返る（#48）。dev では新しいインスタンスが
+    # 上がるたびに数分以内に起きたので、それを知らせても読む相手がいない。
     private def check_conditional(etag : String?) : Nil
-      return if @warned_conditional
+      return if @warned_no_etag
+      return unless etag.nil?
 
-      reason =
-        if etag.nil?
-          "ETag が無い"
-        elsif etag == @etag
-          "If-None-Match に同じ ETag の 200 が返った"
-        end
-      return if reason.nil?
-
-      @warned_conditional = true
-      Log.warn { "条件付き GET が効いていない service_id=#{service_id} #{reason}" }
+      @warned_no_etag = true
+      Log.warn { "上流が ETag を返さない。条件付き GET が効かない service_id=#{service_id}" }
     end
 
     # 前回の ETag があれば条件付き GET にする（仕様書 5.4）。
