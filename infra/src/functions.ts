@@ -25,9 +25,11 @@ export const FUNCTIONS: FunctionSpec[] = [
         description: "上流を取得して配信 JSON を書き出す",
         // 60 秒間隔で起動する（仕様書 5.1）
         schedule: "rate(1 minute)",
-        // yt-dlp を動かしていたころの値である（仕様書 5.1）。
-        // 外したあとの実測を見てから減らす
-        memorySize: 512,
-        timeout: 40,
+        // dev の実測から決めた（仕様書 5.1）。
+        // メモリは GC のヒープが 149 MB で頭打ちになり、256 MB はその 1.7 倍である。
+        // 時間は一回 2〜3 秒で、上流が全部 5 秒で切れても R2 と合わせて 7 秒に
+        // 収まる。15 秒はその倍で、Scheduler の 60 秒間隔に重なることも無い。
+        memorySize: 256,
+        timeout: 15,
     },
 ];
