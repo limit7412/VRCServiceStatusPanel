@@ -58,6 +58,30 @@ describe Error::Usecase do
       description.should end_with("…")
     end
 
+    it "embed 全体の合計も Discord の上限に収める" do
+      inbox = Inbox.new
+      # 項目ごとの上限は守っていても、足すと 6000 を越える組み合わせ。
+      long_env = "e" * Error::Usecase::FIELD_LIMIT
+      long_handler = "h" * Error::Usecase::FIELD_LIMIT
+      long_request_id = "r" * Error::Usecase::FIELD_LIMIT
+
+      with_stub_server(inbox.handler) do |url|
+        usecase = Error::Usecase.new(long_env, url)
+        usecase.alert(long_handler, ArgumentError.new("あ" * 5000), long_request_id)
+      end
+
+      embed = JSON.parse(inbox.bodies.first)["embeds"][0]
+      fields = embed["fields"].as_a
+      total = embed["title"].as_s.size + embed["description"].as_s.size +
+              fields.sum { |field| field["name"].as_s.size + field["value"].as_s.size }
+
+      total.should be <= Error::Usecase::EMBED_TOTAL_LIMIT
+      # 吸収するのは description で、fields は落とさない。
+      fields.size.should eq(3)
+      fields.each { |field| field["value"].as_s.size.should eq(Error::Usecase::FIELD_LIMIT) }
+      embed["description"].as_s.should end_with("…")
+    end
+
     it "request id が無くても空の field を送らない" do
       inbox = Inbox.new
 

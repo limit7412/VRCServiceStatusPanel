@@ -28,10 +28,19 @@ module Error
 
     # Discord の上限。越えると 400 で断られ、届かないことだけが残る。
     # https://discord.com/developers/docs/resources/message#embed-object-embed-limits
+    # （2026-09-05 に原文で確かめた。#48）
+    #
+    # field の name（256）、fields の個数（25）、embeds の個数（10）にも上限があるが、
+    # ここで送るのは固定の名前を持つ三つの field と一つの embed なので、越えない。
     CONTENT_LIMIT     = 2000
     TITLE_LIMIT       =  256
     DESCRIPTION_LIMIT = 4096
     FIELD_LIMIT       = 1024
+
+    # embed 全体で数える上限。title、description、field の name と value の
+    # 文字数を、すべての embed にわたって足したものがこれを越えてはならない。
+    # 項目ごとの上限を守っていても、足すと越えうる（4096 + 1024 × 3 で既に越える）。
+    EMBED_TOTAL_LIMIT = 6000
 
     # 埋め込みの左端の色。赤系にしておく。
     COLOR = 0xE74C3C
@@ -73,19 +82,30 @@ module Error
     #
     # content は通知の一行目になる。押し通知に出るのはここなので、
     # どこの何が落ちたかを、開かずに分かる形にする。
+    #
+    # 全体の上限（EMBED_TOTAL_LIMIT）は description で吸収する。
+    # 他の項目は短いか、上限が小さいかのどちらかで、いちばん長くなりうるのが
+    # 例外のメッセージだからである。title と fields を先に決め、残りを description に渡す。
     private def body(handler : String, error : Exception, kind : String, request_id : String?) : String
+      title = clip(kind, TITLE_LIMIT)
+      fields = [
+        {name: "env", value: clip(@env, FIELD_LIMIT), inline: true},
+        {name: "handler", value: clip(handler, FIELD_LIMIT), inline: true},
+        # 空の value は断られる。request id は runtime が必ず付けるが、型は nil を許す。
+        {name: "request_id", value: clip(request_id || "-", FIELD_LIMIT), inline: false},
+      ]
+
+      used = title.size + fields.sum { |field| field[:name].size + field[:value].size }
+      # 他の項目が上限いっぱいでも 2,000 字あまりは残る。clamp は念のためである。
+      description_limit = (EMBED_TOTAL_LIMIT - used).clamp(1, DESCRIPTION_LIMIT)
+
       {
         content: clip("#{@env} の #{handler} が失敗した", CONTENT_LIMIT),
         embeds:  [{
-          title:       clip(kind, TITLE_LIMIT),
-          description: clip(error.message.to_s, DESCRIPTION_LIMIT),
+          title:       title,
+          description: clip(error.message.to_s, description_limit),
           color:       COLOR,
-          fields:      [
-            {name: "env", value: clip(@env, FIELD_LIMIT), inline: true},
-            {name: "handler", value: clip(handler, FIELD_LIMIT), inline: true},
-            # 空の value は断られる。request id は runtime が必ず付けるが、型は nil を許す。
-            {name: "request_id", value: clip(request_id || "-", FIELD_LIMIT), inline: false},
-          ],
+          fields:      fields,
         }],
       }.to_json
     end
