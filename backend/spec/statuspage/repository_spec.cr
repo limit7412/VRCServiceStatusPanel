@@ -113,13 +113,15 @@ describe Statuspage::Repository do
         3.times { source.observe.outcome.should eq Status::Outcome::Success }
 
         logs.check(:warn, /vrchat/)
-        logs.entry.message.should contain("ETag が無い")
+        logs.entry.message.should contain("ETag を返さない")
         logs.empty
       end
     end
   end
 
-  it "warns once when the upstream ignores If-None-Match" do
+  # CDN の縁の写しが古いと、同じ ETag のまま 200 が返ることがある（#48）。
+  # 正常な範囲なので知らせない。
+  it "stays quiet when the same ETag comes back with 200" do
     etags = [] of String?
 
     handler = ->(context : HTTP::Server::Context) do
@@ -133,11 +135,9 @@ describe Statuspage::Repository do
     with_stub_server(handler) do |page_url|
       source = repository(page_url)
 
-      Log.capture("statuspage") do |logs|
+      Log.capture("statuspage", :warn) do |logs|
         3.times { source.observe.outcome.should eq Status::Outcome::Success }
 
-        logs.check(:warn, /vrchat/)
-        logs.entry.message.should contain("同じ ETag")
         logs.empty
       end
     end
