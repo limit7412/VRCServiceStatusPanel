@@ -58,6 +58,8 @@ describe Statuspage::Repository do
 
     paths.should eq ["/api/v2/summary.json"]
     requests.first["User-Agent"].should eq Upstream::USER_AGENT
+    # 応答の Vary に Accept が入っているので、求める形を明示する。
+    requests.first["Accept"].should eq "application/json"
   end
 
   it "asks again with the ETag and keeps the last content on 304" do

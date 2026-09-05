@@ -52,7 +52,7 @@ module Statuspage
     # 失敗を例外として外に出さず、outcome で返す（仕様書 11.4）。
     def observe : Status::Observation
       started = Time.instant
-      response = Upstream.get(summary_url, conditional_headers)
+      response = Upstream.get(summary_url, request_headers)
       latency = Time.instant - started
 
       summary = summary_from(response)
@@ -102,8 +102,12 @@ module Statuspage
     end
 
     # 前回の ETag があれば条件付き GET にする（仕様書 5.4）。
-    private def conditional_headers : HTTP::Headers
-      headers = HTTP::Headers.new
+    #
+    # Accept を明示するのは、応答の Vary に Accept が入っているためである。
+    # 送らないと CDN の縁で別の変種として扱われ、条件付き GET が
+    # 同じ ETag の 200 で返ることがあった（#48）。JSON を求めていることを伝える。
+    private def request_headers : HTTP::Headers
+      headers = HTTP::Headers{"Accept" => "application/json"}
       if etag = @etag
         headers["If-None-Match"] = etag
       end
