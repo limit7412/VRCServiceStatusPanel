@@ -5,8 +5,10 @@
 #
 # deploy-dev.yml と release.yml から呼ぶ。
 # 環境変数 GH_TOKEN（actions: write と checks: read を持つ GITHUB_TOKEN）と GH_REPO が要る。
-# CANCELLED_OK=true を渡すと、起こした実行が取り消されたときも 0 で終える。
-# dev では取り消しは「後から起こした実行が代わりに出す」ことを意味し、失敗ではない。
+# CANCELLED_OK=true を渡すと、起こした実行が concurrency の群で後続に置き換えられて
+# 取り消されたときは 0 で終える。dev ではそれは「後から起こした実行が代わりに出す」ことを
+# 意味し、失敗ではない。同じスタックへ後から起こした実行が見つからない取り消し
+# （人が Actions から止めたなど）は、後続が無く dev が更新されていないので失敗にする。
 #
 # workflow_call で呼ばずに起こすのは、呼ばれたワークフローが呼んだ側のコミットの定義で
 # 動くためである。master の ref で起こせば、定義も内容もその時点の master の先端になる。
@@ -54,11 +56,18 @@ case "$CONCLUSION" in
     ;;
   cancelled)
     if [ "${CANCELLED_OK:-false}" = true ]; then
-      echo "::notice::deploy の実行 $RUN_ID は取り消された。同じスタックへ後から起こした実行が代わりに出す"
-    else
-      echo "::error::deploy の実行 $RUN_ID は取り消された" >&2
-      exit 1
+      # 同じスタックへ、この実行より後に起こされた実行があるか。
+      # 実行の名前は deploy <スタック名>（識別子が付くこともある）
+      NEWER=$(gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
+        --limit 20 --json databaseId,displayTitle \
+        --jq "map(select(.databaseId > $RUN_ID and (.displayTitle | startswith(\"deploy $STACK\")))) | length")
+      if [ "$NEWER" -gt 0 ]; then
+        echo "::notice::deploy の実行 $RUN_ID は取り消された。同じスタックへ後から起こした実行が代わりに出す"
+        exit 0
+      fi
     fi
+    echo "::error::deploy の実行 $RUN_ID は取り消され、同じスタックへ後から起こした実行も無い" >&2
+    exit 1
     ;;
   *)
     echo "::error::deploy の実行 $RUN_ID は $CONCLUSION で終わった" >&2
