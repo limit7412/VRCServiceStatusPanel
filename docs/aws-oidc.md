@@ -127,7 +127,9 @@ ref ではなく environment で絞るのは、`prod` へ出すワークフロ�
 `master` のブランチ保護を経ない経路が一つ増える。
 environment を参照するジョブのトークンは `sub` が `environment:<名前>` になり、ブランチもタグも含まない。
 その名前をどの ref から名乗れるかは、GitHub の environment の deployment branches and tags の規則が決める。
-`dev` は `master` だけ、`prod` は `master` と `X.Y.Z` の形のタグを許す（`docs/release.md`）。
+どちらも `master` だけを許す（`docs/release.md`）。
+`prod` へ出すワークフローはリリースの公開（タグの ref）で動くが、`deploy.yml` を `master` の ref で
+起こす形にしてあるので、タグの ref から名乗る必要が無い。
 ロールから見える条件は environment の名前だけで、ref の判定は GitHub 側に置く。
 
 environment の四つは 2026 年 9 月に置き換えた。
@@ -161,9 +163,9 @@ gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'
 ```
 
 いまの条件では、environment の規則が許す ref でワークフローを動かせる者が引ける。
-`dev` は `master` に push できる者と `master` 上で `workflow_dispatch` を打てる者、
-`prod` はそれに加えて `X.Y.Z` の形のタグを打てる者である。
-どれも write 権限で、同じ集合である。
+`dev` も `prod` も、`master` に push できる者と `master` 上で `workflow_dispatch` を打てる者である。
+どちらも write 権限で、同じ集合である。
+出せる内容は `master` に限られる。
 さらに絞るなら、`prod` の environment に required reviewers を掛ける。
 ジョブは承認を待つあいだトークンを受け取らず、承認された実行だけがロールを引く。
 

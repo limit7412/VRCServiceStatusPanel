@@ -1,21 +1,33 @@
 name: release
 
-# 正式版の VPM パッケージを作り、リリースに添付する（仕様書 9.2）。
+# リリースの公開を契機に、VPM パッケージを作って添付し、正式版なら prod へ出す（仕様書 9.2）。
 #
 # 型は published だけにする。人が作る正式版と、人が作るプレリリース
 # （パッチ以外を上げるとき）の公開で発火する。
 # prerelease.yml が GITHUB_TOKEN で作るプレリリースは release イベントを
 # 発火させないのでここには来ない。あちらは自分で zip を付けて通知する。
-# released は並べない。通常リリースの公開で published と同時に発火し、同じタグに
-# 二回動いて同名の zip の添付が競合する。prod デプロイのほうが released を使う
-# （deploy-prod.yml）。
+#
+# プレリリースを正式版へ昇格する経路（released）は使わない。
+# 昇格ではタグ名が X.Y.Z-testN のまま変わらず、正式版の形（X.Y.Z）に合わない。
+# 正式版は必ず新しい X.Y.Z のタグで公開する（docs/release.md）。
+#
+# 順序は、タグの検査、zip の作成と添付、リスティングへの通知と prod デプロイである。
+# zip が作れなかったリリースを prod へ出さないよう、デプロイは zip の後ろに置く。
+#
+# prod デプロイは deploy.yml を master の ref で workflow_dispatch として起こし、終わるまで待つ。
+# workflow_call で呼ばないのは、この実行がタグの ref を持ち、deploy.yml のジョブが参照する
+# environment prod の規則（master だけ）に当たるためである。master の ref で起こせば規則に当たらず、
+# 出るのも master の内容に限られる。タグのコミットを expected_sha で渡し、deploy.yml が checkout
+# したものと比べるので、起こしてから master が進んでいれば止まる。
+# GITHUB_TOKEN で起こした workflow_dispatch は実行を作る（GITHUB_TOKEN が起こすイベントのうち
+# workflow_dispatch と repository_dispatch だけが例外である）。
 #
 # 手でも流せる。その場合はリリースへ添付せず、zip を artifact に置くだけである。
 # BOOTH に置く zip を作り直すときに使う。
 #
-# 添付する前に、タグが X.Y.Z か X.Y.Z-testN の形で、指すコミットが master の先端であることを
-# 確かめる。master に無い内容から作った zip を公開すると、あとで deploy-prod.yml が止まっても
-# 公開した zip とリスティングは戻らない。検査は deploy-prod.yml と同じスクリプトである。
+# 添付する前に、タグの形と、指すコミットが master の先端であることを確かめる。
+# 正式版は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
+# master に無い内容から作った zip を公開すると、公開した zip とリスティングは戻らない。
 
 on:
   release:
@@ -42,12 +54,16 @@ jobs:
       - name: checkout
         uses: actions/checkout@v7
 
-      # release イベントの GITHUB_SHA はタグが指すコミットである
+      # release イベントの GITHUB_SHA はタグが指すコミットである。
+      # 正式版（プレリリースでない公開）は X.Y.Z の形に限る。
+      # 昇格したプレリリースは released でしか発火しないのでここには来ないが、
+      # 来ても X.Y.Z-testN の形で止まる
       - name: verify the release tag
         if: github.event_name == 'release'
         env:
           TAG: ${{ github.event.release.tag_name }}
-        run: .github/scripts/verify-release-tag.sh "$TAG" "$GITHUB_SHA" any
+          KIND: ${{ github.event.release.prerelease && 'any' || 'stable' }}
+        run: .github/scripts/verify-release-tag.sh "$TAG" "$GITHUB_SHA" "$KIND"
 
       - name: determine version
         id: version
@@ -125,3 +141,50 @@ jobs:
       listing-repo: limit7412/vcc-vpm
     secrets:
       LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}
+
+  # 正式版なら prod へ出す。zip の添付が通ってからで、プレリリースでは動かない。
+  #
+  # deploy.yml を master の ref で workflow_dispatch として起こし、その実行が終わるまで待つ。
+  # 起こした実行の ID は同期的には返らないので、同じコミットの新しい実行を探す。
+  # 同じスタックへの実行は deploy.yml の concurrency（deploy-prod）で直列になる。
+  # ここには concurrency を付けない。同じ名前を付けると、このジョブが群を占めたまま、
+  # 起こした実行が同じ群の空きを待つ形になる。
+  deploy:
+    name: deploy prod
+    needs: build
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      # deploy.yml を起こす。実行の一覧と経過を読むのもこの権限で足りる
+      actions: write
+    steps:
+      - name: dispatch deploy.yml for prod and wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          # 探す範囲の下限。時計のずれを見て一分前から
+          SINCE=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%S+00:00)
+
+          gh workflow run deploy.yml --ref master -f stack=prod -f "expected_sha=$GITHUB_SHA"
+          echo "deploy.yml を master の ref で起こした（stack=prod、expected_sha=$GITHUB_SHA）"
+
+          RUN_ID=""
+          for _ in $(seq 1 12); do
+            sleep 5
+            RUN_ID=$(gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
+              --commit "$GITHUB_SHA" --created ">=$SINCE" --limit 1 \
+              --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$RUN_ID" ] && break
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::起こした deploy の実行が一分たっても見つからない。Actions の deploy を見る"
+            exit 1
+          fi
+          echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
+
+          # 成功で終わらなければ、このジョブも失敗にする
+          gh run watch "$RUN_ID" --exit-status

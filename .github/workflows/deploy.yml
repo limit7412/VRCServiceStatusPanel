@@ -5,12 +5,16 @@ name: deploy
 # 起動は三つある。
 #   workflow_dispatch   手で流す。出す先を入力で選ぶ。集約サーバーだけを出したいときと、
 #                       前のタグへ切り戻すときはこれを使う
-#   deploy-dev.yml      master への push で dev へ出す
-#   deploy-prod.yml     リリースの公開で prod へ出す
-# 後ろの二つは workflow_call でここを呼ぶ。手順を一つに置くための分割で、
-# 契機ごとの判定（対象パスに触れたか、タグが master に載っているか）は呼ぶ側にある。
-# checkout するのは呼ぶ側のイベントのコミットで、push なら master の先端、
-# リリースならタグのコミットになる。
+#   deploy-dev.yml      master への push で dev へ出す。workflow_call でここを呼ぶ
+#   release.yml         正式版の公開で prod へ出す。ここを master の ref で
+#                       workflow_dispatch として起こし、終わるまで待つ
+# 手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが master の
+# 先端を指すか）は起こす側にある。
+# release.yml が workflow_call ではなく workflow_dispatch を使うのは、release イベントの
+# 実行はタグの ref を持ち、environment prod の規則（master だけ）に当たるためである。
+# master の ref で起こせば、規則に当たらず、出るのも master の内容に限られる。
+# 起こす側は期待するコミットを expected_sha で渡し、こちらは checkout したものと比べる。
+# 起こしてから master が進んでいれば止まる。
 #
 # 資格情報はどちらも OIDC で受け取る（#22、#23）。
 # AWS は configure-aws-credentials、Pulumi Cloud は pulumi/auth-actions である。
@@ -38,15 +42,25 @@ on:
         required: true
         default: dev
         type: string
+      expected_sha:
+        description: 出すコミット。checkout したものと違えば止まる。空なら見ない
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       stack:
         description: 出す先のスタック名
         required: true
         type: string
+      expected_sha:
+        description: 出すコミット。checkout したものと違えば止まる。空なら見ない
+        required: false
+        default: ""
+        type: string
 
 # 呼ばれたときは、呼ぶ側のジョブが渡した permissions から下げることしかできない。
-# deploy-dev.yml と deploy-prod.yml の呼ぶジョブにも同じ二つを書いてある。
+# deploy-dev.yml の呼ぶジョブにも同じ二つを書いてある。
 permissions:
   # OIDC のトークンを発行させる。既定では付かない
   id-token: write
@@ -65,8 +79,9 @@ env:
 # Pulumi 側にも排他はあるが、待たせるより手前で弾いたほうが分かりやすい。
 # 走っているものは止めない。途中で切ると state と実物がずれる。
 #
-# 手で流したときの群は deploy-<スタック名> で、deploy-dev.yml と deploy-prod.yml が
-# 持つ群と同じ名前にしてある。手で流したものと自動で流れたものも直列になる。
+# workflow_dispatch のときの群は deploy-<スタック名> で、deploy-dev.yml が持つ群と
+# 同じ名前にしてある。release.yml が起こす実行も workflow_dispatch なのでこの群に入る。
+# 手で流したものと自動で流れたものも直列になる。
 #
 # 呼ばれたときは、その群を持つのを呼ぶ側に任せ、ここは実行ごとに違う名前にする。
 # 呼ぶ側の実行が群を占めたまま、その中で動くこちらが同じ群の空きを待つ形になる
@@ -86,6 +101,20 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+
+      # release.yml が起こしたときは、タグのコミットを期待して渡してくる。
+      # 起こしてから master が進んでいると、タグと違う内容が prod へ出るので止める
+      - name: check the commit is the expected one
+        if: inputs.expected_sha != ''
+        env:
+          EXPECTED: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL=$(git rev-parse HEAD)
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::checkout したコミット $ACTUAL が期待した $EXPECTED ではない。起こしてから master が進んだ"
+            exit 1
+          fi
 
       # bootstrap.zip は .gitignore の対象で、checkout には入っていない。
       # src/compute.ts が FileArchive として即座に開くため、無いと

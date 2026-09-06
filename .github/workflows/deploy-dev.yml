@@ -24,15 +24,6 @@ on:
 permissions:
   contents: read
 
-# 同じスタックへ二つ流さない。deploy.yml を手で dev へ流したときと同じ群である。
-# 走っているものは止めない。途中で切ると state と実物がずれる。
-#
-# 待機できる実行は一件に限られ、取り込みが続けて三件以上あると中間の実行は取り消される。
-# dev は master の内容を出すので、最後の実行が通れば最終の状態は正しい。
-concurrency:
-  group: deploy-dev
-  cancel-in-progress: false
-
 jobs:
   # 変更が対象に触れているかを判定する。判定の中身と、`on` の `paths` を
   # 使わない理由は .github/actions/changed-paths/action.yml に書いてある。
@@ -72,6 +63,17 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    # 同じスタックへ二つ流さない。deploy.yml を手で dev へ流したときと同じ群である。
+    # 走っているものは止めない。途中で切ると state と実物がずれる。
+    #
+    # ワークフロー全体ではなくこのジョブに効かせる。全体に効かせると、対象に触れない
+    # push も群を占め、待機中の「対象に触れた」実行を取り消したうえで何も出さずに終わる。
+    #
+    # 待機できる実行は一件に限られ、対象に触れた取り込みが続けて三件以上あると中間の実行は
+    # 取り消される。dev は master の内容を出すので、最後の実行が通れば最終の状態は正しい。
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
     uses: ./.github/workflows/deploy.yml
     with:
       stack: dev

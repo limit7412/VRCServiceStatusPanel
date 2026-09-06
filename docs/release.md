@@ -16,9 +16,8 @@
 | --- | --- | --- |
 | `prerelease.yml` | `master` への push、手動 | パッケージの中身に触れた取り込みで、`X.Y.Z-testN` のタグとプレリリースを作り、zip を添付し、リスティングへ通知する |
 | `deploy-dev.yml` | `master` への push | 集約サーバーか配信経路に触れた取り込みで、`deploy.yml` を `dev` へ向けて呼ぶ |
-| `release.yml` | リリースの公開（`published`）、手動 | タグを確かめてから zip を作り、リリースへ添付し、リスティングへ通知する。手動では zip を artifact に置くだけ |
-| `deploy-prod.yml` | リリースの公開（`released`） | タグを確かめてから `deploy.yml` を `prod` へ向けて呼ぶ |
-| `deploy.yml` | 上の二つからの呼び出し、手動 | `pulumi up`。ジョブは出す先と同じ名前の environment を参照する。手動では出す先を入力で選ぶ |
+| `release.yml` | リリースの公開（`published`）、手動 | タグを確かめてから zip を作り、リリースへ添付し、リスティングへ通知する。正式版なら `deploy.yml` を `prod` へ向けて起こし、終わるまで待つ。手動では zip を artifact に置くだけ |
+| `deploy.yml` | `deploy-dev.yml` からの呼び出し、`release.yml` からの起動、手動 | `pulumi up`。ジョブは出す先と同じ名前の environment を参照する。手動では出す先を入力で選ぶ |
 
 `prerelease.yml` と `deploy-dev.yml` は同じ push で並んで走るが、互いに `needs` で繋いでいない。
 繋ぐと、`dev` デプロイが落ちた日にプレリリースも作られなくなる。
@@ -52,18 +51,26 @@
 ## 正式版を出す手順
 
 1. GitHub の Releases で、`X.Y.Z` のタグを `master` の先端に打ち、リリースを公開する
-2. `release.yml` がタグを確かめ、zip を添付し、リスティングへ通知する
-3. `deploy-prod.yml` がタグを確かめ、`prod` へ出す
+2. `release.yml` がタグを確かめ、zip を添付し、リスティングへ通知し、`prod` へ出す
 
-タグの検査は両方とも `.github/scripts/verify-release-tag.sh` で行い、形と、タグのコミットが `master` の先端であることを見る。
-先端でなければどちらも止まる。
+タグの検査は `.github/scripts/verify-release-tag.sh` で行い、形と、タグのコミットが `master` の先端であることを見る。
+形は、正式版（プレリリースでない公開）が `X.Y.Z`、プレリリースが `X.Y.Z-testN` である。
+先端でなければ止まり、zip も添付しない。
 過去の `master` のコミットに打ったタグも通さない。
 祖先であることだけを見ると、古いコミットからのリリースで `prod` がその時点へ巻き戻る。
 公開の直後に別の取り込みが入って先端がずれたときは、リリースを消してタグを打ち直す。
 
-プレリリースを正式版へ昇格した場合も、4 は動く。
-昇格では `released` だけが発火し、`published` は発火しないので、3 は動かない。
-zip は昇格前に添付済みで、リスティングは vcc-vpm 側の "Build Repo Listing" を手で流せば作り直せる。
+`prod` へ出すのは zip の添付が通ってからで、`release.yml` が `deploy.yml` を `master` の ref で `workflow_dispatch` として起こし、終わるまで待つ。
+`workflow_call` で呼ばないのは、リリースの公開で動く実行がタグの ref を持ち、`deploy.yml` のジョブが参照する environment `prod` の規則（`master` だけ）に当たるためである。
+`master` の ref で起こせば規則に当たらず、出るのも `master` の内容に限られる。
+タグのコミットを `expected_sha` で渡し、`deploy.yml` が checkout したものと比べるので、起こしてから `master` が進んでいれば止まる。
+起こした実行が成功で終わらなければ、`release.yml` も失敗になる。
+
+プレリリースを正式版へ昇格する経路は使わない。
+昇格ではタグ名が `X.Y.Z-testN` のまま変わらず、正式版の形に合わない。
+仕様書 9.2 は昇格でも `prod` へ出す形（`released` を契機にする）を挙げていたが、この理由で採らない。
+昇格しても `released` しか発火せず、それを購読するワークフローは無いので、何も起きない。
+正式版は必ず新しい `X.Y.Z` のタグで公開する。
 
 集約サーバーだけを出したいときと、前のタグへ切り戻すときは、`deploy.yml` を手で流す。
 Actions の deploy を `workflow_dispatch` で開き、ref とスタックを選ぶ。
@@ -87,12 +94,13 @@ Settings の Environments で、それぞれ Deployment branches and tags を「
 | environment | 許す ref |
 | --- | --- |
 | `dev` | ブランチ `master` |
-| `prod` | ブランチ `master`、タグ `[0-9]*.[0-9]*.[0-9]*` |
+| `prod` | ブランチ `master` |
 
-`prod` にブランチ `master` があるのは、集約サーバーだけを出すときと切り戻すときに `deploy.yml` を手で流すためである。
-タグの規則は `X.Y.Z-testN` も通す（`*` は `/` 以外の何にでも一致する）。
-`deploy-prod.yml` はプレリリースでは動かず、動いても形の検査で止まるが、`deploy.yml` を手で流す経路には掛からない。
-そこまで絞るなら `prod` に required reviewers を掛ける。
+どちらもタグを許さない。
+`prod` へ出す `release.yml` はリリースの公開（タグの ref）で動くが、`deploy.yml` を `master` の ref で起こすので、タグから `prod` を名乗る必要が無い。
+タグを許すと、write 権限を持つ者が未レビューのコミットに `X.Y.Z` の形のタグを打ち、その ref で `deploy.yml` を手で流すだけで `prod` を名乗れる。
+`master` だけなら、出る内容は `master` に限られ、`master` に入るものはブランチ保護が決める。
+さらに絞るなら `prod` に required reviewers を掛ける。
 ジョブは承認を待つあいだトークンを受け取らず、承認した実行だけが `prod` を名乗れる。
 
 **OIDC の信頼設定を environment に変える。**
