@@ -69,9 +69,8 @@ on:
 # 一覧からこの識別子で探す（同じコミットの手動の実行と取り違えないため）
 run-name: deploy ${{ inputs.stack }}${{ inputs.dispatch_id != '' && format(' [{0}]', inputs.dispatch_id) || '' }}
 
+# id-token: write はジョブ単位で、要る deploy ジョブにだけ書く（下の prepare の注記）
 permissions:
-  # OIDC のトークンを発行させる。既定では付かない
-  id-token: write
   contents: read
 
 # スタック名を修飾する組織。pulumi/auth-actions へ渡すものと同じ値にする。
@@ -95,12 +94,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: pulumi up
+  # 出す内容を確かめ、ビルドと依存の取得を済ませる。
+  #
+  # このジョブには id-token を与えない。
+  # id-token: write はジョブ全体に効き、ジョブの中で動くどのプロセスも
+  # ACTIONS_ID_TOKEN_REQUEST_TOKEN で OIDC トークンを発行できる。
+  # build.sh が起こす docker や、npm ci が動かす依存パッケージの install スクリプトを
+  # 同じジョブに置くと、認証のステップより前であっても AWS と Pulumi Cloud に入れる
+  # トークンを取れ、「依存の取得は資格情報を出す前に」が成り立たない。
+  # ここで作った成果物（bootstrap.zip と infra の node_modules）だけを次のジョブへ渡す。
+  prepare:
+    name: build
     runs-on: ubuntu-latest
-    # 存在しない environment を参照すると、保護規則の無い environment が作られる。
-    # 規則は admin が手で置く（docs/release.md）。置くまでは、その名前を名乗れる ref が絞られていない
-    environment: ${{ inputs.stack }}
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
       # ref が空なら起動した ref（master）の先端を取る。
       # 切り戻しの判定に master の履歴が要るので、全部取る
@@ -109,6 +116,11 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
+
+      # deploy ジョブが同じコミットを取るために渡す
+      - name: record the commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # 出す内容が、出してよいものかを見る。
       #   ref を指定したとき      master に含まれるコミットに限る。切り戻し先は一度 master に
@@ -151,12 +163,57 @@ jobs:
       - name: build bootstrap.zip
         run: backend/build.sh
 
-      # 依存の取得は資格情報を出す前に済ませる。
-      # あとに回すと、install スクリプトから AWS と Pulumi Cloud の資格情報が読める。
+      # 依存の取得は資格情報の無いこのジョブで済ませる。
       # 手元の deploy.sh が Cloudflare のトークンを npm ci の前で外しているのと同じ理由である。
       - name: install infra dependencies
         run: npm ci
         working-directory: infra
+
+      # 成果物を一つのディレクトリに集めて渡す。node_modules はファイルが多いので固める
+      - name: collect build outputs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/deploy-inputs"
+          cp backend/bootstrap.zip "$RUNNER_TEMP/deploy-inputs/bootstrap.zip"
+          tar -C infra -czf "$RUNNER_TEMP/deploy-inputs/infra-node_modules.tgz" node_modules
+
+      - name: upload build outputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-inputs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deploy-inputs
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    name: pulumi up
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      # OIDC のトークンを発行させる。既定では付かない。このジョブだけに与える
+      id-token: write
+      contents: read
+    # 存在しない environment を参照すると、保護規則の無い environment が作られる。
+    # 規則は admin が手で置く（docs/release.md）。置くまでは、その名前を名乗れる ref が絞られていない
+    environment: ${{ inputs.stack }}
+    steps:
+      # prepare が確かめたのと同じコミットを取る。ビルドはしない
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: download build outputs
+        uses: actions/download-artifact@v7
+        with:
+          name: deploy-inputs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deploy-inputs
+
+      - name: restore build outputs
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/deploy-inputs/bootstrap.zip" backend/bootstrap.zip
+          tar -C infra -xzf "$RUNNER_TEMP/deploy-inputs/infra-node_modules.tgz"
 
       # Pulumi CLI はランナーに入っていない。
       # このアクションは command を渡さなければ CLI を入れるだけで終わる。

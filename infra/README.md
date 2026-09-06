@@ -554,11 +554,15 @@ AWS 側も OIDC で入る。
 OIDC で交換したトークンで `pulumi stack ls` を打つと `limit7412/dev` と修飾して出るのに、
 `--stack dev` は `no stack named 'dev' found` で止まった（#41）。
 
-**資格情報を出す前に `npm ci` を済ませる。**
+**依存の取得は `id-token` を持たないジョブで済ませる。**
 どちらのアクションも、以降のステップから見える環境変数に資格情報を置く。
 `npm ci` をあとに回すと、依存パッケージのインストールスクリプトからデプロイロールの一時資格情報と `PULUMI_ACCESS_TOKEN` が読める。
 手元の `deploy.sh` が Cloudflare のトークンを `npm ci` の前で外しているのと同じ理由である。
-Pulumi CLI を入れる `pulumi/actions` も資格情報を要らないので、先へ寄せてある。
+同じジョブの中で先へ寄せるだけでは足りない。
+`id-token: write` はジョブ全体に効き、そのジョブで動くどのプロセスも `ACTIONS_ID_TOKEN_REQUEST_TOKEN` で OIDC トークンを発行できる。
+認証のステップより前にある `npm ci` や `build.sh` が起こす docker も、その気になれば AWS と Pulumi Cloud に入れるトークンを取れる。
+実物の `deploy.yml` はビルドと依存の取得を `id-token` の無いジョブで済ませ、`bootstrap.zip` と `infra` の `node_modules` を artifact で `pulumi up` のジョブへ渡す。
+下の例は並びの理由を示すために一つのジョブに並べた形で、実物とはそこが違う。
 
 ```yaml
 permissions:
@@ -750,13 +754,13 @@ Subject 違いで四つ要る。
 上の四つはどれも完全一致である。
 AWS 側の信頼ポリシーも同じ四つに絞ってあるので、ここも揃える（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
 
-**既に `master` の ref の二つで登録してあるなら、environment の四つに差し替える。**
+**既に `master` の ref の二つで登録してあるなら、二段で environment の四つに移す。**
 `prod` へ出すワークフローを置いた時点（2026 年 9 月）で、`dev` のスタックは `ref:refs/heads/master` の二つで動いていた。
-`master` の ref の二つは、ワークフローが environment を参照するようになれば使われないので消す。
-順序は、先にここを差し替え、次にワークフローを `master` へ入れる。
-逆にすると、そのあいだの `dev` デプロイが交換で止まる。
-コンソールなら同じ issuer のポリシーで Allow を四つにする。
-REST API なら下の `PATCH` で四つを並べて送る。
+まず二つを残したまま environment の四つを足す（六つ）。
+environment を参照するワークフローが `master` に入り、`dev` デプロイが通ったら、`master` の ref の二つを消す。
+先に消すと、それまでの `master` の ref で動くワークフローが交換で止まり、足さずにワークフローを入れると新しいワークフローが止まる。
+コンソールなら同じ issuer のポリシーで Allow を足し、あとで減らす。
+REST API なら下の `PATCH` で並べて送る。
 
 REST API で行うなら三つを順に叩く。
 `<orgName>` は個人アカウントならユーザー名である。

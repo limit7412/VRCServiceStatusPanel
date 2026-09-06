@@ -133,10 +133,16 @@ environment を参照するジョブのトークンは `sub` が `environment:<�
 ロールから見える条件は environment の名前だけで、ref の判定は GitHub 側に置く。
 
 environment の四つは 2026 年 9 月に置き換えた。
-それより前に作ったロールは `master` の ref の二つを持っているので、上の JSON を `trust.json` に保存して信頼ポリシーを差し替える。
-`master` の ref の二つは、ワークフローが environment を参照するようになれば使われないので、差し替えで消す。
-順序は、先に信頼ポリシーを差し替え、次に environment を参照するワークフローを `master` へ入れる。
-逆にすると、そのあいだの `dev` デプロイが `AssumeRoleWithWebIdentity` で止まる。
+それより前に作ったロールは `master` の ref の二つ（`...:ref:refs/heads/master`）を持っている。
+移行は二段で行う。
+
+1. `master` の ref の二つを残したまま、environment の四つを足す（六つ並ぶ）
+2. environment を参照するワークフローが `master` に入り、`dev` デプロイが通ったら、`master` の ref の二つを消して上の JSON にする
+
+先に消すと、それまでの `master` の ref で動く `deploy.yml` が `AssumeRoleWithWebIdentity` で止まる。
+足さずにワークフローを入れると、environment を参照する新しい `deploy.yml` が止まる。
+両方を並べておけば、どちらの形で来ても通る。
+どちらも `update-assume-role-policy` で信頼ポリシーを丸ごと置き換える。
 
 ```
 aws iam update-assume-role-policy \

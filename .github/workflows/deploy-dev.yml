@@ -77,8 +77,13 @@ jobs:
     # 通れば最新の内容が出ている。取り消された実行を待っていたジョブは、それと分かって
     # 成功で終える（CANCELLED_OK）。
     steps:
+      # スクリプトは push されたコミットではなく master の先端から取る。
+      # 起こす側のスクリプトと起こされる deploy.yml の契約（入力、実行の名前）を、
+      # 実行の順序が入れ替わっても揃えるためである
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          ref: master
 
       - name: dispatch deploy.yml for dev and wait
         env:

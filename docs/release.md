@@ -128,9 +128,11 @@ Settings の Environments で、それぞれ Deployment branches and tags を「
 
 **OIDC の信頼設定を environment に変える。**
 environment を参照するジョブが受け取る OIDC トークンの `sub` は `environment:<名前>` になり、ブランチもタグも含まない。
-AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは `ref:refs/heads/master` を通していたので、どちらも `environment:dev` と `environment:prod`（新旧の形で四つ）に差し替える。
-順序は、先に信頼設定を差し替え、次に environment を参照するワークフローを `master` へ入れる。
-逆にすると、そのあいだの `dev` デプロイが入れずに止まる。
+AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは `ref:refs/heads/master` を通していたので、どちらも `environment:dev` と `environment:prod`（新旧の形で四つ）にする。
+移行は二段で行う。
+まず `master` の ref の二つを残したまま environment の四つを足し、environment を参照するワークフローを `master` へ入れる。
+`dev` デプロイが通ったら、`master` の ref の二つを消す。
+先に消すと、それまでの `master` の ref で動く `deploy.yml` が入れずに止まる。
 手順は `docs/aws-oidc.md` の「誰がロールを引けるか」と、`infra/README.md` の「手で行う作業」にある。
 
 ref ではなく environment で絞るのは、タグの ref を `*` で通す形だと、write 権限を持つ者が任意のブランチにタグを打って `deploy.yml` を手で流すだけでロールを引けるためである。

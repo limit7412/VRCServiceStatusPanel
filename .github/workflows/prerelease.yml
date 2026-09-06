@@ -124,8 +124,9 @@ jobs:
       # タグがあることを完了とは見なさず、zip がリリースに付いていなければ作って付け、
       # 通知は毎回行う（通知は何度送っても同じ）。
       #
-      # 次の版の計算には、zip の付いたリリースのあるタグだけを渡す。
-      # master の過去のコミットに打って公開を拒まれたタグ（zip が付かない）を起点にしない。
+      # 次の版の計算には、パッケージの zip（<パッケージ名>-<タグ>.zip）が付いたリリースの
+      # あるタグだけを渡す。master の過去のコミットに打って公開を拒まれたタグを起点にしない。
+      # 別のファイルを手で添付したリリースも、パッケージの zip が無ければ数えない。
       - name: determine version
         id: version
         env:
@@ -163,8 +164,10 @@ jobs:
               VERSION="$EXISTING"
               echo "::notice::master の先端 $TIP には既にプレリリース $VERSION のタグがある。新しい版は作らず、足りないものだけを続ける"
             else
-              gh api --paginate "repos/$GH_REPO/releases" \
-                --jq '.[] | select((.assets | length) > 0) | .tag_name' > "$RUNNER_TEMP/published-tags.txt"
+              gh api --paginate "repos/$GH_REPO/releases" > "$RUNNER_TEMP/releases.json"
+              jq -r --arg pkg "$PACKAGE_NAME" \
+                '.[] | . as $r | select(any($r.assets[]; .name == ($pkg + "-" + $r.tag_name + ".zip"))) | .tag_name' \
+                "$RUNNER_TEMP/releases.json" > "$RUNNER_TEMP/published-tags.txt"
               VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
             fi
           fi

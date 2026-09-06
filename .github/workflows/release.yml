@@ -165,8 +165,12 @@ jobs:
       # スクリプトを取る
       contents: read
     steps:
+      # スクリプトは master の先端から取り、起こされる deploy.yml と契約を揃える。
+      # タグのコミットは build ジョブで master の先端と確かめてあるが、ここまでに進んでいてもよい
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          ref: master
 
       - name: dispatch deploy.yml for prod and wait
         env:
