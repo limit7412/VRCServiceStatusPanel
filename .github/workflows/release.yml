@@ -13,8 +13,9 @@ name: release
 # 手でも流せる。その場合はリリースへ添付せず、zip を artifact に置くだけである。
 # BOOTH に置く zip を作り直すときに使う。
 #
-# タグは X.Y.Z か X.Y.Z-testN の形に限る（docs/release.md）。
-# v を付けたタグを prerelease.yml は安定版として数えず、次の版がずれる。
+# 添付する前に、タグが X.Y.Z か X.Y.Z-testN の形で、指すコミットが master の先端であることを
+# 確かめる。master に無い内容から作った zip を公開すると、あとで deploy-prod.yml が止まっても
+# 公開した zip とリスティングは戻らない。検査は deploy-prod.yml と同じスクリプトである。
 
 on:
   release:
@@ -41,6 +42,13 @@ jobs:
       - name: checkout
         uses: actions/checkout@v7
 
+      # release イベントの GITHUB_SHA はタグが指すコミットである
+      - name: verify the release tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: .github/scripts/verify-release-tag.sh "$TAG" "$GITHUB_SHA" any
+
       - name: determine version
         id: version
         env:
@@ -58,6 +66,7 @@ jobs:
             VERSION=$(jq -r '.version' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
           fi
 
+          # 手で流したときは master の先端でなくてもよいが、形だけは揃える
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-test[0-9]+)?$'; then
             echo "::error::版 $VERSION は X.Y.Z か X.Y.Z-testN の形ではない（v は付けない）"
             exit 1

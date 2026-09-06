@@ -16,9 +16,9 @@
 | --- | --- | --- |
 | `prerelease.yml` | `master` への push、手動 | パッケージの中身に触れた取り込みで、`X.Y.Z-testN` のタグとプレリリースを作り、zip を添付し、リスティングへ通知する |
 | `deploy-dev.yml` | `master` への push | 集約サーバーか配信経路に触れた取り込みで、`deploy.yml` を `dev` へ向けて呼ぶ |
-| `release.yml` | リリースの公開（`published`）、手動 | zip を作ってリリースへ添付し、リスティングへ通知する。手動では zip を artifact に置くだけ |
-| `deploy-prod.yml` | リリースの公開（`released`） | タグのコミットが `master` に含まれることを確かめ、`deploy.yml` を `prod` へ向けて呼ぶ |
-| `deploy.yml` | 上の二つからの呼び出し、手動 | `pulumi up`。手動では出す先を入力で選ぶ |
+| `release.yml` | リリースの公開（`published`）、手動 | タグを確かめてから zip を作り、リリースへ添付し、リスティングへ通知する。手動では zip を artifact に置くだけ |
+| `deploy-prod.yml` | リリースの公開（`released`） | タグを確かめてから `deploy.yml` を `prod` へ向けて呼ぶ |
+| `deploy.yml` | 上の二つからの呼び出し、手動 | `pulumi up`。ジョブは出す先と同じ名前の environment を参照する。手動では出す先を入力で選ぶ |
 
 `prerelease.yml` と `deploy-dev.yml` は同じ push で並んで走るが、互いに `needs` で繋いでいない。
 繋ぐと、`dev` デプロイが落ちた日にプレリリースも作られなくなる。
@@ -36,8 +36,11 @@
 
 プレリリースの版は、最新の安定版タグからパッチを一つ上げた `X.Y.(Z+1)` に `-testN` を付けたものになる。
 同じ次期バージョンの `-testN` が既にあれば N を一つ進める。
-パッチ以外（マイナー、メジャー）を上げたいプレリリースは、GitHub の Releases で `X.Y.Z-testN` のタグを手で打ち、プレリリースとして公開する。
+パッチ以外（マイナー、メジャー）を上げたいプレリリースは、GitHub の Releases で `X.Y.Z-testN` のタグを `master` の先端に手で打ち、プレリリースとして公開する。
 `release.yml` が zip を付け、リスティングへ通知する。
+以後の取り込みはその系列を継ぐ。
+安定版が `0.1.0` のまま `0.2.0-test1` を手で作れば、次の取り込みは `0.1.1-test1` ではなく `0.2.0-test2` になる。
+計算は `.github/scripts/next-prerelease-version.sh` にある。
 
 安定版タグが一つも無いあいだは、`0.1.0` を次期バージョンとして `0.1.0-testN` を作る。
 最初の安定版を `0.1.0` と決めてあるためで（仕様書 9.2）、この値は `prerelease.yml` の `FIRST_VERSION` にある。
@@ -48,10 +51,15 @@
 
 ## 正式版を出す手順
 
-1. `master` の先端にあることを確かめる。`deploy-prod.yml` はタグのコミットが `master` に含まれないと止まる
-2. GitHub の Releases で、`X.Y.Z` のタグを `master` に打ち、リリースを公開する
-3. `release.yml` が zip を添付し、リスティングへ通知する
-4. `deploy-prod.yml` が `prod` へ出す
+1. GitHub の Releases で、`X.Y.Z` のタグを `master` の先端に打ち、リリースを公開する
+2. `release.yml` がタグを確かめ、zip を添付し、リスティングへ通知する
+3. `deploy-prod.yml` がタグを確かめ、`prod` へ出す
+
+タグの検査は両方とも `.github/scripts/verify-release-tag.sh` で行い、形と、タグのコミットが `master` の先端であることを見る。
+先端でなければどちらも止まる。
+過去の `master` のコミットに打ったタグも通さない。
+祖先であることだけを見ると、古いコミットからのリリースで `prod` がその時点へ巻き戻る。
+公開の直後に別の取り込みが入って先端がずれたときは、リリースを消してタグを打ち直す。
 
 プレリリースを正式版へ昇格した場合も、4 は動く。
 昇格では `released` だけが発火し、`published` は発火しないので、3 は動かない。
@@ -71,11 +79,32 @@ Actions の deploy を `workflow_dispatch` で開き、ref とスタックを選
 本リポジトリの `GITHUB_TOKEN` は他リポジトリへ届かないため、通知にはこれが要る。
 置くまでのあいだ、`prerelease.yml` と `release.yml` は通知を飛ばして notice を出す。プレリリースと zip の添付は置かなくても動く。
 
-**OIDC の信頼設定にタグの ref を足す。**
-`release` イベントで動くワークフローが受け取る OIDC トークンの `sub` は `ref:refs/tags/<タグ>` になる。
-AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは `ref:refs/heads/master` だけを通していたので、どちらにも `ref:refs/tags/*` を足す。
-足さないと `deploy-prod.yml` は AWS にも Pulumi Cloud にも入れない。
+**environment `dev` と `prod` を作り、規則を置く。**
+`deploy.yml` のジョブは出す先と同じ名前の environment を参照する。
+存在しない environment を参照して動かすと、保護規則の無い environment が自動で作られるので、先に admin が作って規則を置く。
+Settings の Environments で、それぞれ Deployment branches and tags を「Selected branches and tags」にし、次を許す。
+
+| environment | 許す ref |
+| --- | --- |
+| `dev` | ブランチ `master` |
+| `prod` | ブランチ `master`、タグ `[0-9]*.[0-9]*.[0-9]*` |
+
+`prod` にブランチ `master` があるのは、集約サーバーだけを出すときと切り戻すときに `deploy.yml` を手で流すためである。
+タグの規則は `X.Y.Z-testN` も通す（`*` は `/` 以外の何にでも一致する）。
+`deploy-prod.yml` はプレリリースでは動かず、動いても形の検査で止まるが、`deploy.yml` を手で流す経路には掛からない。
+そこまで絞るなら `prod` に required reviewers を掛ける。
+ジョブは承認を待つあいだトークンを受け取らず、承認した実行だけが `prod` を名乗れる。
+
+**OIDC の信頼設定を environment に変える。**
+environment を参照するジョブが受け取る OIDC トークンの `sub` は `environment:<名前>` になり、ブランチもタグも含まない。
+AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは `ref:refs/heads/master` を通していたので、どちらも `environment:dev` と `environment:prod`（新旧の形で四つ）に差し替える。
+順序は、先に信頼設定を差し替え、次に environment を参照するワークフローを `master` へ入れる。
+逆にすると、そのあいだの `dev` デプロイが入れずに止まる。
 手順は `docs/aws-oidc.md` の「誰がロールを引けるか」と、`infra/README.md` の「手で行う作業」にある。
+
+ref ではなく environment で絞るのは、タグの ref を `*` で通す形だと、write 権限を持つ者が任意のブランチにタグを打って `deploy.yml` を手で流すだけでロールを引けるためである。
+`master` のブランチ保護を経ない経路が一つ増える。
+environment なら、どの ref からその名前を名乗れるかを GitHub 側の規則が決め、ロールから見える条件は名前だけになる。
 
 **`master` のブランチ保護。**
 `deploy-dev.yml` は検査の成功を前提にしていない。

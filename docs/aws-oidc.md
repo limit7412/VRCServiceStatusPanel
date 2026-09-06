@@ -66,8 +66,8 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
 
 ## 誰がロールを引けるか
 
-信頼ポリシーで、`master` の ref とタグの ref で動くワークフローに限っている。
-`sub` はイベントの種別を持たないので、push に限る書き方はできない。
+信頼ポリシーで、environment `dev` か `prod` を参照するジョブに限っている。
+その environment をどの ref から名乗れるかは、GitHub 側の environment の規則が決める（`docs/release.md`）。
 
 ```json
 {
@@ -85,10 +85,10 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
         },
         "StringLike": {
           "token.actions.githubusercontent.com:sub": [
-            "repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master",
-            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master",
-            "repo:limit7412/VRCServiceStatusPanel:ref:refs/tags/*",
-            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/tags/*"
+            "repo:limit7412/VRCServiceStatusPanel:environment:dev",
+            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:dev",
+            "repo:limit7412/VRCServiceStatusPanel:environment:prod",
+            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:prod"
           ]
         }
       }
@@ -104,6 +104,7 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
 別のリポジトリが取っても、同じ `sub` を名乗れない。
 
 いまこのリポジトリのランナーが受け取るのは新しい形である。
+ワークフローが environment を参照する前に届いていたのは次で、`ref:` の部分が `environment:dev` に変わる。
 
 ```
 sub=repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master
@@ -116,18 +117,24 @@ sub=repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/mast
 設定の返り値ではなく、届いたトークンの `sub` が正である。
 
 両方を並べてあるのは、どちらの形で来ても通るようにするためである。
-`master` の二つはワイルドカードを含まない完全一致なので、並べたぶん引ける相手が増えることはない。
+どれもワイルドカードを含まない完全一致なので、並べたぶん引ける相手が増えることはない。
 
-タグの二つは、`prod` へ出すワークフローがリリースの公開で動くためにある。
-`release` イベントで動くワークフローのトークンは `sub` が `ref:refs/tags/<タグ>` になり
-（`.github/workflows/deploy-prod.yml`）、`master` の行だけでは引けない。
-`*` はタグの名前の部分だけで、ref をタグに限ったうえでの一致である。
-どのブランチも PR も通さない。
-タグを打てるのは `master` に push できる者と同じであり、`prod` へ出す前にタグのコミットが
-`master` に含まれることをワークフローが確かめる。
+ref ではなく environment で絞るのは、`prod` へ出すワークフローがリリースの公開で動くためである。
+`release` イベントで動くワークフローのトークンは、ジョブが environment を参照していなければ
+`sub` が `ref:refs/tags/<タグ>` になる。
+それを ref で通すには `refs/tags/*` を書くことになり、write 権限を持つ者が任意のブランチに
+タグを打って `deploy.yml` を手で流すだけでロールを引ける。
+`master` のブランチ保護を経ない経路が一つ増える。
+environment を参照するジョブのトークンは `sub` が `environment:<名前>` になり、ブランチもタグも含まない。
+その名前をどの ref から名乗れるかは、GitHub の environment の deployment branches and tags の規則が決める。
+`dev` は `master` だけ、`prod` は `master` と `X.Y.Z` の形のタグを許す（`docs/release.md`）。
+ロールから見える条件は environment の名前だけで、ref の判定は GitHub 側に置く。
 
-タグの二つは 2026 年 9 月に足した。
-それより前に作ったロールは `master` の二つだけを持っているので、上の JSON を `trust.json` に保存して信頼ポリシーを差し替える。
+environment の四つは 2026 年 9 月に置き換えた。
+それより前に作ったロールは `master` の ref の二つを持っているので、上の JSON を `trust.json` に保存して信頼ポリシーを差し替える。
+`master` の ref の二つは、ワークフローが environment を参照するようになれば使われないので、差し替えで消す。
+順序は、先に信頼ポリシーを差し替え、次に environment を参照するワークフローを `master` へ入れる。
+逆にすると、そのあいだの `dev` デプロイが `AssumeRoleWithWebIdentity` で止まる。
 
 ```
 aws iam update-assume-role-policy \
@@ -153,11 +160,12 @@ IAM 側も、GitHub の発行者を信頼するロールについては `sub` �
 gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'
 ```
 
-いまの条件では、`master` に push できる者、`master` 上で `workflow_dispatch` を打てる者、
-タグを打てる者は誰でも引ける。
+いまの条件では、environment の規則が許す ref でワークフローを動かせる者が引ける。
+`dev` は `master` に push できる者と `master` 上で `workflow_dispatch` を打てる者、
+`prod` はそれに加えて `X.Y.Z` の形のタグを打てる者である。
 どれも write 権限で、同じ集合である。
-さらに絞るなら、GitHub の environment を作って protection rules を掛け、
-`sub` に `repo:limit7412/VRCServiceStatusPanel:environment:prod` を足す。
+さらに絞るなら、`prod` の environment に required reviewers を掛ける。
+ジョブは承認を待つあいだトークンを受け取らず、承認された実行だけがロールを引く。
 
 ## デプロイロールの権限
 

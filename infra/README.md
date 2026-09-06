@@ -522,7 +522,7 @@ OIDC プロバイダ、デプロイロール、実行時ロールの権限境界
 長い寿命の鍵を Secrets へ置かずに済む。
 
 ロールはリポジトリに対して一つで、`dev` と `prod` で同じものを使う。
-引けるのは `master` の ref とタグの ref で動くワークフローに限る。
+引けるのは environment `dev` か `prod` を参照するジョブに限る（`docs/aws-oidc.md`）。
 
 ### 本体へ渡すもの
 
@@ -657,7 +657,10 @@ yt-dlp の Layer を Pulumi が持っていたころのもので（仕様書 7�
 | `deploy-prod.yml`（リリースの公開） | `prod` |
 
 後ろの二つは `workflow_call` でこのワークフローを呼ぶ。
-手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが `master` に載っているか）は呼ぶ側にある。
+手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが `master` の先端を指すか）は呼ぶ側にある。
+
+ジョブは出す先と同じ名前の environment を参照する。
+手で流すときもその environment の規則が掛かり、`dev` は `master` からしか流せない（`docs/release.md`）。
 
 `concurrency` の群は、手で流したときは `deploy-<スタック名>` で、呼ぶ側のワークフローが持つ固定の名前（`deploy-dev`、`deploy-prod`）と揃えてある。
 手で流したものと自動で流れたものも同じスタックなら直列になる。
@@ -725,31 +728,33 @@ Subject 違いで四つ要る。
 | Token type | Personal |
 | Scope | `user:limit7412` |
 | Audience | `urn:pulumi:org:limit7412` |
-| Subject（`master`、新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master` |
-| Subject（`master`、古い形） | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
-| Subject（タグ、新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/tags/*` |
-| Subject（タグ、古い形） | `repo:limit7412/VRCServiceStatusPanel:ref:refs/tags/*` |
+| Subject（`dev`、新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:dev` |
+| Subject（`dev`、古い形） | `repo:limit7412/VRCServiceStatusPanel:environment:dev` |
+| Subject（`prod`、新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:prod` |
+| Subject（`prod`、古い形） | `repo:limit7412/VRCServiceStatusPanel:environment:prod` |
 
 **形が二つあるのは、GitHub がこの claim の形を移しているためである。**
 いま届くトークンは、所有者とリポジトリの数値 ID を含む新しい形である。
 事情は `docs/aws-oidc.md` の「誰がロールを引けるか」にある。
 数値 ID は `gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'` で引ける。
 
-**タグの ref があるのは、`prod` へ出すワークフローがリリースの公開で動くためである。**
-`release` イベントで動くワークフローのトークンは `sub` が `ref:refs/tags/<タグ>` になる（`.github/workflows/deploy-prod.yml`）。
-`master` の行だけでは、そこからの交換が通らない。
+**ref ではなく environment で絞るのは、`prod` へ出すワークフローがリリースの公開で動くためである。**
+`deploy.yml` のジョブは出す先と同じ名前の environment を参照し、そのトークンの `sub` は `environment:<名前>` になる。
+ブランチもタグも含まないので、`master` の ref の行では通らない。
+タグの ref を `*` で通す形にすると、write 権限を持つ者が任意のブランチにタグを打って `deploy.yml` を手で流すだけでトークンを引ける。
+どの ref からその environment を名乗れるかは、GitHub の environment の規則が決める（`docs/release.md`）。
 
 **Subject は `:*` で終わらせない。**
 公式の例は `repo:<owner>/<repo>:*` だが、それだとそのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
-タグの行の `*` は ref をタグに限ったうえでの名前の部分で、どのブランチも PR も通さない。
-タグを打てるのは `master` に push できる者と同じであり、`prod` へ出す前にタグのコミットが `master` に含まれることをワークフローが確かめる。
+上の四つはどれも完全一致である。
 AWS 側の信頼ポリシーも同じ四つに絞ってあるので、ここも揃える（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
-`sub` はイベントの種別を持たないため、push だけには絞れない。
-`master` 上の `workflow_dispatch` も同じ値になる。
 
-**既に `master` の二つだけで登録してあるなら、タグの二つを足す。**
-`prod` へ出すワークフローを置いた時点（2026 年 9 月）で、`dev` のスタックはこの二つだけで動いていた。
-コンソールなら同じ issuer のポリシーに Allow を二つ足す。
+**既に `master` の ref の二つで登録してあるなら、environment の四つに差し替える。**
+`prod` へ出すワークフローを置いた時点（2026 年 9 月）で、`dev` のスタックは `ref:refs/heads/master` の二つで動いていた。
+`master` の ref の二つは、ワークフローが environment を参照するようになれば使われないので消す。
+順序は、先にここを差し替え、次にワークフローを `master` へ入れる。
+逆にすると、そのあいだの `dev` デプロイが交換で止まる。
+コンソールなら同じ issuer のポリシーで Allow を四つにする。
 REST API なら下の `PATCH` で四つを並べて送る。
 
 REST API で行うなら三つを順に叩く。
@@ -778,7 +783,7 @@ PATCH /api/orgs/<orgName>/auth/policies/<policyId>
   "authorizedPermissions": null,
   "rules": {
     "aud": "urn:pulumi:org:limit7412",
-    "sub": "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master"
+    "sub": "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:dev"
   }
 }
 ```

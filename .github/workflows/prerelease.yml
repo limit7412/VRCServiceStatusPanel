@@ -5,7 +5,8 @@ name: prerelease
 # 版は最新の安定版タグ X.Y.Z からパッチを一つ上げた X.Y.(Z+1) に、
 # プレリリース番号を付けた X.Y.(Z+1)-testN とする。
 # 同じ次期バージョンの -testN が既にあれば N を一つ進める。
-# パッチ以外を上げたいプレリリースは手で作る（docs/release.md）。
+# パッチ以外を上げたいプレリリースは手で作り、以後はその系列を継ぐ
+# （.github/scripts/next-prerelease-version.sh、docs/release.md）。
 # 安定版タグが一つも無いあいだは、最初の安定版に決めた 0.1.0 を次期バージョンとして
 # 0.1.0-testN を作る。0.1.0 が打たれたら、この値は使われなくなる。
 #
@@ -107,25 +108,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-
-          # 最新の安定版タグ（X.Y.Z）を起点にする。
-          # package.json の version はリリース時にタグから上書きする運用なので、
-          # 起点には使えない。
-          LATEST=$(git tag --list | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
-          if [ -n "$LATEST" ]; then
-            NEXT="${LATEST%.*}.$(( ${LATEST##*.} + 1 ))"
-          else
-            echo "::notice::安定版タグ（X.Y.Z）が無いので、次期バージョンを $FIRST_VERSION とする"
-            NEXT="$FIRST_VERSION"
-          fi
-
-          # 既存の -testN の最大値から次の N を決める。
-          # 先頭の 0 を落としてから数として比べる
-          MAX_N=$(git tag --list "${NEXT}-test*" \
-            | sed -nE 's/^.*-test0*([0-9]+)$/\1/p' | sort -n | tail -n 1)
-          N=$(( ${MAX_N:-0} + 1 ))
-
-          VERSION="${NEXT}-test${N}"
+          VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 

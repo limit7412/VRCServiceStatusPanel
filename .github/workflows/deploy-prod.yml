@@ -8,12 +8,15 @@ name: deploy prod
 # prerelease.yml が GITHUB_TOKEN で作るプレリリースは、release イベントそのものを
 # 発火させない（GitHub Actions の連鎖防止）。
 #
-# 出す前に、タグが指すコミットが master に含まれることを確かめる。
-# master の先端以外に打たれたリリースは、dev で試していない内容を prod へ出すことになる。
+# 出す前に、タグが X.Y.Z の形で、指すコミットが master の先端であることを確かめる。
+# master の先端以外に打たれたリリースは、dev で試していない内容を prod へ出すか、
+# 過去の内容へ prod を巻き戻す。切り戻しは deploy.yml の手動起動で行う。
+# 検査は release.yml と同じスクリプトで、パッケージの公開と prod へのデプロイで
+# 通す条件が食い違わないようにしてある。
 #
-# ここから deploy.yml を呼ぶと、OIDC のトークンの sub は refs/tags/<タグ> になる。
-# AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは master の ref だけを通していたので、
-# タグの ref を通す行を足してある（docs/aws-oidc.md、infra/README.md）。
+# deploy.yml のジョブは environment prod を参照し、OIDC の sub は environment の形になる。
+# この environment をタグからも名乗れるよう、環境の deployment branches and tags の規則に
+# X.Y.Z の形のタグを足してある（docs/release.md）。
 
 on:
   release:
@@ -35,11 +38,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
-        with:
-          # タグのコミットから master の先端までを辿るので、履歴が要る
-          fetch-depth: 0
 
-      - name: check the tag is reachable from master
+      - name: verify the release tag
         env:
           TAG: ${{ github.event.release.tag_name }}
           PRERELEASE: ${{ github.event.release.prerelease }}
@@ -54,12 +54,7 @@ jobs:
           fi
 
           # release イベントの GITHUB_SHA はタグが指すコミットである
-          git fetch --no-tags origin master
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
-            echo "::error::タグ $TAG のコミット $GITHUB_SHA が master に含まれていない。master の先端に打ち直す"
-            exit 1
-          fi
-          echo "タグ $TAG のコミット $GITHUB_SHA は master に含まれている"
+          .github/scripts/verify-release-tag.sh "$TAG" "$GITHUB_SHA" stable
 
   deploy:
     name: deploy

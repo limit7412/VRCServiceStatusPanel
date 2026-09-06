@@ -15,8 +15,16 @@ name: deploy
 # 資格情報はどちらも OIDC で受け取る（#22、#23）。
 # AWS は configure-aws-credentials、Pulumi Cloud は pulumi/auth-actions である。
 # Secrets に置いてあるのは三つだけで、長い寿命の鍵は無い。
-# どちらの信頼設定も、master の ref とタグの ref で動くワークフローに絞ってある
+#
+# ジョブは出す先と同じ名前の environment（dev、prod）を参照する。
+# environment を参照するジョブの OIDC トークンは sub が
+# repo:<owner>/<repo>:environment:<名前> になり、ブランチもタグも含まない。
+# AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーはこの sub だけを通す
 # （docs/aws-oidc.md、infra/README.md）。
+# その environment をどの ref から名乗れるかは、リポジトリの environment の
+# deployment branches and tags の規則が決める（docs/release.md）。
+# ref で絞る形にしないのは、タグの ref を通すと write 権限を持つ者が任意のブランチに
+# タグを打ってここを手で流すだけでロールを引けるためである。
 #
 # infra/deploy.sh は呼ばない。あちらは中で backend/build.sh と npm ci を回すが、
 # ここではその二つを資格情報より前に済ませたい（infra/README.md の
@@ -72,6 +80,9 @@ jobs:
   deploy:
     name: pulumi up
     runs-on: ubuntu-latest
+    # 存在しない environment を参照すると、保護規則の無い environment が作られる。
+    # 規則は admin が手で置く（docs/release.md）。置くまでは、その名前を名乗れる ref が絞られていない
+    environment: ${{ inputs.stack }}
     steps:
       - name: checkout
         uses: actions/checkout@v7

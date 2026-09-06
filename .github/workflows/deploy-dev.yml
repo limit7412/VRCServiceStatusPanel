@@ -13,6 +13,9 @@ name: deploy dev
 #
 # プレリリース（prerelease.yml）とは needs で繋がない。
 # 繋ぐと、dev デプロイが落ちた日にプレリリースも作られなくなる。
+#
+# deploy.yml のジョブは environment dev を参照する。dev の規則は master だけを許すので、
+# ここから呼ぶぶんには規則に当たらない（docs/release.md）。
 
 on:
   push:
