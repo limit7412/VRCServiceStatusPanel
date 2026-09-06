@@ -111,39 +111,70 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      # 版を決め、先端に既にプレリリースがあるかを見る。
+      # 版を決め、リリースに zip が付いているかを見る。
       #
-      # 先端に既にプレリリースのタグがあれば、その版をそのまま使い、新しい版は作らない。
-      # 先端を作った実行の後に古い push の実行が走ったとき、同じ中身を二度積まないためである。
-      # ただしタグがあることを完了とは見なさない。タグを作った後に zip の添付や通知で
-      # 落ちた実行を再実行したとき、続きから進めるためである。
-      # zip がリリースに付いていなければ作って付け、通知は毎回行う（通知は何度送っても同じ）。
+      # まず、起動時のコミット（再実行なら落ちた実行のもの）に付いたプレリリースのタグで
+      # zip の無いものがあれば、それを続ける。タグを作った後に添付で落ち、master が進んでから
+      # 再実行したとき、先端だけを見るとそのタグは見つからず、資材の無いリリースが残る。
+      # 続けるときはそのコミットを checkout し、zip をタグの内容から作る。
+      #
+      # それが無ければ、先端に既にプレリリースのタグがあればその版をそのまま使い、
+      # 新しい版は作らない。先端を作った実行の後に古い push の実行が走ったとき、
+      # 同じ中身を二度積まないためである。
+      # タグがあることを完了とは見なさず、zip がリリースに付いていなければ作って付け、
+      # 通知は毎回行う（通知は何度送っても同じ）。
+      #
+      # 次の版の計算には、zip の付いたリリースのあるタグだけを渡す。
+      # master の過去のコミットに打って公開を拒まれたタグ（zip が付かない）を起点にしない。
       - name: determine version
         id: version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          SHA=$(git rev-parse HEAD)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
+          TIP=$(git rev-parse HEAD)
           NUM='(0|[1-9][0-9]*)'
-          EXISTING=$(git tag --points-at HEAD | grep -E "^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$" | sort -V | tail -n 1 || true)
-          if [ -n "$EXISTING" ]; then
-            VERSION="$EXISTING"
-            echo "::notice::master の先端 $SHA には既にプレリリース $VERSION のタグがある。新しい版は作らず、足りないものだけを続ける"
-          else
-            VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION")
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
+          PATTERN="^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$"
+          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
 
           # リリースに zip が付いているか。リリースそのものが無ければ view が失敗し、無いと数える
-          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
-          ASSET="${PACKAGE_NAME}-${VERSION}.zip"
-          if gh release view "$VERSION" --json assets --jq '.assets[].name' 2>/dev/null | grep -qxF "$ASSET"; then
+          has_asset() {
+            gh release view "$1" --json assets --jq '.assets[].name' 2>/dev/null \
+              | grep -qxF "${PACKAGE_NAME}-$1.zip"
+          }
+
+          RESUME=""
+          if [ "$GITHUB_SHA" != "$TIP" ] && git merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
+            for TAG in $(git tag --points-at "$GITHUB_SHA" | grep -E "$PATTERN" || true); do
+              has_asset "$TAG" || RESUME="$TAG"
+            done
+          fi
+
+          if [ -n "$RESUME" ]; then
+            VERSION="$RESUME"
+            TARGET="$GITHUB_SHA"
+            git checkout -q "$GITHUB_SHA"
+            echo "::notice::起動時のコミット $GITHUB_SHA のプレリリース $VERSION に zip が無い。そのタグの内容で続ける"
+          else
+            TARGET="$TIP"
+            EXISTING=$(git tag --points-at HEAD | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
+            if [ -n "$EXISTING" ]; then
+              VERSION="$EXISTING"
+              echo "::notice::master の先端 $TIP には既にプレリリース $VERSION のタグがある。新しい版は作らず、足りないものだけを続ける"
+            else
+              gh api --paginate "repos/$GH_REPO/releases" \
+                --jq '.[] | select((.assets | length) > 0) | .tag_name' > "$RUNNER_TEMP/published-tags.txt"
+              VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION（コミット $TARGET）"
+
+          if has_asset "$VERSION"; then
             echo "has_asset=true" >> "$GITHUB_OUTPUT"
-            echo "リリース $VERSION には $ASSET が付いている。作り直さない"
+            echo "リリース $VERSION には zip が付いている。作り直さない"
           else
             echo "has_asset=false" >> "$GITHUB_OUTPUT"
           fi

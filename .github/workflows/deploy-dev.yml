@@ -14,8 +14,12 @@ name: deploy dev
 # プレリリース（prerelease.yml）とは needs で繋がない。
 # 繋ぐと、dev デプロイが落ちた日にプレリリースも作られなくなる。
 #
-# deploy.yml のジョブは environment dev を参照する。dev の規則は master だけを許すので、
-# ここから呼ぶぶんには規則に当たらない（docs/release.md）。
+# 出すのは deploy.yml で、ここからは master の ref で workflow_dispatch として起こし、
+# 終わるまで待つ（.github/scripts/dispatch-deploy.sh）。
+# workflow_call で呼ばないのは、呼ばれたワークフローが呼んだ側のコミットの定義で動くためである。
+# 先の push の実行が後から走ると、後の push が変えた deploy.yml の手順を使わずに出す。
+# master の ref で起こせば、定義も内容もその時点の master の先端になる。
+# deploy.yml のジョブは environment dev を参照し、dev の規則は master だけを許す。
 
 on:
   push:
@@ -58,30 +62,27 @@ jobs:
     # !cancelled() を置くのは、これが無いと needs の失敗でジョブごと
     # 飛ばされ、if を読んでもらえないためである。
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
-    # 呼ばれた側は、ここで渡した permissions から下げることしかできない。
-    # deploy.yml が要る id-token: write をここで渡す。
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      # deploy.yml を起こし、実行の一覧を読む
+      actions: write
+      # gh run watch はジョブの経過を checks から読む。一つでも明示すると他は none に
+      # なるので、これも書く
+      checks: read
+      # スクリプトを取る
       contents: read
-    # 同じスタックへ二つ流さない。deploy.yml を手で dev へ流したときと同じ群である。
-    # 走っているものは止めない。途中で切ると state と実物がずれる。
-    #
-    # ワークフロー全体ではなくこのジョブに効かせる。全体に効かせると、対象に触れない
-    # push も群を占め、待機中の「対象に触れた」実行を取り消したうえで何も出さずに終わる。
-    #
-    # 待機できる実行は一件に限られ、対象に触れた取り込みが続けて三件以上あると中間の実行は
-    # 取り消される。群の中の順序も保証されず、先の push の実行が後から走ることもある。
-    # どの実行も走った時点の master の先端を出すので（下の ref）、どちらでも最新の内容が出て、
-    # 古い内容へ戻ることはない。同じ内容を二度出すことはある。
-    concurrency:
-      group: deploy-dev
-      cancel-in-progress: false
-    uses: ./.github/workflows/deploy.yml
-    with:
-      stack: dev
-      # push されたコミットではなく、走った時点の master の先端を出す
-      ref: master
-    # 同じリポジトリの中の呼び出しなので inherit でよい。
-    # 他リポジトリのワークフローを可変 ref で読む notify-listing とは扱いが違う
-    # （prerelease.yml）。
-    secrets: inherit
+    # ここには concurrency を付けない。同じスタックへの実行は deploy.yml の群
+    # （deploy-dev）で直列になる。待機できる実行は一件で、取り込みが続くと中間の実行は
+    # 取り消されるが、どの実行も走った時点の master の先端を出すので、最後の一つが
+    # 通れば最新の内容が出ている。取り消された実行を待っていたジョブは、それと分かって
+    # 成功で終える（CANCELLED_OK）。
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: dispatch deploy.yml for dev and wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CANCELLED_OK: "true"
+        run: .github/scripts/dispatch-deploy.sh dev "dev-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

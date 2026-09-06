@@ -656,20 +656,18 @@ yt-dlp の Layer を Pulumi が持っていたころのもので（仕様書 7�
 | `deploy-dev.yml`（`master` への push） | `dev` |
 | `release.yml`（正式版の公開） | `prod` |
 
-`deploy-dev.yml` は `workflow_call` でこのワークフローを呼ぶ。
-`release.yml` は `master` の ref で `workflow_dispatch` として起こし、終わるまで待つ。
-手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが `master` の先端を指すか）は呼ぶ側にある。
-起こす側は期待するコミットを `expected_sha` で渡し、こちらは checkout したものと比べる。
+`deploy-dev.yml` も `release.yml` も、`master` の ref で `workflow_dispatch` として起こし、終わるまで待つ（`.github/scripts/dispatch-deploy.sh`）。
+`workflow_call` で呼ばないのは、呼ばれたワークフローが呼んだ側のコミットの定義で動くためで、`master` の ref で起こせば定義も内容もその時点の先端になる（`docs/release.md`）。
+手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが `master` の先端を指すか）は起こす側にある。
+起こす側は期待するコミットを `expected_sha` で渡せ、こちらは checkout したものと比べる。
 
 ジョブは出す先と同じ名前の environment を参照する。
 手で流すときもその environment の規則が掛かり、`dev` も `prod` も `master` からしか流せない（`docs/release.md`）。
 
-`concurrency` の群は、`workflow_dispatch` のときは `deploy-<スタック名>` で、`deploy-dev.yml` の呼ぶジョブが持つ固定の名前（`deploy-dev`）と揃えてある。
-`release.yml` が起こす実行も `workflow_dispatch` なので `deploy-prod` に入る。
-手で流したものと自動で流れたものも同じスタックなら直列になる。
-呼ばれたときは、その群を持つのを呼ぶ側に任せ、こちらは実行ごとに違う名前にする。
-呼ぶ側の実行が群を占めたまま、その中で動くこちらが同じ群の空きを待つ形になるおそれがあるためである。
-GitHub の文書はこの組み合わせの挙動を定めていないので、待ち合わせが起きない側に倒した。
+`concurrency` の群は `deploy-<スタック名>` である。
+手で流したものも、`deploy-dev.yml` や `release.yml` が起こしたものも、同じスタックなら直列になる。
+起こした側には同じ名前の群を付けない。
+付けると、起こした側の実行が群を占めたまま、起こされた実行が同じ群の空きを待つ形になる。
 
 ### ロールの権限
 

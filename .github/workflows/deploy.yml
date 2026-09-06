@@ -2,24 +2,26 @@ name: deploy
 
 # 集約サーバーと配信経路を一つのスタックへ出す（仕様書 5.1、6、9.2）。
 #
-# 起動は三つある。
-#   workflow_dispatch   手で流す。出す先を入力で選ぶ。集約サーバーだけを出したいときと、
+# 起動は三つあるが、どれも workflow_dispatch である。
+#   手で流す            出す先を入力で選ぶ。集約サーバーだけを出したいときと、
 #                       前のタグへ切り戻すときはこれを使う。ref は master にする。
 #                       environment の規則が master だけを許すので、他の ref からは
 #                       起動できない。切り戻すときは ref の入力に戻したいタグを入れる。
 #                       その内容を checkout し、master に含まれるコミットであることを
 #                       確かめてから出す
-#   deploy-dev.yml      master への push で dev へ出す。workflow_call でここを呼び、
-#                       ref に master を渡す。走った時点の先端が出る
-#   release.yml         正式版の公開で prod へ出す。ここを master の ref で
-#                       workflow_dispatch として起こし、終わるまで待つ
+#   deploy-dev.yml      master への push で、ここを master の ref で起こして dev へ出す
+#   release.yml         正式版の公開で、ここを master の ref で起こして prod へ出す
+# 起こすのは .github/scripts/dispatch-deploy.sh で、終わるまで待つ。
 # 手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが master の
 # 先端を指すか）は起こす側にある。
-# release.yml が workflow_call ではなく workflow_dispatch を使うのは、release イベントの
-# 実行はタグの ref を持ち、environment prod の規則（master だけ）に当たるためである。
-# master の ref で起こせば、規則に当たらず、出るのも master の内容に限られる。
-# 起こす側は期待するコミットを expected_sha で渡し、こちらは checkout したものと比べる。
-# 起こしてから master が進んでいれば止まる。
+#
+# workflow_call で呼ばないのは二つの理由による。
+# release イベントの実行はタグの ref を持ち、environment prod の規則（master だけ）に当たる。
+# 呼ばれたワークフローは呼んだ側のコミットの定義で動くので、実行の順序が入れ替わったとき、
+# 古い定義で新しい内容を出すことがある。
+# master の ref で起こせば、定義も内容もその時点の master の先端になり、
+# 出るのも master の内容に限られる。
+# 起こす側は期待するコミットを expected_sha で渡せ、こちらは checkout したものと比べる。
 #
 # 資格情報はどちらも OIDC で受け取る（#22、#23）。
 # AWS は configure-aws-credentials、Pulumi Cloud は pulumi/auth-actions である。
@@ -62,35 +64,11 @@ on:
         required: false
         default: ""
         type: string
-  workflow_call:
-    inputs:
-      stack:
-        description: 出す先のスタック名
-        required: true
-        type: string
-      ref:
-        description: 出す内容の ref。master に含まれるものに限る。空なら呼んだ側のコミット
-        required: false
-        default: ""
-        type: string
-      expected_sha:
-        description: 出すコミット。checkout したものと違えば止まる。空なら見ない
-        required: false
-        default: ""
-        type: string
-      dispatch_id:
-        description: 実行の名前に付ける識別子。空でよい
-        required: false
-        default: ""
-        type: string
 
-# 実行の名前に出す先と識別子を出す。release.yml は自分が起こした実行を、
-# 一覧からこの識別子で探す（同じコミットの手動の実行と取り違えないため）。
-# 呼ばれたときは呼ぶ側の実行の名前が使われ、ここは効かない
+# 実行の名前に出す先と識別子を出す。起こした側は自分が起こした実行を、
+# 一覧からこの識別子で探す（同じコミットの手動の実行と取り違えないため）
 run-name: deploy ${{ inputs.stack }}${{ inputs.dispatch_id != '' && format(' [{0}]', inputs.dispatch_id) || '' }}
 
-# 呼ばれたときは、呼ぶ側のジョブが渡した permissions から下げることしかできない。
-# deploy-dev.yml の呼ぶジョブにも同じ二つを書いてある。
 permissions:
   # OIDC のトークンを発行させる。既定では付かない
   id-token: write
@@ -109,16 +87,11 @@ env:
 # Pulumi 側にも排他はあるが、待たせるより手前で弾いたほうが分かりやすい。
 # 走っているものは止めない。途中で切ると state と実物がずれる。
 #
-# workflow_dispatch のときの群は deploy-<スタック名> で、deploy-dev.yml が持つ群と
-# 同じ名前にしてある。release.yml が起こす実行も workflow_dispatch なのでこの群に入る。
-# 手で流したものと自動で流れたものも直列になる。
-#
-# 呼ばれたときは、その群を持つのを呼ぶ側に任せ、ここは実行ごとに違う名前にする。
-# 呼ぶ側の実行が群を占めたまま、その中で動くこちらが同じ群の空きを待つ形になる
-# おそれがあるためである。GitHub の文書はこの組み合わせの挙動を定めていないので、
-# 待ち合わせが起きない側に倒す。
+# 手で流したものも、deploy-dev.yml や release.yml が起こしたものも、同じスタックなら
+# この群で直列になる。待機できる実行は一件で、取り消された実行は起こした側が
+# それと分かる（.github/scripts/dispatch-deploy.sh）。
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-{0}', inputs.stack) || format('deploy-{0}-run-{1}', inputs.stack, github.run_id) }}
+  group: deploy-${{ inputs.stack }}
   cancel-in-progress: false
 
 jobs:
@@ -129,7 +102,7 @@ jobs:
     # 規則は admin が手で置く（docs/release.md）。置くまでは、その名前を名乗れる ref が絞られていない
     environment: ${{ inputs.stack }}
     steps:
-      # ref が空なら起動した ref（呼ばれたときは呼んだ側のコミット）を取る。
+      # ref が空なら起動した ref（master）の先端を取る。
       # 切り戻しの判定に master の履歴が要るので、全部取る
       - name: checkout
         uses: actions/checkout@v7
