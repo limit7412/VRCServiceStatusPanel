@@ -83,8 +83,9 @@ jobs:
           fi
 
           # 手で流したときは master の先端でなくてもよいが、形だけは揃える
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-test[0-9]+)?$'; then
-            echo "::error::版 $VERSION は X.Y.Z か X.Y.Z-testN の形ではない（v は付けない）"
+          NUM='(0|[1-9][0-9]*)'
+          if ! echo "$VERSION" | grep -qE "^$NUM\.$NUM\.$NUM(-test[1-9][0-9]*)?\$"; then
+            echo "::error::版 $VERSION は X.Y.Z か X.Y.Z-testN の形ではない（v も先頭の 0 も付けない）"
             exit 1
           fi
 
@@ -157,8 +158,11 @@ jobs:
     if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     permissions:
-      # deploy.yml を起こす。実行の一覧と経過を読むのもこの権限で足りる
+      # deploy.yml を起こし、実行の一覧を読む
       actions: write
+      # gh run watch はジョブの経過を checks から読む。一つでも明示すると他は none に
+      # なるので、これも書く。無いと watch が 403 で止まり、デプロイが通ってもここが失敗する
+      checks: read
     steps:
       - name: dispatch deploy.yml for prod and wait
         env:

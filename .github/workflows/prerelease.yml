@@ -111,44 +111,57 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      # 先端に既にプレリリースのタグがあれば作らない。
-      # 先端を作った実行の後に古い push の実行が走ったときがこれで、同じ中身を二度積まない
-      - name: check the tip of master
-        id: check
+      # 版を決め、先端に既にプレリリースがあるかを見る。
+      #
+      # 先端に既にプレリリースのタグがあれば、その版をそのまま使い、新しい版は作らない。
+      # 先端を作った実行の後に古い push の実行が走ったとき、同じ中身を二度積まないためである。
+      # ただしタグがあることを完了とは見なさない。タグを作った後に zip の添付や通知で
+      # 落ちた実行を再実行したとき、続きから進めるためである。
+      # zip がリリースに付いていなければ作って付け、通知は毎回行う（通知は何度送っても同じ）。
+      - name: determine version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           SHA=$(git rev-parse HEAD)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          EXISTING=$(git tag --points-at HEAD | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-test[0-9]+$' || true)
-          if [ -n "$EXISTING" ]; then
-            echo "::notice::master の先端 $SHA には既にプレリリース $EXISTING がある。作らない"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
 
-      - name: determine version
-        id: version
-        if: steps.check.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION")
+          NUM='(0|[1-9][0-9]*)'
+          EXISTING=$(git tag --points-at HEAD | grep -E "^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$" | sort -V | tail -n 1 || true)
+          if [ -n "$EXISTING" ]; then
+            VERSION="$EXISTING"
+            echo "::notice::master の先端 $SHA には既にプレリリース $VERSION のタグがある。新しい版は作らず、足りないものだけを続ける"
+          else
+            VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION")
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
+          # リリースに zip が付いているか。リリースそのものが無ければ view が失敗し、無いと数える
+          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
+          ASSET="${PACKAGE_NAME}-${VERSION}.zip"
+          if gh release view "$VERSION" --json assets --jq '.assets[].name' 2>/dev/null | grep -qxF "$ASSET"; then
+            echo "has_asset=true" >> "$GITHUB_OUTPUT"
+            echo "リリース $VERSION には $ASSET が付いている。作り直さない"
+          else
+            echo "has_asset=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
       - name: build package
-        if: steps.check.outputs.skip != 'true'
+        if: steps.version.outputs.has_asset != 'true'
         run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
 
+      # タグとリリースが既にあれば、このアクションは資材を足すだけで済ませる
       - name: create pre-release
-        if: steps.check.outputs.skip != 'true'
+        if: steps.version.outputs.has_asset != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           # checkout した master の先端へタグを打つ。省略するとタグ作成時の既定ブランチの
           # 先端が使われ、checkout してから進んだコミットを巻き込む
-          target_commitish: ${{ steps.check.outputs.sha }}
+          target_commitish: ${{ steps.version.outputs.sha }}
           prerelease: true
           generate_release_notes: true
           files: "*.zip"
@@ -190,8 +203,7 @@ jobs:
   notify-listing:
     name: notify-listing
     needs: [prerelease, listing-token]
-    # 先端に既にプレリリースがあって作らなかったときは version が空で、通知もしない
-    if: ${{ !cancelled() && needs.prerelease.result == 'success' && needs.prerelease.outputs.version != '' && needs.listing-token.outputs.available == 'true' }}
+    if: ${{ !cancelled() && needs.prerelease.result == 'success' && needs.listing-token.outputs.available == 'true' }}
     # 呼ばれた再利用可能ワークフローは呼ぶ側の GITHUB_TOKEN を受け取る。
     # 通知は LISTING_DISPATCH_TOKEN で行われ GITHUB_TOKEN は使わないので、権限は全て落とす。
     permissions: {}

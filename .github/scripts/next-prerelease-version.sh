@@ -24,23 +24,26 @@ set -euo pipefail
 
 FIRST_VERSION="${1:?安定版タグが無いときの次期バージョンを指定すること（例: 0.1.0）}"
 
-STABLE_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
-PRERELEASE_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+-test[0-9]+$'
+# 数は 0 か、0 で始まらない十進数に限る（verify-release-tag.sh と同じ）。
+# 08 のような値は下の算術で八進数として読まれて止まる
+NUM='(0|[1-9][0-9]*)'
+STABLE_PATTERN="^$NUM\.$NUM\.$NUM\$"
+PRERELEASE_PATTERN="^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$"
 
 # grep は一致が無いと 1 を返す。無いのは正常なので、pipefail の中でも止めない
 STABLE=$(git tag --merged HEAD | grep -E "$STABLE_PATTERN" | sort -V | tail -n 1 || true)
 if [ -n "$STABLE" ]; then
-  NEXT_PATCH="${STABLE%.*}.$(( ${STABLE##*.} + 1 ))"
+  NEXT_PATCH="${STABLE%.*}.$(( 10#${STABLE##*.} + 1 ))"
 else
   echo "安定版タグ（X.Y.Z）が無いので、次期バージョンの起点を $FIRST_VERSION とする" >&2
   NEXT_PATCH="$FIRST_VERSION"
 fi
 
-OPEN_BASES=$(git tag --merged HEAD | grep -E "$PRERELEASE_PATTERN" | sed -E 's/-test[0-9]+$//' | sort -uV || true)
+OPEN_BASES=$(git tag --merged HEAD | grep -E "$PRERELEASE_PATTERN" | sed -E 's/-test[1-9][0-9]*$//' | sort -uV || true)
 NEXT=$(printf '%s\n' "$NEXT_PATCH" $OPEN_BASES | sort -V | tail -n 1)
 
-# 同じ次期バージョンの -testN があれば N を進める。先頭の 0 を落としてから数として比べる
-MAX_N=$(git tag --merged HEAD --list "${NEXT}-test*" | sed -nE 's/^.*-test0*([0-9]+)$/\1/p' | sort -n | tail -n 1 || true)
-N=$(( ${MAX_N:-0} + 1 ))
+# 同じ次期バージョンの -testN があれば N を進める。形に合うものだけを数える
+MAX_N=$(git tag --merged HEAD --list "${NEXT}-test*" | grep -E "$PRERELEASE_PATTERN" | sed -nE 's/^.*-test([1-9][0-9]*)$/\1/p' | sort -n | tail -n 1 || true)
+N=$(( 10#${MAX_N:-0} + 1 ))
 
 echo "${NEXT}-test${N}"
