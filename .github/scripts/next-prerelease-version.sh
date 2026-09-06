@@ -3,7 +3,10 @@
 #
 #   .github/scripts/next-prerelease-version.sh <安定版タグが無いときの次期バージョン>
 #
-# タグの一覧から決めるので、fetch-depth: 0 で checkout した作業ツリーで呼ぶ。
+# HEAD（master の先端）から辿れるタグだけを見る。
+# 別のブランチに打たれたタグは数えない。release.yml が master の先端でないとして
+# 公開を拒んだタグが残っても、それで採番が飛ばないようにするためである。
+# fetch-depth: 0 で master を checkout した作業ツリーで呼ぶ。
 # 標準出力に X.Y.Z-testN を一行出す。
 #
 # 次期バージョンは、次の二つの大きいほうである。
@@ -25,7 +28,7 @@ STABLE_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
 PRERELEASE_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+-test[0-9]+$'
 
 # grep は一致が無いと 1 を返す。無いのは正常なので、pipefail の中でも止めない
-STABLE=$(git tag --list | grep -E "$STABLE_PATTERN" | sort -V | tail -n 1 || true)
+STABLE=$(git tag --merged HEAD | grep -E "$STABLE_PATTERN" | sort -V | tail -n 1 || true)
 if [ -n "$STABLE" ]; then
   NEXT_PATCH="${STABLE%.*}.$(( ${STABLE##*.} + 1 ))"
 else
@@ -33,11 +36,11 @@ else
   NEXT_PATCH="$FIRST_VERSION"
 fi
 
-OPEN_BASES=$(git tag --list | grep -E "$PRERELEASE_PATTERN" | sed -E 's/-test[0-9]+$//' | sort -uV || true)
+OPEN_BASES=$(git tag --merged HEAD | grep -E "$PRERELEASE_PATTERN" | sed -E 's/-test[0-9]+$//' | sort -uV || true)
 NEXT=$(printf '%s\n' "$NEXT_PATCH" $OPEN_BASES | sort -V | tail -n 1)
 
 # 同じ次期バージョンの -testN があれば N を進める。先頭の 0 を落としてから数として比べる
-MAX_N=$(git tag --list "${NEXT}-test*" | sed -nE 's/^.*-test0*([0-9]+)$/\1/p' | sort -n | tail -n 1 || true)
+MAX_N=$(git tag --merged HEAD --list "${NEXT}-test*" | sed -nE 's/^.*-test0*([0-9]+)$/\1/p' | sort -n | tail -n 1 || true)
 N=$(( ${MAX_N:-0} + 1 ))
 
 echo "${NEXT}-test${N}"

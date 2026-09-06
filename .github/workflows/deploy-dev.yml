@@ -70,13 +70,17 @@ jobs:
     # push も群を占め、待機中の「対象に触れた」実行を取り消したうえで何も出さずに終わる。
     #
     # 待機できる実行は一件に限られ、対象に触れた取り込みが続けて三件以上あると中間の実行は
-    # 取り消される。dev は master の内容を出すので、最後の実行が通れば最終の状態は正しい。
+    # 取り消される。群の中の順序も保証されず、先の push の実行が後から走ることもある。
+    # どの実行も走った時点の master の先端を出すので（下の ref）、どちらでも最新の内容が出て、
+    # 古い内容へ戻ることはない。同じ内容を二度出すことはある。
     concurrency:
       group: deploy-dev
       cancel-in-progress: false
     uses: ./.github/workflows/deploy.yml
     with:
       stack: dev
+      # push されたコミットではなく、走った時点の master の先端を出す
+      ref: master
     # 同じリポジトリの中の呼び出しなので inherit でよい。
     # 他リポジトリのワークフローを可変 ref で読む notify-listing とは扱いが違う
     # （prerelease.yml）。

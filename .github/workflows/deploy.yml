@@ -9,7 +9,8 @@ name: deploy
 #                       起動できない。切り戻すときは ref の入力に戻したいタグを入れる。
 #                       その内容を checkout し、master に含まれるコミットであることを
 #                       確かめてから出す
-#   deploy-dev.yml      master への push で dev へ出す。workflow_call でここを呼ぶ
+#   deploy-dev.yml      master への push で dev へ出す。workflow_call でここを呼び、
+#                       ref に master を渡す。走った時点の先端が出る
 #   release.yml         正式版の公開で prod へ出す。ここを master の ref で
 #                       workflow_dispatch として起こし、終わるまで待つ
 # 手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが master の

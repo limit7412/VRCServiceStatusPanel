@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # リリースのタグが出してよいものかを確かめる（docs/release.md）。
 #
-#   .github/scripts/verify-release-tag.sh <タグ> <タグが指すコミット> <stable|any>
+#   .github/scripts/verify-release-tag.sh <タグ> <タグが指すコミット> <stable|prerelease>
 #
 # release.yml（パッケージの公開）と deploy-prod.yml（prod へのデプロイ）の両方から呼ぶ。
 # 片方にだけ書くと、パッケージは出たのにデプロイは止まる、あるいはその逆が起きる。
 #
 # 見るのは二つである。
-#   - 形。stable なら X.Y.Z、any なら X.Y.Z か X.Y.Z-testN。v は付けない。
-#     形が違うタグは prerelease.yml が安定版として数えず、次の版がずれる
+#   - 形。stable なら X.Y.Z、prerelease なら X.Y.Z-testN。v は付けない。
+#     形が違うタグは prerelease.yml が安定版として数えず、次の版がずれる。
+#     プレリリースとして公開したものに X.Y.Z を許さないのは、prod へ出ないまま
+#     安定版として数えられ、次の採番がその先へ進むためである
 #   - タグが指すコミットが master の先端であること。
 #     祖先であることの検査では、過去の master のコミットに打ったタグも通り、
 #     prod がその時点へ巻き戻る。切り戻しは deploy.yml の手動起動で行う
@@ -18,22 +20,22 @@ set -euo pipefail
 
 TAG="${1:?タグを指定すること}"
 SHA="${2:?タグが指すコミットを指定すること}"
-KIND="${3:?stable か any を指定すること}"
+KIND="${3:?stable か prerelease を指定すること}"
 
 case "$KIND" in
-  stable) PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$' ;;
-  any)    PATTERN='^[0-9]+\.[0-9]+\.[0-9]+(-test[0-9]+)?$' ;;
+  stable)     PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$' ;;
+  prerelease) PATTERN='^[0-9]+\.[0-9]+\.[0-9]+-test[0-9]+$' ;;
   *)
-    echo "::error::第三引数は stable か any（$KIND）" >&2
+    echo "::error::第三引数は stable か prerelease（$KIND）" >&2
     exit 2
     ;;
 esac
 
 if ! echo "$TAG" | grep -qE "$PATTERN"; then
   if [ "$KIND" = stable ]; then
-    echo "::error::タグ $TAG は X.Y.Z の形ではない（v は付けない。プレリリースは prod へ出さない）" >&2
+    echo "::error::正式版のタグ $TAG は X.Y.Z の形ではない（v は付けない。X.Y.Z-testN はプレリリースとして公開する）" >&2
   else
-    echo "::error::タグ $TAG は X.Y.Z か X.Y.Z-testN の形ではない（v は付けない）" >&2
+    echo "::error::プレリリースのタグ $TAG は X.Y.Z-testN の形ではない（v は付けない。X.Y.Z は正式版として公開する）" >&2
   fi
   exit 1
 fi

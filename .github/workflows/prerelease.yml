@@ -89,39 +89,47 @@ jobs:
     # ワークフロー全体ではなくこのジョブに効かせる。全体に効かせると、中身を変えない
     # push も群を占め、待機中の「中身が変わる」実行を取り消したうえで何も作らずに終わる。
     #
-    # 待機できる実行は一件に限られ、取り込みが続けて三件以上あると、中間のコミット単体の
-    # プレリリースは作られない。取り消されるのは待機中の実行だけなので、最後に中身を
-    # 変えた取り込みの実行は残り、その履歴には中間の変更も入っている。
+    # 待機できる実行は一件に限られ、取り込みが続けて三件以上あると、中間の実行は取り消される。
+    # 群の中の順序は保証されず、先の push の実行が後から走ることもある。
+    # どの実行も、走った時点の master の先端から作るので（下の checkout）、どちらでも
+    # 最新の内容は作られ、古い内容が後から積まれることはない。
     # 目的は取り込みごとに一つ作ることではなく master の最新を試せるようにすることなので、
     # これは許容する（仕様書 9.2）。
     concurrency:
       group: prerelease
       cancel-in-progress: false
     steps:
+      # 起動時のコミットではなく、走った時点の master の先端を取る。
+      # 起動時のコミットで作ると、順序が入れ替わったときに、後の push の内容を出した後で
+      # 古い内容のプレリリースが最大の版として積まれる。
+      # 手で流したときも同じで、どの ref を選んでも master の先端から作る。
+      # 別のブランチを選んで master に無い内容を公開する経路が、これで無くなる。
+      # 版をタグの一覧から決めるので、履歴とタグをすべて取る
       - name: checkout
         uses: actions/checkout@v7
         with:
-          # 版をタグの一覧から決めるので、タグをすべて取る
+          ref: master
           fetch-depth: 0
 
-      # 手で流したときは、選んだ ref が master の先端であることを確かめる。
-      # 手で流すときは任意のブランチやタグを ref に選べ、changes ジョブは workflow_dispatch を
-      # 常に対象ありとして扱う。別のブランチを選ぶだけで、master に無い内容から公開の
-      # プレリリースが作られ、リスティングへ通知される。
-      # push のときは GITHUB_SHA が push された master の先端そのものなので見ない
-      - name: check the ref is the tip of master
-        if: github.event_name == 'workflow_dispatch'
+      # 先端に既にプレリリースのタグがあれば作らない。
+      # 先端を作った実行の後に古い push の実行が走ったときがこれで、同じ中身を二度積まない
+      - name: check the tip of master
+        id: check
         run: |
           set -euo pipefail
-          git fetch --no-tags origin master
-          MASTER=$(git rev-parse origin/master)
-          if [ "$GITHUB_SHA" != "$MASTER" ]; then
-            echo "::error::選んだ ref のコミット $GITHUB_SHA が master の先端 $MASTER ではない。ref に master を選ぶ"
-            exit 1
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          EXISTING=$(git tag --points-at HEAD | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-test[0-9]+$' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::master の先端 $SHA には既にプレリリース $EXISTING がある。作らない"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: determine version
         id: version
+        if: steps.check.outputs.skip != 'true'
         run: |
           set -euo pipefail
           VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION")
@@ -130,15 +138,17 @@ jobs:
 
       # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
       - name: build package
+        if: steps.check.outputs.skip != 'true'
         run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
 
       - name: create pre-release
+        if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          # 起動時点のコミットへタグを打つ。省略するとタグ作成時の既定ブランチの
-          # 先端が使われ、実行が遅れたときに後続のコミットを巻き込む
-          target_commitish: ${{ github.sha }}
+          # checkout した master の先端へタグを打つ。省略するとタグ作成時の既定ブランチの
+          # 先端が使われ、checkout してから進んだコミットを巻き込む
+          target_commitish: ${{ steps.check.outputs.sha }}
           prerelease: true
           generate_release_notes: true
           files: "*.zip"
@@ -180,7 +190,8 @@ jobs:
   notify-listing:
     name: notify-listing
     needs: [prerelease, listing-token]
-    if: ${{ !cancelled() && needs.prerelease.result == 'success' && needs.listing-token.outputs.available == 'true' }}
+    # 先端に既にプレリリースがあって作らなかったときは version が空で、通知もしない
+    if: ${{ !cancelled() && needs.prerelease.result == 'success' && needs.prerelease.outputs.version != '' && needs.listing-token.outputs.available == 'true' }}
     # 呼ばれた再利用可能ワークフローは呼ぶ側の GITHUB_TOKEN を受け取る。
     # 通知は LISTING_DISPATCH_TOKEN で行われ GITHUB_TOKEN は使わないので、権限は全て落とす。
     permissions: {}

@@ -55,14 +55,14 @@ jobs:
         uses: actions/checkout@v7
 
       # release イベントの GITHUB_SHA はタグが指すコミットである。
-      # 正式版（プレリリースでない公開）は X.Y.Z の形に限る。
+      # 正式版（プレリリースでない公開）は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
       # 昇格したプレリリースは released でしか発火しないのでここには来ないが、
       # 来ても X.Y.Z-testN の形で止まる
       - name: verify the release tag
         if: github.event_name == 'release'
         env:
           TAG: ${{ github.event.release.tag_name }}
-          KIND: ${{ github.event.release.prerelease && 'any' || 'stable' }}
+          KIND: ${{ github.event.release.prerelease && 'prerelease' || 'stable' }}
         run: .github/scripts/verify-release-tag.sh "$TAG" "$GITHUB_SHA" "$KIND"
 
       - name: determine version

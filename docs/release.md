@@ -14,8 +14,8 @@
 
 | ファイル | 起動 | 何をするか |
 | --- | --- | --- |
-| `prerelease.yml` | `master` への push、手動 | パッケージの中身に触れた取り込みで、`X.Y.Z-testN` のタグとプレリリースを作り、zip を添付し、リスティングへ通知する |
-| `deploy-dev.yml` | `master` への push | 集約サーバーか配信経路に触れた取り込みで、`deploy.yml` を `dev` へ向けて呼ぶ |
+| `prerelease.yml` | `master` への push、手動 | パッケージの中身に触れた取り込みで、その時点の `master` の先端から `X.Y.Z-testN` のタグとプレリリースを作り、zip を添付し、リスティングへ通知する |
+| `deploy-dev.yml` | `master` への push | 集約サーバーか配信経路に触れた取り込みで、`deploy.yml` を `dev` へ向けて呼び、その時点の `master` の先端を出す |
 | `release.yml` | リリースの公開（`published`）、手動 | タグを確かめてから zip を作り、リリースへ添付し、リスティングへ通知する。正式版なら `deploy.yml` を `prod` へ向けて起こし、終わるまで待つ。手動では zip を artifact に置くだけ |
 | `deploy.yml` | `deploy-dev.yml` からの呼び出し、`release.yml` からの起動、手動 | `pulumi up`。ジョブは出す先と同じ名前の environment を参照する。手動では出す先を入力で選ぶ |
 
@@ -48,9 +48,15 @@
 `package.json` の `version` はリリース時にタグから上書きする。
 `master` 上の値は起点に使わないので、取り込みのたびに上げなくてよい。
 
-`prerelease.yml` を手で流すときは ref に `master` を選ぶ。
-他のブランチやタグを選ぶと、そのコミットが `master` の先端でないので止まる。
-`master` に無い内容から公開のプレリリースを作らないためである。
+`prerelease.yml` も `deploy-dev.yml` も、push されたコミットではなく、走った時点の `master` の先端を使う。
+concurrency の群の中で実行の順序は保証されず、先の push の実行が後から走ることがある。
+push されたコミットで作ると、後の push の内容を出した後に古い内容が最大の版として積まれる。
+先端を使えば、順序が入れ替わっても古い内容へ戻らない。
+先端に既にプレリリースのタグがあれば、`prerelease.yml` は作らずに終わる。
+手で流すときも同じで、どの ref を選んでも `master` の先端から作る。
+
+次の版の計算は `master` から辿れるタグだけを見る。
+別のブランチに打って公開を拒まれたタグが残っても、採番はそれで飛ばない。
 
 ## 正式版を出す手順
 
