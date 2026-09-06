@@ -66,7 +66,7 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
 
 ## 誰がロールを引けるか
 
-信頼ポリシーで、`master` の ref で動くワークフローに限っている。
+信頼ポリシーで、`master` の ref とタグの ref で動くワークフローに限っている。
 `sub` はイベントの種別を持たないので、push に限る書き方はできない。
 
 ```json
@@ -86,7 +86,9 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
         "StringLike": {
           "token.actions.githubusercontent.com:sub": [
             "repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master",
-            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master"
+            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master",
+            "repo:limit7412/VRCServiceStatusPanel:ref:refs/tags/*",
+            "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/tags/*"
           ]
         }
       }
@@ -95,7 +97,7 @@ GitHub を含むいくつかの発行者について、AWS は自前の信頼さ
 }
 ```
 
-`sub` が二つ並んでいるのは、GitHub がこの claim の形を移している途中だからである。
+`sub` が形ごとに二つ並んでいるのは、GitHub がこの claim の形を移している途中だからである。
 古い形は `repo:<owner>/<repo>` で始まる。
 新しい形は所有者とリポジトリの数値 ID を足した `repo:<owner>@<所有者ID>/<repo>@<リポジトリID>` になる。
 数値 ID は名前を変えても変わらないので、リポジトリを消したり改名したりして空いた名前を
@@ -114,7 +116,27 @@ sub=repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/mast
 設定の返り値ではなく、届いたトークンの `sub` が正である。
 
 両方を並べてあるのは、どちらの形で来ても通るようにするためである。
-どちらもワイルドカードを含まない完全一致なので、並べたぶん引ける相手が増えることはない。
+`master` の二つはワイルドカードを含まない完全一致なので、並べたぶん引ける相手が増えることはない。
+
+タグの二つは、`prod` へ出すワークフローがリリースの公開で動くためにある。
+`release` イベントで動くワークフローのトークンは `sub` が `ref:refs/tags/<タグ>` になり
+（`.github/workflows/deploy-prod.yml`）、`master` の行だけでは引けない。
+`*` はタグの名前の部分だけで、ref をタグに限ったうえでの一致である。
+どのブランチも PR も通さない。
+タグを打てるのは `master` に push できる者と同じであり、`prod` へ出す前にタグのコミットが
+`master` に含まれることをワークフローが確かめる。
+
+タグの二つは 2026 年 9 月に足した。
+それより前に作ったロールは `master` の二つだけを持っているので、上の JSON を `trust.json` に保存して信頼ポリシーを差し替える。
+
+```
+aws iam update-assume-role-policy \
+  --role-name qazx7412-vrc-service-status-panel-github-deploy \
+  --policy-document file://trust.json
+```
+
+`update-assume-role-policy` は信頼ポリシーを丸ごと置き換える。
+足す前に `aws iam get-role` で現物を読み、この文書の JSON と食い違っていないことを見てから流す。
 
 `sub` を絞らないと、同じ発行者の JWT を持つ任意のリポジトリからこのロールを引ける。
 GitHub Actions の OIDC でいちばん間違えやすい箇所である。
@@ -131,8 +153,9 @@ IAM 側も、GitHub の発行者を信頼するロールについては `sub` �
 gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'
 ```
 
-いまの条件では、`master` に push できる者と `master` 上で `workflow_dispatch` を打てる者は
-誰でも引ける。
+いまの条件では、`master` に push できる者、`master` 上で `workflow_dispatch` を打てる者、
+タグを打てる者は誰でも引ける。
+どれも write 権限で、同じ集合である。
 さらに絞るなら、GitHub の environment を作って protection rules を掛け、
 `sub` に `repo:limit7412/VRCServiceStatusPanel:environment:prod` を足す。
 

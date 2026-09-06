@@ -1,0 +1,197 @@
+name: prerelease
+
+# master への取り込みを契機に、VPM のプレリリース（test 版）を作る（仕様書 9.2）。
+#
+# 版は最新の安定版タグ X.Y.Z からパッチを一つ上げた X.Y.(Z+1) に、
+# プレリリース番号を付けた X.Y.(Z+1)-testN とする。
+# 同じ次期バージョンの -testN が既にあれば N を一つ進める。
+# パッチ以外を上げたいプレリリースは手で作る（docs/release.md）。
+# 安定版タグが一つも無いあいだは、最初の安定版に決めた 0.1.0 を次期バージョンとして
+# 0.1.0-testN を作る。0.1.0 が打たれたら、この値は使われなくなる。
+#
+# zip の添付とリスティングへの通知は、release.yml に任せずここで行う。
+# GITHUB_TOKEN で作ったリリースは、ワークフローの連鎖起動を防ぐ GitHub Actions の
+# 仕様により release イベントを発火させず、release.yml はここで作ったものに対して
+# 動かないためである。
+#
+# パッケージの中身に触れた取り込みだけで作る。判定は `on` の `paths` ではなく
+# changes ジョブで行い、判定できなかったときは作る側へ倒す
+# （理由は .github/actions/changed-paths/action.yml）。
+#
+# dev デプロイ（deploy-dev.yml）とは needs で繋がない。
+# 繋ぐと、dev デプロイが落ちた日にプレリリースも作られなくなる。
+
+on:
+  push:
+    branches: [master]
+  # タグの計算からやり直したいときや、手順を変えて作り直したいときに手で流す
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 安定版タグが無いあいだの次期バージョン（仕様書 9.2）
+  FIRST_VERSION: 0.1.0
+
+jobs:
+  # 変更が zip に入るものに触れているかを判定する。判定の中身と、`on` の `paths` を
+  # 使わない理由は .github/actions/changed-paths/action.yml に書いてある。
+  changes:
+    name: Check changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.check.outputs.relevant }}
+    steps:
+      # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
+      - uses: actions/checkout@v7
+
+      - id: check
+        uses: ./.github/actions/changed-paths
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          label: プレリリースの作成
+          # zip へ実際に入るものだけを並べる。.github/scripts/build-package.sh が
+          # 固める中身と揃えること。ずれると、中身の同じプレリリースが増えるか、
+          # 逆に中身が変わったのに作られないかのどちらかが起きる。
+          #
+          # Tests/ は zip に入らないので対象外。
+          # このワークフロー自身とスクリプトも対象に含めない。手順の変更で zip の中身が
+          # 変わることはあるが、その頻度でプレリリースを積むより、作り直したいときに
+          # workflow_dispatch から流すほうが扱いやすい。
+          patterns: |
+            unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json
+            unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json.meta
+            unity/Packages/com.qazx7412.vrcservicestatuspanel/Runtime/*
+            unity/Packages/com.qazx7412.vrcservicestatuspanel/Runtime.meta
+            unity/Packages/com.qazx7412.vrcservicestatuspanel/Editor/*
+            unity/Packages/com.qazx7412.vrcservicestatuspanel/Editor.meta
+
+  prerelease:
+    name: create pre-release
+    needs: changes
+    # 判定そのものが失敗したときは作る。
+    # 飛ばす条件を「対象に触れていない」に限らないと、判定が壊れているあいだ
+    # 試せるはずの変更が master に入ったままになる。
+    # !cancelled() を置くのは、これが無いと needs の失敗でジョブごと
+    # 飛ばされ、if を読んでもらえないためである。
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      # タグとリリースを作る
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    # 取り込みが続いたときにタグの計算が競合しないよう、直列にする。
+    # 並んで走ると両方が同じ -testN を計算し、片方のタグ作成が失敗する。
+    #
+    # ワークフロー全体ではなくこのジョブに効かせる。全体に効かせると、中身を変えない
+    # push も群を占め、待機中の「中身が変わる」実行を取り消したうえで何も作らずに終わる。
+    #
+    # 待機できる実行は一件に限られ、取り込みが続けて三件以上あると、中間のコミット単体の
+    # プレリリースは作られない。取り消されるのは待機中の実行だけなので、最後に中身を
+    # 変えた取り込みの実行は残り、その履歴には中間の変更も入っている。
+    # 目的は取り込みごとに一つ作ることではなく master の最新を試せるようにすることなので、
+    # これは許容する（仕様書 9.2）。
+    concurrency:
+      group: prerelease
+      cancel-in-progress: false
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          # 版をタグの一覧から決めるので、タグをすべて取る
+          fetch-depth: 0
+
+      - name: determine version
+        id: version
+        run: |
+          set -euo pipefail
+
+          # 最新の安定版タグ（X.Y.Z）を起点にする。
+          # package.json の version はリリース時にタグから上書きする運用なので、
+          # 起点には使えない。
+          LATEST=$(git tag --list | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          if [ -n "$LATEST" ]; then
+            NEXT="${LATEST%.*}.$(( ${LATEST##*.} + 1 ))"
+          else
+            echo "::notice::安定版タグ（X.Y.Z）が無いので、次期バージョンを $FIRST_VERSION とする"
+            NEXT="$FIRST_VERSION"
+          fi
+
+          # 既存の -testN の最大値から次の N を決める。
+          # 先頭の 0 を落としてから数として比べる
+          MAX_N=$(git tag --list "${NEXT}-test*" \
+            | sed -nE 's/^.*-test0*([0-9]+)$/\1/p' | sort -n | tail -n 1)
+          N=$(( ${MAX_N:-0} + 1 ))
+
+          VERSION="${NEXT}-test${N}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
+      - name: build package
+        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
+
+      - name: create pre-release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          # 起動時点のコミットへタグを打つ。省略するとタグ作成時の既定ブランチの
+          # 先端が使われ、実行が遅れたときに後続のコミットを巻き込む
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: true
+          files: "*.zip"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # secrets コンテキストはジョブの if で参照できないため、
+  # トークンの有無を先行ジョブの出力へ移してから分岐する（unity-test.yml と同じ形）。
+  # トークンを置く前でもプレリリース自体は作れるようにし、通知だけを飛ばす。
+  listing-token:
+    name: Check listing token
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        env:
+          LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$LISTING_DISPATCH_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::LISTING_DISPATCH_TOKEN が未設定のため VPM リスティングへの通知をスキップします"
+          fi
+
+  # プレリリースの公開を VPM リスティング（limit7412/vcc-vpm）へ通知し、
+  # リスティングを作り直させる。
+  # GitHub の release イベントはリリース元のリポジトリにしか配信されないので、
+  # リスティング側から検知することはできない。
+  #
+  # needs に prerelease を置くのは zip の添付を待つため。リスティングの生成は
+  # リリースの資材を参照するので、添付前に通知すると zip が無い状態で索引される。
+  #
+  # secret は inherit ではなく明示的に渡す。inherit は可変 ref（@main）で読み込まれる
+  # 他リポジトリのワークフローへこのリポジトリの全 secret を渡すが、要るのは一つだけである。
+  # LISTING_DISPATCH_TOKEN は vcc-vpm だけをスコープとし Contents の読み書きを持つ
+  # fine-grained PAT（docs/release.md）。
+  notify-listing:
+    name: notify-listing
+    needs: [prerelease, listing-token]
+    if: ${{ !cancelled() && needs.prerelease.result == 'success' && needs.listing-token.outputs.available == 'true' }}
+    # 呼ばれた再利用可能ワークフローは呼ぶ側の GITHUB_TOKEN を受け取る。
+    # 通知は LISTING_DISPATCH_TOKEN で行われ GITHUB_TOKEN は使わないので、権限は全て落とす。
+    permissions: {}
+    uses: limit7412/vcc-vpm/.github/workflows/notify-listing.yml@main
+    with:
+      # 既定を持たない必須入力。uses: の参照先と同じリポジトリを指すこと
+      listing-repo: limit7412/vcc-vpm
+      # GITHUB_TOKEN で作ったリリースは release イベントを発火させないため、
+      # 呼び出し先が既定で読む github.event.release.tag_name は空になる。
+      # 作ったタグを明示的に渡す
+      tag: ${{ needs.prerelease.outputs.version }}
+    secrets:
+      LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}

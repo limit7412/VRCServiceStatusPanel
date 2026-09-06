@@ -1,0 +1,78 @@
+name: deploy dev
+
+# master へ入った変更を dev へ出す（仕様書 9.2）。
+#
+# 集約サーバーと配信経路に触れた変更だけを出す。
+# unity/ だけを直した取り込みで pulumi up を流す理由が無い。
+# 判定は `on` の `paths` ではなく changes ジョブで行い、判定できなかったときは
+# 出す側へ倒す（理由は .github/actions/changed-paths/action.yml）。
+#
+# 検査の成功をデプロイの前提にしていない。backend-ci と unity-test は同じ push で
+# 並んで走るだけで、master のブランチ保護が required status check で pull request を
+# 縛っていなければ、未検証の内容が dev に出る（docs/release.md）。
+#
+# プレリリース（prerelease.yml）とは needs で繋がない。
+# 繋ぐと、dev デプロイが落ちた日にプレリリースも作られなくなる。
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# 同じスタックへ二つ流さない。deploy.yml を手で dev へ流したときと同じ群である。
+# 走っているものは止めない。途中で切ると state と実物がずれる。
+#
+# 待機できる実行は一件に限られ、取り込みが続けて三件以上あると中間の実行は取り消される。
+# dev は master の内容を出すので、最後の実行が通れば最終の状態は正しい。
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  # 変更が対象に触れているかを判定する。判定の中身と、`on` の `paths` を
+  # 使わない理由は .github/actions/changed-paths/action.yml に書いてある。
+  changes:
+    name: Check changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.check.outputs.relevant }}
+    steps:
+      # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
+      - uses: actions/checkout@v7
+
+      - id: check
+        uses: ./.github/actions/changed-paths
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          label: dev へのデプロイ
+          # deploy.yml は呼ぶ先なので、手順が変わったときも出す
+          patterns: |
+            backend/*
+            infra/*
+            .github/workflows/deploy.yml
+            .github/workflows/deploy-dev.yml
+            .github/actions/changed-paths/*
+
+  deploy:
+    name: deploy
+    needs: changes
+    # 判定そのものが失敗したときは出す。
+    # 飛ばす条件を「対象に触れていない」に限らないと、判定が壊れているあいだ
+    # master の変更が dev に出ないままになる。
+    # !cancelled() を置くのは、これが無いと needs の失敗でジョブごと
+    # 飛ばされ、if を読んでもらえないためである。
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
+    # 呼ばれた側は、ここで渡した permissions から下げることしかできない。
+    # deploy.yml が要る id-token: write をここで渡す。
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      stack: dev
+    # 同じリポジトリの中の呼び出しなので inherit でよい。
+    # 他リポジトリのワークフローを可変 ref で読む notify-listing とは扱いが違う
+    # （prerelease.yml）。
+    secrets: inherit

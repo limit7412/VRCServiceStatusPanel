@@ -1,0 +1,118 @@
+name: release
+
+# 正式版の VPM パッケージを作り、リリースに添付する（仕様書 9.2）。
+#
+# 型は published だけにする。人が作る正式版と、人が作るプレリリース
+# （パッチ以外を上げるとき）の公開で発火する。
+# prerelease.yml が GITHUB_TOKEN で作るプレリリースは release イベントを
+# 発火させないのでここには来ない。あちらは自分で zip を付けて通知する。
+# released は並べない。通常リリースの公開で published と同時に発火し、同じタグに
+# 二回動いて同名の zip の添付が競合する。prod デプロイのほうが released を使う
+# （deploy-prod.yml）。
+#
+# 手でも流せる。その場合はリリースへ添付せず、zip を artifact に置くだけである。
+# BOOTH に置く zip を作り直すときに使う。
+#
+# タグは X.Y.Z か X.Y.Z-testN の形に限る（docs/release.md）。
+# v を付けたタグを prerelease.yml は安定版として数えず、次の版がずれる。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版（例 0.1.0）。空なら package.json の version
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build package
+    runs-on: ubuntu-latest
+    permissions:
+      # リリースへ zip を添付する
+      contents: write
+    steps:
+      # release イベントでは、タグが指すコミットが checkout される
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: determine version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "release" ]; then
+            VERSION="$TAG"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION=$(jq -r '.version' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
+          fi
+
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-test[0-9]+)?$'; then
+            echo "::error::版 $VERSION は X.Y.Z か X.Y.Z-testN の形ではない（v は付けない）"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      # prerelease.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
+      - name: build package
+        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: "*.zip"
+
+      - name: upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: "*.zip"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # secrets コンテキストはジョブの if で参照できないため、
+  # トークンの有無を先行ジョブの出力へ移してから分岐する（prerelease.yml と同じ形）
+  listing-token:
+    name: Check listing token
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        env:
+          LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$LISTING_DISPATCH_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::LISTING_DISPATCH_TOKEN が未設定のため VPM リスティングへの通知をスキップします"
+          fi
+
+  # リリースの公開を VPM リスティング（limit7412/vcc-vpm）へ通知し、
+  # リスティングを作り直させる。secret の扱いと needs の理由は prerelease.yml と同じ。
+  # リリースのタグは release イベントから読まれるので tag は渡さない。
+  notify-listing:
+    name: notify-listing
+    needs: [build, listing-token]
+    if: ${{ !cancelled() && github.event_name == 'release' && needs.build.result == 'success' && needs.listing-token.outputs.available == 'true' }}
+    permissions: {}
+    uses: limit7412/vcc-vpm/.github/workflows/notify-listing.yml@main
+    with:
+      listing-repo: limit7412/vcc-vpm
+    secrets:
+      LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}

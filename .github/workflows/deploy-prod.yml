@@ -1,0 +1,76 @@
+name: deploy prod
+
+# リリースの公開を契機に prod へ出す（仕様書 9.2）。
+#
+# 型は released だけにする。通常リリースの公開でも、プレリリースからの昇格でも
+# 一度だけ発火し、プレリリースの公開では発火しない。
+# published を並べると、通常リリースの公開で同じタグに二回動く。
+# prerelease.yml が GITHUB_TOKEN で作るプレリリースは、release イベントそのものを
+# 発火させない（GitHub Actions の連鎖防止）。
+#
+# 出す前に、タグが指すコミットが master に含まれることを確かめる。
+# master の先端以外に打たれたリリースは、dev で試していない内容を prod へ出すことになる。
+#
+# ここから deploy.yml を呼ぶと、OIDC のトークンの sub は refs/tags/<タグ> になる。
+# AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは master の ref だけを通していたので、
+# タグの ref を通す行を足してある（docs/aws-oidc.md、infra/README.md）。
+
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+# 同じスタックへ二つ流さない。deploy.yml を手で prod へ流したときと同じ群である。
+# 走っているものは止めない。途中で切ると state と実物がずれる。
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: tag is on master
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          # タグのコミットから master の先端までを辿るので、履歴が要る
+          fetch-depth: 0
+
+      - name: check the tag is reachable from master
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+
+          # released はプレリリースでは発火しない。型の意味が変わっても
+          # プレリリースを prod へ出さないよう、ここでも見る
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "::error::プレリリース $TAG は prod へ出さない"
+            exit 1
+          fi
+
+          # release イベントの GITHUB_SHA はタグが指すコミットである
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::タグ $TAG のコミット $GITHUB_SHA が master に含まれていない。master の先端に打ち直す"
+            exit 1
+          fi
+          echo "タグ $TAG のコミット $GITHUB_SHA は master に含まれている"
+
+  deploy:
+    name: deploy
+    needs: verify
+    # 呼ばれた側は、ここで渡した permissions から下げることしかできない。
+    # deploy.yml が要る id-token: write をここで渡す。
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      stack: prod
+    # 同じリポジトリの中の呼び出しなので inherit でよい
+    secrets: inherit
