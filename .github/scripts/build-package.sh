@@ -44,13 +44,21 @@ PACKAGE_NAME="$(jq -r '.name' package.json)"
 jq --indent 4 --arg version "$VERSION" '.version = $version' package.json > package.json.tmp
 mv package.json.tmp package.json
 
-# Editor/ はまだ無い。作られたら自然に入るよう、在るものだけ並べる。
-# 無い名前を zip に渡すと止まる。
+# Runtime/ はパッケージの本体で、無ければ止める。
+# 消したり動かしたりした変更もプレリリースの対象に入るので、黙って続けると
+# コードを一つも含まない zip が公開される。
+# Editor/ はまだ無い。作られたら自然に入るよう、在るときだけ並べる。
 # ディレクトリがあるのに .meta が無いのは、Unity で開いていない状態なので止める。
 # .meta 無しで配ると、入れた側で GUID が振り直される。
 ENTRIES=(package.json package.json.meta)
 for DIR in Runtime Editor; do
-  [ -d "$DIR" ] || continue
+  if [ ! -d "$DIR" ]; then
+    if [ "$DIR" = Runtime ]; then
+      echo "::error::$PACKAGE_DIR に Runtime/ が無い。パッケージの本体なので zip を作らない" >&2
+      exit 1
+    fi
+    continue
+  fi
   if [ ! -f "$DIR.meta" ]; then
     echo "::error::$DIR/ はあるのに $DIR.meta が無い" >&2
     exit 1

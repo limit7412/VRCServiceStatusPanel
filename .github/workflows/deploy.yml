@@ -4,7 +4,11 @@ name: deploy
 #
 # 起動は三つある。
 #   workflow_dispatch   手で流す。出す先を入力で選ぶ。集約サーバーだけを出したいときと、
-#                       前のタグへ切り戻すときはこれを使う
+#                       前のタグへ切り戻すときはこれを使う。ref は master にする。
+#                       environment の規則が master だけを許すので、他の ref からは
+#                       起動できない。切り戻すときは ref の入力に戻したいタグを入れる。
+#                       その内容を checkout し、master に含まれるコミットであることを
+#                       確かめてから出す
 #   deploy-dev.yml      master への push で dev へ出す。workflow_call でここを呼ぶ
 #   release.yml         正式版の公開で prod へ出す。ここを master の ref で
 #                       workflow_dispatch として起こし、終わるまで待つ
@@ -42,8 +46,18 @@ on:
         required: true
         default: dev
         type: string
+      ref:
+        description: 出す内容の ref（切り戻し先のタグなど）。master に含まれるものに限る。空なら起動した ref
+        required: false
+        default: ""
+        type: string
       expected_sha:
         description: 出すコミット。checkout したものと違えば止まる。空なら見ない
+        required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: 起こした側が実行を見つけるための識別子。実行の名前に付く。空でよい
         required: false
         default: ""
         type: string
@@ -53,11 +67,26 @@ on:
         description: 出す先のスタック名
         required: true
         type: string
+      ref:
+        description: 出す内容の ref。master に含まれるものに限る。空なら呼んだ側のコミット
+        required: false
+        default: ""
+        type: string
       expected_sha:
         description: 出すコミット。checkout したものと違えば止まる。空なら見ない
         required: false
         default: ""
         type: string
+      dispatch_id:
+        description: 実行の名前に付ける識別子。空でよい
+        required: false
+        default: ""
+        type: string
+
+# 実行の名前に出す先と識別子を出す。release.yml は自分が起こした実行を、
+# 一覧からこの識別子で探す（同じコミットの手動の実行と取り違えないため）。
+# 呼ばれたときは呼ぶ側の実行の名前が使われ、ここは効かない
+run-name: deploy ${{ inputs.stack }}${{ inputs.dispatch_id != '' && format(' [{0}]', inputs.dispatch_id) || '' }}
 
 # 呼ばれたときは、呼ぶ側のジョブが渡した permissions から下げることしかできない。
 # deploy-dev.yml の呼ぶジョブにも同じ二つを書いてある。
@@ -99,19 +128,37 @@ jobs:
     # 規則は admin が手で置く（docs/release.md）。置くまでは、その名前を名乗れる ref が絞られていない
     environment: ${{ inputs.stack }}
     steps:
+      # ref が空なら起動した ref（呼ばれたときは呼んだ側のコミット）を取る。
+      # 切り戻しの判定に master の履歴が要るので、全部取る
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
 
-      # release.yml が起こしたときは、タグのコミットを期待して渡してくる。
-      # 起こしてから master が進んでいると、タグと違う内容が prod へ出るので止める
-      - name: check the commit is the expected one
-        if: inputs.expected_sha != ''
+      # 出す内容が、出してよいものかを見る。
+      #   ref を指定したとき      master に含まれるコミットに限る。切り戻し先は一度 master に
+      #                          入って dev で試したものだけで、master に無い内容は出せない
+      #   expected_sha があるとき checkout したものがそれと同じであること。release.yml が
+      #                          タグのコミットを渡してくる。起こしてから master が進んでいると
+      #                          タグと違う内容が prod へ出るので止める
+      - name: check the commit is allowed
+        if: inputs.ref != '' || inputs.expected_sha != ''
         env:
+          REF: ${{ inputs.ref }}
           EXPECTED: ${{ inputs.expected_sha }}
         run: |
           set -euo pipefail
           ACTUAL=$(git rev-parse HEAD)
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
+          if [ -n "$REF" ]; then
+            git fetch --no-tags origin master
+            if ! git merge-base --is-ancestor "$ACTUAL" origin/master; then
+              echo "::error::$REF のコミット $ACTUAL は master に含まれていない。master に入ったものしか出せない"
+              exit 1
+            fi
+            echo "$REF のコミット $ACTUAL は master に含まれている"
+          fi
+          if [ -n "$EXPECTED" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
             echo "::error::checkout したコミット $ACTUAL が期待した $EXPECTED ではない。起こしてから master が進んだ"
             exit 1
           fi

@@ -48,6 +48,10 @@
 `package.json` の `version` はリリース時にタグから上書きする。
 `master` 上の値は起点に使わないので、取り込みのたびに上げなくてよい。
 
+`prerelease.yml` を手で流すときは ref に `master` を選ぶ。
+他のブランチやタグを選ぶと、そのコミットが `master` の先端でないので止まる。
+`master` に無い内容から公開のプレリリースを作らないためである。
+
 ## 正式版を出す手順
 
 1. GitHub の Releases で、`X.Y.Z` のタグを `master` の先端に打ち、リリースを公開する
@@ -72,8 +76,13 @@
 昇格しても `released` しか発火せず、それを購読するワークフローは無いので、何も起きない。
 正式版は必ず新しい `X.Y.Z` のタグで公開する。
 
-集約サーバーだけを出したいときと、前のタグへ切り戻すときは、`deploy.yml` を手で流す。
-Actions の deploy を `workflow_dispatch` で開き、ref とスタックを選ぶ。
+集約サーバーだけを出したいときは、`deploy.yml` を手で流す。
+Actions の deploy を `workflow_dispatch` で開き、ref に `master` を選び、スタックを選ぶ。
+environment の規則が `master` だけを許すので、他の ref からは起動できない。
+
+前のタグへ切り戻すときも ref は `master` のまま、`ref` の入力に戻したいタグを入れる。
+`deploy.yml` はその内容を checkout し、`master` に含まれるコミットであることを確かめてから出す。
+`master` に入って `dev` で試したものしか出せない。
 
 ## 手で行う作業
 

@@ -104,6 +104,22 @@ jobs:
           # 版をタグの一覧から決めるので、タグをすべて取る
           fetch-depth: 0
 
+      # 手で流したときは、選んだ ref が master の先端であることを確かめる。
+      # 手で流すときは任意のブランチやタグを ref に選べ、changes ジョブは workflow_dispatch を
+      # 常に対象ありとして扱う。別のブランチを選ぶだけで、master に無い内容から公開の
+      # プレリリースが作られ、リスティングへ通知される。
+      # push のときは GITHUB_SHA が push された master の先端そのものなので見ない
+      - name: check the ref is the tip of master
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master
+          MASTER=$(git rev-parse origin/master)
+          if [ "$GITHUB_SHA" != "$MASTER" ]; then
+            echo "::error::選んだ ref のコミット $GITHUB_SHA が master の先端 $MASTER ではない。ref に master を選ぶ"
+            exit 1
+          fi
+
       - name: determine version
         id: version
         run: |

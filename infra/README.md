@@ -652,7 +652,7 @@ yt-dlp の Layer を Pulumi が持っていたころのもので（仕様書 7�
 
 | 起動 | 出す先 |
 | --- | --- |
-| 手で流す（`workflow_dispatch`） | 入力で選ぶ。既定は `dev` |
+| 手で流す（`workflow_dispatch`、ref は `master`） | 入力で選ぶ。既定は `dev`。切り戻しは `ref` の入力に前のタグを入れる |
 | `deploy-dev.yml`（`master` への push） | `dev` |
 | `release.yml`（正式版の公開） | `prod` |
 

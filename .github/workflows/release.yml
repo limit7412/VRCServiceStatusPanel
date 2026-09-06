@@ -145,7 +145,9 @@ jobs:
   # 正式版なら prod へ出す。zip の添付が通ってからで、プレリリースでは動かない。
   #
   # deploy.yml を master の ref で workflow_dispatch として起こし、その実行が終わるまで待つ。
-  # 起こした実行の ID は同期的には返らないので、同じコミットの新しい実行を探す。
+  # 起こした実行の ID は同期的には返らない。gh run list は起動の入力では絞れないので、
+  # この実行ごとの識別子を dispatch_id で渡し、deploy.yml がそれを実行の名前に付け、
+  # 一覧の名前で探す。同じコミットで直前に手で流した実行と取り違えない。
   # 同じスタックへの実行は deploy.yml の concurrency（deploy-prod）で直列になる。
   # ここには concurrency を付けない。同じ名前を付けると、このジョブが群を占めたまま、
   # 起こした実行が同じ群の空きを待つ形になる。
@@ -168,16 +170,18 @@ jobs:
 
           # 探す範囲の下限。時計のずれを見て一分前から
           SINCE=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%S+00:00)
+          DISPATCH_ID="release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
-          gh workflow run deploy.yml --ref master -f stack=prod -f "expected_sha=$GITHUB_SHA"
-          echo "deploy.yml を master の ref で起こした（stack=prod、expected_sha=$GITHUB_SHA）"
+          gh workflow run deploy.yml --ref master \
+            -f stack=prod -f "expected_sha=$GITHUB_SHA" -f "dispatch_id=$DISPATCH_ID"
+          echo "deploy.yml を master の ref で起こした（stack=prod、expected_sha=$GITHUB_SHA、dispatch_id=$DISPATCH_ID）"
 
           RUN_ID=""
           for _ in $(seq 1 12); do
             sleep 5
             RUN_ID=$(gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
-              --commit "$GITHUB_SHA" --created ">=$SINCE" --limit 1 \
-              --json databaseId --jq '.[0].databaseId // empty')
+              --created ">=$SINCE" --limit 20 --json databaseId,displayTitle \
+              --jq "map(select(.displayTitle | endswith(\"[$DISPATCH_ID]\"))) | .[0].databaseId // empty")
             [ -n "$RUN_ID" ] && break
           done
           if [ -z "$RUN_ID" ]; then
