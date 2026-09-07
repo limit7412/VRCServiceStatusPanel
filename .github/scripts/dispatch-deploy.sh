@@ -6,6 +6,7 @@
 #
 # deploy-dev.yml と release.yml から呼ぶ。
 # 環境変数 GH_TOKEN（actions: write と checks: read を持つ GITHUB_TOKEN）と GH_REPO が要る。
+# actions: write は起こすのと、五時間たったときに取り消すのに使う。
 # CANCELLED_OK=true を渡すと、起こした実行が concurrency の群で後続に置き換えられて
 # 取り消されたときは 0 で終える。dev ではそれは「後から起こした実行が代わりに出す」ことを
 # 意味し、失敗ではない。同じスタックへ後から起こした実行が見つからない取り消し
@@ -58,8 +59,9 @@ echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
 # 同じスタックの前の実行が承認待ちのあいだは、この実行は concurrency の群の空きを待ち、
 # 状態は waiting ではなく queued や pending のままになる。それも同じに扱い、
 # 同じスタックの前の実行に waiting のものがあれば追うのをやめる。
-# どちらにも当たらずに五時間たったときも、上限で落ちる前に追うのをやめる。
-# 親が上限で落ちた後に出る、という食い違いを残さないための保険で、通常は来ない
+# どちらにも当たらずに五時間たったとき（ランナー不足で並んだまま、pulumi up が終わらない）は、
+# 上限で落ちる前に起こした実行を取り消して失敗にする。承認待ちと違って、そのまま手を離すと
+# 親が緑のまま後から失敗する、または親の後で出る、という食い違いになる。通常は来ない
 
 # 実行の名前は deploy.yml の run-name のとおり「deploy <スタック名>」か
 # 「deploy <スタック名> [<識別子>]」で、その二つの形だけを同じスタックと見る。
@@ -96,7 +98,9 @@ while :; do
       ;;
   esac
   if [ $(( $(date +%s) - STARTED )) -ge $(( 5 * 60 * 60 )) ]; then
-    hand_off "五時間たっても終わっていない"
+    echo "::error::deploy の実行 $RUN_ID は五時間たっても終わっていない（状態 $STATUS）。取り消して失敗にする。pulumi up の途中なら state のロックが残ることがあり、その場合は pulumi cancel で外す" >&2
+    gh run cancel "$RUN_ID" || true
+    exit 1
   fi
   sleep 20
 done

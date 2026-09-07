@@ -59,6 +59,7 @@ jobs:
       # 正式版（プレリリースでない公開）は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
       # 昇格したプレリリースは released でしか発火しないのでここには来ないが、
       # 来ても X.Y.Z-testN の形で止まる
+      # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える
       - name: verify the release tag
         if: github.event_name == 'release'
         env:
