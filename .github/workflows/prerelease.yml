@@ -114,13 +114,13 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      # 再実行（run_attempt が 2 以上）のときは、前の試行が記録した版を取る。
-      # 記録は下の record the version が同じ実行の artifact に置く。artifact は実行に
+      # 再実行（run_attempt が 2 以上）のときは、前の試行が記録したコミットを取る。
+      # 記録は下の record the target が同じ実行の artifact に置く。artifact は実行に
       # 属し、試行をまたいで残る。
       # まず一覧で有無を見る。無いのは前の試行が記録する前に落ちた場合で、それは
       # 初回と同じに進む。一覧や取得そのものが失敗したときは止める。
-      # 失敗も無いことにして進むと、記録した版のタグに zip が無いまま新しい版が作られる
-      - name: restore the version recorded by the previous attempt
+      # 失敗も無いことにして進むと、記録したコミットのタグに zip が無いまま新しい版が作られる
+      - name: restore the target recorded by the previous attempt
         if: ${{ fromJSON(github.run_attempt) > 1 }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -134,12 +134,13 @@ jobs:
             exit 0
           fi
           gh run download "$GITHUB_RUN_ID" -n prerelease-version -D "$RUNNER_TEMP/prerelease-version"
-          echo "前の試行の記録: $(cat "$RUNNER_TEMP/prerelease-version/version.txt")"
+          echo "前の試行の記録（コミット）: $(cat "$RUNNER_TEMP/prerelease-version/target.txt")"
 
       # 版を決め、リリースに zip が付いているかを見る。
       #
-      # まず、再実行のときは、前の試行が記録した版のタグがあり、それが記録したコミットを
-      # 指していれば、zip の有無にかかわらずその版を続ける。
+      # まず、再実行のときは、前の試行が記録したコミットにプレリリースのタグがあれば、
+      # zip の有無にかかわらずその版を続ける。記録するのはコミットだけで、版は記録しない。
+      # 版は公開の直前に決め直すことがあり（下の re-check）、記録した版とタグが食い違う。
       # 初回の実行はその時点の先端にタグを打つので、再実行までに master が進んでいると、
       # 先端だけを見るとそのタグは見つからず、資材の無いリリースが残るか、通知だけを
       # 再試行できずに別の版が作られる。続けるときはそのコミットを checkout し、zip が
@@ -147,9 +148,10 @@ jobs:
       # 起動時のコミットから先端までのタグを探す形にはしない。前の試行が作ったタグの後に
       # 別の実行が次の版を公開していると、その範囲には両方が入り、無関係な新しい版を
       # 選んで、前の試行の版が欠けたまま残る。
-      # 記録した版のタグが無ければ、前の試行はタグを作る前に落ちている。タグはあるが
-      # 記録したコミットを指していなければ、そのタグは別の実行が作ったものである。
-      # どちらも続けるものが無いので、初回と同じに先端から決める。
+      # 記録したコミットにタグが無ければ、前の試行はタグを作る前に落ちている。
+      # 続けるものが無いので、初回と同じに先端から決める。
+      # 別の実行が同じコミットにタグを打つことは無い。この実行は先端に打ち、同じ先端への
+      # 実行は concurrency で直列になり、先端に既にタグがあれば新しい版を作らない。
       # 初回の実行では見ない。手で流すときは任意の ref を選べるので、過去のタグを ref に選ぶだけで
       # 古い内容が公開される経路になる。
       #
@@ -184,15 +186,14 @@ jobs:
           }
 
           RESUME=""
-          RECORD="$RUNNER_TEMP/prerelease-version/version.txt"
+          RECORD="$RUNNER_TEMP/prerelease-version/target.txt"
           if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ -f "$RECORD" ]; then
-            read -r RECORDED_VERSION RECORDED_SHA < "$RECORD"
-            if echo "$RECORDED_VERSION" | grep -qE "$PATTERN" \
-              && [ "$(git rev-list -n 1 "refs/tags/$RECORDED_VERSION" 2>/dev/null || true)" = "$RECORDED_SHA" ] \
-              && git merge-base --is-ancestor "$RECORDED_SHA" HEAD; then
-              RESUME="$RECORDED_VERSION"
-            else
-              echo "::notice::再実行。前の試行は $RECORDED_VERSION（コミット $RECORDED_SHA）を記録しているが、そのタグが無いか、別のコミットを指している。続けるものが無いので、先端から決める"
+            read -r RECORDED_SHA < "$RECORD"
+            if git merge-base --is-ancestor "$RECORDED_SHA" HEAD; then
+              RESUME=$(git tag --points-at "$RECORDED_SHA" | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
+            fi
+            if [ -z "$RESUME" ]; then
+              echo "::notice::再実行。前の試行はコミット $RECORDED_SHA を記録しているが、そこにプレリリースのタグが無い。続けるものが無いので、先端から決める"
             fi
           fi
 
@@ -227,67 +228,109 @@ jobs:
             echo "has_asset=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # 出すコミットを、この実行の artifact に記録する。再実行はこれを読んで、そこに
+      # 打たれたタグの続きを行う（上の restore）。タグを作る前に置くのは、タグを作った直後の
+      # 添付で落ちたときも拾うため。タグを作る前に落ちていれば、再実行はタグが無いことで見分ける。
+      # 再実行も同じ名前で置き直すので、上書きを許す
+      - name: record the target for re-runs
+        env:
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/prerelease-version"
+          echo "$SHA" > "$RUNNER_TEMP/prerelease-version/target.txt"
+
+      - name: upload the record
+        uses: actions/upload-artifact@v7
+        with:
+          name: prerelease-version
+          path: ${{ runner.temp }}/prerelease-version/target.txt
+          overwrite: true
+
       # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
       - name: build package
         if: steps.version.outputs.has_asset != 'true'
         run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
 
-      # 新しく決めた版は、公開の直前にもう一度、公開済みのタグから決め直す。
+      # 新しく決めた版は、公開済みのタグからもう一度決め直し、そのままタグを打って push する。
       # 決めてから zip を作るまでのあいだに正式版 X.Y.Z が公開されると、決めた X.Y.Z-testN は
       # その正式版より古く、公開すると利用者に新しい test 版として取れない。
-      # 変わっていれば zip を作り直す。続きを行う版（resume、existing）は決め直さない
-      - name: re-check the version right before publishing
+      # 決め直しとタグの作成を一つのステップに置き、そのあいだに他のステップを挟まない。
+      # 打った後にもう一度決め直し（自分のタグは手元から外して）、同じ版が出れば確定する。
+      # 違えば、そのあいだに正式版が公開されている。打ったタグを消して、決め直した版でやり直す。
+      # タグを作れば版は確定し、下の create pre-release はそのタグにリリースと zip を付けるだけになる。
+      # 続きを行う版（resume、existing）はタグが既にあるので、決め直さない
+      - name: settle the version and create the tag
         id: final
         if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
-          # 採番は手元のタグとリリースの一覧を突き合わせる。checkout の後に打たれたタグ
-          # （同じコミットへの正式版など）は手元に無いので、一覧に入っていても数えられない。
-          # 決め直す前にタグを取り直す
-          git fetch --no-recurse-submodules origin '+refs/tags/*:refs/tags/*'
-          .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
-          LATEST=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
-          if [ "$LATEST" != "$VERSION" ]; then
-            echo "::notice::版を決めてから公開までのあいだに公開済みのタグが変わった。$VERSION ではなく $LATEST で作り直す"
-            rm -f ./*.zip
-            .github/scripts/build-package.sh "$LATEST"
-            VERSION="$LATEST"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # 決めた版とコミットを、この実行の artifact に記録する。再実行はこれを読んで
-      # 同じ版を続ける（上の restore）。タグを作る前に置くのは、タグを作った直後の添付で
-      # 落ちたときも拾うため。タグを作る前に落ちていれば、再実行はタグが無いことで見分ける。
-      # 再実行も同じ名前で置き直すので、上書きを許す
-      - name: record the version for re-runs
-        env:
-          VERSION: ${{ steps.final.outputs.version || steps.version.outputs.version }}
           SHA: ${{ steps.version.outputs.sha }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/prerelease-version"
-          echo "$VERSION $SHA" > "$RUNNER_TEMP/prerelease-version/version.txt"
+          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
 
-      - name: upload the record
-        uses: actions/upload-artifact@v7
-        with:
-          name: prerelease-version
-          path: ${{ runner.temp }}/prerelease-version/version.txt
-          overwrite: true
+          # 採番は手元のタグとリリースの一覧を突き合わせる。checkout の後に打たれたタグ
+          # （同じコミットへの正式版など）は手元に無いので、一覧に入っていても数えられない。
+          # 決め直す前にタグを取り直す
+          decide() {
+            git fetch --no-recurse-submodules origin '+refs/tags/*:refs/tags/*'
+            .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt" >&2
+            .github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt"
+          }
 
-      # タグとリリースが既にあれば、このアクションは資材を足すだけで済ませる
+          ATTEMPT=0
+          while :; do
+            ATTEMPT=$(( ATTEMPT + 1 ))
+            LATEST=$(decide)
+            if [ "$LATEST" != "$VERSION" ]; then
+              echo "::notice::版を決めてから公開までのあいだに公開済みのタグが変わった。$VERSION ではなく $LATEST で作り直す"
+              rm -f ./*.zip
+              .github/scripts/build-package.sh "$LATEST"
+              VERSION="$LATEST"
+            fi
+
+            # 決め直しの fetch で同じ名前のタグが手元に来ていることは無い（採番が使われていない
+            # 番号を出す）が、来ていても止まらないよう -f で打ち、push の拒否で気づく
+            git tag -f "$VERSION" "$SHA"
+            if ! git push origin "refs/tags/$VERSION"; then
+              # 同じ名前のタグが先に打たれている。取り直して決め直す
+              git tag -d "$VERSION"
+              if [ "$ATTEMPT" -ge 3 ]; then
+                echo "::error::タグ $VERSION を push できない。三度決め直しても同じなので止める" >&2
+                exit 1
+              fi
+              continue
+            fi
+
+            # 打った後にもう一度。自分のタグを手元から外して決め直し、同じなら確定
+            git tag -d "$VERSION"
+            CHECK=$(decide)
+            git tag -d "$VERSION" 2>/dev/null || true
+            if [ "$CHECK" = "$VERSION" ]; then
+              break
+            fi
+            echo "::notice::タグ $VERSION を打つあいだに公開済みのタグが変わった（決め直すと $CHECK）。打ったタグを消してやり直す"
+            git push origin ":refs/tags/$VERSION"
+            if [ "$ATTEMPT" -ge 3 ]; then
+              echo "::error::三度やり直しても版が定まらない。止める" >&2
+              exit 1
+            fi
+          done
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "タグ $VERSION をコミット $SHA に打った"
+
+      # タグは上で打ってあるか（new）、既にある（resume、existing）。
+      # このアクションはそのタグにリリースを作り、zip を付ける。リリースが既にあれば zip を足すだけで済ませる
       - name: create pre-release
         if: steps.version.outputs.has_asset != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.final.outputs.version || steps.version.outputs.version }}
-          # checkout した master の先端へタグを打つ。省略するとタグ作成時の既定ブランチの
-          # 先端が使われ、checkout してから進んだコミットを巻き込む
+          # タグは既にあるので使われないが、無かったときに既定ブランチの先端へ打たれないよう、
+          # 出すコミットを明示しておく
           target_commitish: ${{ steps.version.outputs.sha }}
           prerelease: true
           generate_release_notes: true
