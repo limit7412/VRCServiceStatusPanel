@@ -174,6 +174,7 @@ gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'
 出せる内容は `master` に限られる。
 さらに絞るなら、`prod` の environment に required reviewers を掛ける。
 ジョブは承認を待つあいだトークンを受け取らず、承認された実行だけがロールを引く。
+承認を待つあいだ、起こした側の `release.yml` は待たずに終え、結果は `deploy.yml` の実行で見る（`docs/release.md`）。
 
 ## デプロイロールの権限
 

@@ -111,14 +111,32 @@ jobs:
           ref: master
           fetch-depth: 0
 
+      # 再実行（run_attempt が 2 以上）のときは、前の試行が記録した版を取る。
+      # 記録は下の record the version が同じ実行の artifact に置く。artifact は実行に
+      # 属し、試行をまたいで残る。初回の試行がそこまで進んでいなければ無いので、
+      # 無くても失敗にしない。
+      - name: restore the version recorded by the previous attempt
+        if: ${{ fromJSON(github.run_attempt) > 1 }}
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: prerelease-version
+          path: ${{ runner.temp }}/prerelease-version
+
       # 版を決め、リリースに zip が付いているかを見る。
       #
-      # まず、再実行（run_attempt が 2 以上）のときは、起動時のコミットから先端までに打たれた
-      # プレリリースのタグがあれば、zip の有無にかかわらず最新のものを続ける。
-      # 初回の実行はその時点の先端にタグを打つので、起動時のコミットだけを見ても見つからない。
-      # タグを作った後に添付や通知で落ち、master が進んでから再実行したとき、先端だけを
-      # 見るとそのタグは見つからず、資材の無いリリースが残るか、通知だけを再試行できずに
-      # 別の版が作られる。続けるときはそのコミットを checkout し、zip が無ければタグの内容から作る。
+      # まず、再実行のときは、前の試行が記録した版のタグがあり、それが記録したコミットを
+      # 指していれば、zip の有無にかかわらずその版を続ける。
+      # 初回の実行はその時点の先端にタグを打つので、再実行までに master が進んでいると、
+      # 先端だけを見るとそのタグは見つからず、資材の無いリリースが残るか、通知だけを
+      # 再試行できずに別の版が作られる。続けるときはそのコミットを checkout し、zip が
+      # 無ければタグの内容から作る。
+      # 起動時のコミットから先端までのタグを探す形にはしない。前の試行が作ったタグの後に
+      # 別の実行が次の版を公開していると、その範囲には両方が入り、無関係な新しい版を
+      # 選んで、前の試行の版が欠けたまま残る。
+      # 記録した版のタグが無ければ、前の試行はタグを作る前に落ちている。タグはあるが
+      # 記録したコミットを指していなければ、そのタグは別の実行が作ったものである。
+      # どちらも続けるものが無いので、初回と同じに先端から決める。
       # 初回の実行では見ない。手で流すときは任意の ref を選べるので、過去のタグを ref に選ぶだけで
       # 古い内容が公開される経路になる。
       #
@@ -150,17 +168,23 @@ jobs:
           }
 
           RESUME=""
-          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && git merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
-            # 起動時のコミットに付いたものと、それより後で先端までに打たれたもの
-            RESUME=$( { git tag --points-at "$GITHUB_SHA"; git tag --merged HEAD --no-merged "$GITHUB_SHA"; } \
-              | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
+          RECORD="$RUNNER_TEMP/prerelease-version/version.txt"
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ -f "$RECORD" ]; then
+            read -r RECORDED_VERSION RECORDED_SHA < "$RECORD"
+            if echo "$RECORDED_VERSION" | grep -qE "$PATTERN" \
+              && [ "$(git rev-list -n 1 "refs/tags/$RECORDED_VERSION" 2>/dev/null || true)" = "$RECORDED_SHA" ] \
+              && git merge-base --is-ancestor "$RECORDED_SHA" HEAD; then
+              RESUME="$RECORDED_VERSION"
+            else
+              echo "::notice::再実行。前の試行は $RECORDED_VERSION（コミット $RECORDED_SHA）を記録しているが、そのタグが無いか、別のコミットを指している。続けるものが無いので、先端から決める"
+            fi
           fi
 
           if [ -n "$RESUME" ]; then
             VERSION="$RESUME"
-            TARGET=$(git rev-list -n 1 "$VERSION")
+            TARGET="$RECORDED_SHA"
             git checkout -q "$TARGET"
-            echo "::notice::再実行。起動時のコミット $GITHUB_SHA 以降にプレリリース $VERSION のタグ（$TARGET）がある。新しい版は作らず、そのタグの続きを行う"
+            echo "::notice::再実行。前の試行が作ったプレリリース $VERSION のタグ（$TARGET）がある。新しい版は作らず、そのタグの続きを行う"
           else
             TARGET="$TIP"
             EXISTING=$(git tag --points-at HEAD | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
@@ -185,6 +209,26 @@ jobs:
           else
             echo "has_asset=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # 決めた版とコミットを、この実行の artifact に記録する。再実行はこれを読んで
+      # 同じ版を続ける（上の restore）。タグを作る前に置くのは、タグを作った直後の添付で
+      # 落ちたときも拾うため。タグを作る前に落ちていれば、再実行はタグが無いことで見分ける。
+      # 再実行も同じ名前で置き直すので、上書きを許す
+      - name: record the version for re-runs
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/prerelease-version"
+          echo "$VERSION $SHA" > "$RUNNER_TEMP/prerelease-version/version.txt"
+
+      - name: upload the record
+        uses: actions/upload-artifact@v7
+        with:
+          name: prerelease-version
+          path: ${{ runner.temp }}/prerelease-version/version.txt
+          overwrite: true
 
       # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
       - name: build package

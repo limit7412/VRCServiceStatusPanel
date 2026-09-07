@@ -241,14 +241,17 @@ jobs:
             # 先端まで進んだ差分に、出す内容へ影響するものがあれば止め、その内容を出す実行に任せる。
             # 文書だけの取り込みなら出す内容は同じなので、このまま出す。
             # そうしないと、対象外の取り込みが続いただけで、直前の対象の取り込みが出ないままになる。
-            # 影響するパスは deploy-dev.yml の changes の一覧と揃える
+            # 影響するパスは deploy-dev.yml の changes の一覧と揃える。
+            # --no-renames を付け、リネームを削除と追加の対で出す。
+            # 付けないとリネームは移動先の一つにまとめられ、infra/ の下から外へ動かした
+            # ファイルは、移動元の infra/ 側が差分に出ず、影響が無いと見なされる
             RELEVANT=false
             while IFS= read -r FILE; do
               [ -n "$FILE" ] || continue
               case "$FILE" in
                 backend/*|infra/*|.github/workflows/deploy.yml) RELEVANT=true ;;
               esac
-            done < <(git diff --name-only "$ACTUAL" "$MASTER")
+            done < <(git diff --name-only --no-renames "$ACTUAL" "$MASTER")
             if [ "$RELEVANT" = true ]; then
               echo "::error::コミット $ACTUAL の後に master が $MASTER まで進み、出す内容に影響する変更がある。その内容を出す実行に任せる"
               exit 1

@@ -67,7 +67,7 @@ jobs:
     permissions:
       # deploy.yml を起こし、実行の一覧を読む
       actions: write
-      # gh run watch はジョブの経過を checks から読む。一つでも明示すると他は none に
+      # 起こした実行の状態を gh で読む。gh はジョブの経過を checks から読むことがあり、一つでも明示すると他は none に
       # なるので、これも書く
       checks: read
       # スクリプトを取る

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # deploy.yml を master の ref で workflow_dispatch として起こし、終わるまで待つ。
+# 承認待ちに入ったら待たずに終える（下の注記）。
 #
 #   .github/scripts/dispatch-deploy.sh <スタック名> <識別子> [期待するコミット]
 #
@@ -47,8 +48,28 @@ if [ -z "$RUN_ID" ]; then
 fi
 echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
 
-# 終わるまで待つ。経過の出力は長いので捨て、結果だけを見る
-gh run watch "$RUN_ID" >/dev/null
+# 終わるまで待つ。gh run watch は使わず、状態を読んで待つ。
+# environment prod に required reviewers があると、起こした実行は承認まで waiting で止まる。
+# watch はそれも待ち続け、承認が六時間を超えると、こちらのジョブが先に実行時間の上限で落ちる。
+# 起こした実行は残るので、親は失敗のまま後から承認されて出る、という食い違いになる。
+# 承認待ち（wait timer も同じ状態になる）に入ったら追うのをやめ、その先の結果は
+# 起こした実行で見る。dev には承認が無いので、ここへは来ない
+while :; do
+  STATUS=$(gh run view "$RUN_ID" --json status --jq '.status')
+  case "$STATUS" in
+    completed)
+      break
+      ;;
+    waiting)
+      echo "::notice::deploy の実行 $RUN_ID は environment の保護規則（承認か wait timer）で止まっている。ここでは待たず、承認後の結果はその実行で見る"
+      if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        echo "deploy の実行 $RUN_ID は承認待ちで止まっている。承認後の結果は https://github.com/$GH_REPO/actions/runs/$RUN_ID で見る" >> "$GITHUB_STEP_SUMMARY"
+      fi
+      exit 0
+      ;;
+  esac
+  sleep 20
+done
 CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
 case "$CONCLUSION" in
   success)

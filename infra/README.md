@@ -661,6 +661,8 @@ yt-dlp の Layer を Pulumi が持っていたころのもので（仕様書 7�
 | `release.yml`（正式版の公開） | `prod` |
 
 `deploy-dev.yml` も `release.yml` も、`master` の ref で `workflow_dispatch` として起こし、終わるまで待つ（`.github/scripts/dispatch-deploy.sh`）。
+起こした実行が environment の承認待ちで止まったら、待たずに終える。
+ジョブは六時間で打ち切られ、承認がそれより遅れると起こした側だけが失敗して食い違うためで、承認後の結果は `deploy.yml` の実行で見る。
 `workflow_call` で呼ばないのは、呼ばれたワークフローが呼んだ側のコミットの定義で動くためで、`master` の ref で起こせば定義も内容もその時点の先端になる（`docs/release.md`）。
 手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが `master` の先端を指すか）は起こす側にある。
 起こす側は期待するコミットを `expected_sha` で渡せ、こちらは checkout したものと比べる。
