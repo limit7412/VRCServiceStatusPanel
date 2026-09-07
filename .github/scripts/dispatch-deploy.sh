@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # deploy.yml を master の ref で workflow_dispatch として起こし、終わるまで待つ。
-# 承認待ちに入ったら待たずに終える（下の注記）。
+# 承認待ちに入ったら、またその後ろに並んだら、待たずに終える（下の注記）。
 #
 #   .github/scripts/dispatch-deploy.sh <スタック名> <識別子> [期待するコミット]
 #
@@ -53,7 +53,28 @@ echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
 # watch はそれも待ち続け、承認が六時間を超えると、こちらのジョブが先に実行時間の上限で落ちる。
 # 起こした実行は残るので、親は失敗のまま後から承認されて出る、という食い違いになる。
 # 承認待ち（wait timer も同じ状態になる）に入ったら追うのをやめ、その先の結果は
-# 起こした実行で見る。dev には承認が無いので、ここへは来ない
+# 起こした実行で見る。dev には承認が無いので、ここへは来ない。
+#
+# 同じスタックの前の実行が承認待ちのあいだは、この実行は concurrency の群の空きを待ち、
+# 状態は waiting ではなく queued や pending のままになる。それも同じに扱い、
+# 同じスタックの前の実行に waiting のものがあれば追うのをやめる。
+# どちらにも当たらずに五時間たったときも、上限で落ちる前に追うのをやめる。
+# 親が上限で落ちた後に出る、という食い違いを残さないための保険で、通常は来ない
+
+# 実行の名前は deploy.yml の run-name のとおり「deploy <スタック名>」か
+# 「deploy <スタック名> [<識別子>]」で、その二つの形だけを同じスタックと見る。
+# 前方一致にすると dev2 のような名前のスタックも拾う
+SAME_STACK="(.displayTitle == \"deploy $STACK\" or (.displayTitle | startswith(\"deploy $STACK [\")))"
+
+hand_off() {
+  echo "::notice::deploy の実行 $RUN_ID は $1。ここでは待たず、その先の結果はその実行で見る"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "deploy の実行 $RUN_ID は $1。その先の結果は https://github.com/$GH_REPO/actions/runs/$RUN_ID で見る" >> "$GITHUB_STEP_SUMMARY"
+  fi
+  exit 0
+}
+
+STARTED=$(date +%s)
 while :; do
   STATUS=$(gh run view "$RUN_ID" --json status --jq '.status')
   case "$STATUS" in
@@ -61,13 +82,22 @@ while :; do
       break
       ;;
     waiting)
-      echo "::notice::deploy の実行 $RUN_ID は environment の保護規則（承認か wait timer）で止まっている。ここでは待たず、承認後の結果はその実行で見る"
-      if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-        echo "deploy の実行 $RUN_ID は承認待ちで止まっている。承認後の結果は https://github.com/$GH_REPO/actions/runs/$RUN_ID で見る" >> "$GITHUB_STEP_SUMMARY"
+      hand_off "environment の保護規則（承認か wait timer）で止まっている"
+      ;;
+    in_progress)
+      ;;
+    *)
+      # queued、pending、requested。群の空きを待っている先が承認待ちなら、いつ空くか分からない
+      BLOCKED=$(gh run list --workflow deploy.yml --status waiting --limit 20 --json databaseId,displayTitle \
+        --jq "map(select(.databaseId < $RUN_ID and $SAME_STACK)) | length")
+      if [ "$BLOCKED" -gt 0 ]; then
+        hand_off "同じスタックの前の実行が承認待ちで止まっていて、その後ろに並んでいる"
       fi
-      exit 0
       ;;
   esac
+  if [ $(( $(date +%s) - STARTED )) -ge $(( 5 * 60 * 60 )) ]; then
+    hand_off "五時間たっても終わっていない"
+  fi
   sleep 20
 done
 CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
@@ -77,13 +107,10 @@ case "$CONCLUSION" in
     ;;
   cancelled)
     if [ "${CANCELLED_OK:-false}" = true ]; then
-      # 同じスタックへ、この実行より後に起こされた実行があるか。
-      # 実行の名前は deploy.yml の run-name のとおり「deploy <スタック名>」か
-      # 「deploy <スタック名> [<識別子>]」で、その二つの形だけを同じスタックと見る。
-      # 前方一致にすると dev2 のような名前のスタックも拾う
+      # 同じスタックへ、この実行より後に起こされた実行があるか
       NEWER=$(gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
         --limit 20 --json databaseId,displayTitle \
-        --jq "map(select(.databaseId > $RUN_ID and (.displayTitle == \"deploy $STACK\" or (.displayTitle | startswith(\"deploy $STACK [\"))))) | length")
+        --jq "map(select(.databaseId > $RUN_ID and $SAME_STACK)) | length")
       if [ "$NEWER" -gt 0 ]; then
         echo "::notice::deploy の実行 $RUN_ID は取り消された。同じスタックへ後から起こした実行が代わりに出す"
         exit 0

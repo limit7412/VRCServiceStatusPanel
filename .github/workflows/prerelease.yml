@@ -81,6 +81,8 @@ jobs:
     permissions:
       # タグとリリースを作る
       contents: write
+      # この実行の artifact の一覧と取得（再実行の記録）、release.yml の実行の状態
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     # 取り込みが続いたときにタグの計算が競合しないよう、直列にする。
@@ -113,15 +115,25 @@ jobs:
 
       # 再実行（run_attempt が 2 以上）のときは、前の試行が記録した版を取る。
       # 記録は下の record the version が同じ実行の artifact に置く。artifact は実行に
-      # 属し、試行をまたいで残る。初回の試行がそこまで進んでいなければ無いので、
-      # 無くても失敗にしない。
+      # 属し、試行をまたいで残る。
+      # まず一覧で有無を見る。無いのは前の試行が記録する前に落ちた場合で、それは
+      # 初回と同じに進む。一覧や取得そのものが失敗したときは止める。
+      # 失敗も無いことにして進むと、記録した版のタグに zip が無いまま新しい版が作られる
       - name: restore the version recorded by the previous attempt
         if: ${{ fromJSON(github.run_attempt) > 1 }}
-        continue-on-error: true
-        uses: actions/download-artifact@v7
-        with:
-          name: prerelease-version
-          path: ${{ runner.temp }}/prerelease-version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          COUNT=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts?name=prerelease-version" \
+            --jq '[.artifacts[] | select(.expired | not)] | length')
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::notice::前の試行は版を記録する前に落ちている。初回と同じに先端から決める"
+            exit 0
+          fi
+          gh run download "$GITHUB_RUN_ID" -n prerelease-version -D "$RUNNER_TEMP/prerelease-version"
+          echo "前の試行の記録: $(cat "$RUNNER_TEMP/prerelease-version/version.txt")"
 
       # 版を決め、リリースに zip が付いているかを見る。
       #
@@ -149,6 +161,8 @@ jobs:
       # 次の版の計算には、パッケージの zip（<パッケージ名>-<タグ>.zip）が付いたリリースの
       # あるタグだけを渡す。master の過去のコミットに打って公開を拒まれたタグを起点にしない。
       # 別のファイルを手で添付したリリースも、パッケージの zip が無ければ数えない。
+      # 正式版の zip は release.yml が公開の後で付けるので、付くまでは待ってから一覧を作る
+      # （published-tags.sh）。待たないと、その正式版より古い X.Y.Z-testN を出す。
       - name: determine version
         id: version
         env:
@@ -192,10 +206,7 @@ jobs:
               VERSION="$EXISTING"
               echo "::notice::master の先端 $TIP には既にプレリリース $VERSION のタグがある。新しい版は作らず、足りないものだけを続ける"
             else
-              gh api --paginate "repos/$GH_REPO/releases" > "$RUNNER_TEMP/releases.json"
-              jq -r --arg pkg "$PACKAGE_NAME" \
-                '.[] | . as $r | select(any($r.assets[]; .name == ($pkg + "-" + $r.tag_name + ".zip"))) | .tag_name' \
-                "$RUNNER_TEMP/releases.json" > "$RUNNER_TEMP/published-tags.txt"
+              .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
               VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
             fi
           fi

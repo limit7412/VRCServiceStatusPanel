@@ -6,7 +6,7 @@
 # HEAD（master の先端）から辿れるタグだけを見る。
 # 別のブランチに打たれたタグは数えない。
 # 第二引数に、一行に一つタグを並べたファイルを渡すと、そこにあるタグだけを見る。
-# prerelease.yml は zip の付いたリリースのあるタグの一覧を渡す。
+# prerelease.yml は zip の付いたリリースのあるタグの一覧（published-tags.sh）を渡す。
 # release.yml が master の先端でないとして公開を拒んだタグ（zip が付かない）が
 # 残っても、それで採番が飛ばないようにするためである。
 # fetch-depth: 0 で master を checkout した作業ツリーで呼ぶ。

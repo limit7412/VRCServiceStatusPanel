@@ -44,6 +44,7 @@ permissions:
 
 jobs:
   build:
+    # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える
     name: build package
     runs-on: ubuntu-latest
     permissions:

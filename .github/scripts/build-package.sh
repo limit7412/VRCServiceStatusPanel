@@ -16,6 +16,7 @@
 #
 # 含めるのは package.json、Runtime/、Editor/ と、それらの .meta である。
 # Tests/ は入れない。
+# 資産と .meta が対になっていること、シンボリックリンクが無いことを確かめてから固める。
 # .meta は除外しない。Runtime/ の UdonSharp のアセンブリ資産は asmdef を GUID で
 # 参照していて、.meta を落とすとインポート時に GUID が振り直され、この参照が切れる。
 #
@@ -65,6 +66,34 @@ for DIR in Runtime Editor; do
   fi
   ENTRIES+=("$DIR" "$DIR.meta")
 done
+
+# 配下の資産にも .meta が対になっていることを見る。Runtime.meta だけあっても、
+# 配下の asmdef の .meta が無ければ、入れた側でその GUID が振り直され、
+# 同梱するアセンブリ資産の sourceAssembly の参照が切れる。
+# 資産に .meta が無いのも、.meta だけが残っているのも、Unity で開かずに手で触った状態なので止める
+MISSING=""
+for DIR in Runtime Editor; do
+  [ -d "$DIR" ] || continue
+  while IFS= read -r ASSET; do
+    [ -e "$ASSET.meta" ] || MISSING="$MISSING $ASSET.meta"
+  done < <(find "$DIR" -mindepth 1 -not -name '*.meta')
+  while IFS= read -r META; do
+    [ -e "${META%.meta}" ] || MISSING="$MISSING ${META%.meta}"
+  done < <(find "$DIR" -mindepth 1 -name '*.meta')
+done
+if [ -n "$MISSING" ]; then
+  echo "::error::資産と .meta が対になっていない。無いもの:$MISSING" >&2
+  exit 1
+fi
+
+# シンボリックリンクは入れない。zip -r はリンクを格納せず参照先を辿るので、
+# パッケージの外（.git など、checkout が置いた認証情報を含む）を指すリンクが
+# 取り込まれると、その中身が公開される
+LINKS=$(find "${ENTRIES[@]}" -type l)
+if [ -n "$LINKS" ]; then
+  echo "::error::シンボリックリンクはパッケージに入れられない: $(echo "$LINKS" | tr '\n' ' ')" >&2
+  exit 1
+fi
 
 ZIP="$OUTPUT_DIR/${PACKAGE_NAME}-${VERSION}.zip"
 rm -f "$ZIP"
