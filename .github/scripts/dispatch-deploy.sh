@@ -57,10 +57,12 @@ case "$CONCLUSION" in
   cancelled)
     if [ "${CANCELLED_OK:-false}" = true ]; then
       # 同じスタックへ、この実行より後に起こされた実行があるか。
-      # 実行の名前は deploy <スタック名>（識別子が付くこともある）
+      # 実行の名前は deploy.yml の run-name のとおり「deploy <スタック名>」か
+      # 「deploy <スタック名> [<識別子>]」で、その二つの形だけを同じスタックと見る。
+      # 前方一致にすると dev2 のような名前のスタックも拾う
       NEWER=$(gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
         --limit 20 --json databaseId,displayTitle \
-        --jq "map(select(.databaseId > $RUN_ID and (.displayTitle | startswith(\"deploy $STACK\")))) | length")
+        --jq "map(select(.databaseId > $RUN_ID and (.displayTitle == \"deploy $STACK\" or (.displayTitle | startswith(\"deploy $STACK [\"))))) | length")
       if [ "$NEWER" -gt 0 ]; then
         echo "::notice::deploy の実行 $RUN_ID は取り消された。同じスタックへ後から起こした実行が代わりに出す"
         exit 0

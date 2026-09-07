@@ -108,6 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
+      artifact: ${{ steps.artifact.outputs.name }}
     steps:
       # ref が空なら起動した ref（master）の先端を取る。
       # 切り戻しの判定に master の履歴が要るので、全部取る
@@ -177,10 +178,18 @@ jobs:
           cp backend/bootstrap.zip "$RUNNER_TEMP/deploy-inputs/bootstrap.zip"
           tar -C infra -czf "$RUNNER_TEMP/deploy-inputs/infra-node_modules.tgz" node_modules
 
+      # artifact の名前はこのジョブが決めて出力で渡す。
+      # 「Re-run failed jobs」で deploy ジョブだけを再実行すると run_attempt が進むが、
+      # 成功したこのジョブは再実行されず、artifact は前の名前のまま残る。
+      # deploy ジョブが自分の run_attempt で名前を組むと、そこで見つからずに止まる
+      - name: name the artifact
+        id: artifact
+        run: echo "name=deploy-inputs-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
       - name: upload build outputs
         uses: actions/upload-artifact@v7
         with:
-          name: deploy-inputs-${{ github.run_attempt }}
+          name: ${{ steps.artifact.outputs.name }}
           path: ${{ runner.temp }}/deploy-inputs
           retention-days: 1
           if-no-files-found: error
@@ -203,10 +212,11 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
+      # 名前は prepare が出力したものを使う（上の注記）
       - name: download build outputs
         uses: actions/download-artifact@v7
         with:
-          name: deploy-inputs-${{ github.run_attempt }}
+          name: ${{ needs.prepare.outputs.artifact }}
           path: ${{ runner.temp }}/deploy-inputs
 
       - name: restore build outputs
