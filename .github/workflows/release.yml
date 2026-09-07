@@ -64,7 +64,9 @@ jobs:
       # published-tags.sh が正しい正式版を拒まれたものとして数えない
       - name: fetch master
         if: github.event_name == 'release'
-        run: git fetch --no-tags --depth 1 origin master
+        # 保存先を明示する。タグを checkout したランナーには origin/master が無く、
+        # 「origin master」だけでは FETCH_HEAD にしか書かれない
+        run: git fetch --no-tags --depth 1 origin +master:refs/remotes/origin/master
 
       # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える。
       # このステップは通信をしないので、失敗はタグの拒否（形か、先端でない）である

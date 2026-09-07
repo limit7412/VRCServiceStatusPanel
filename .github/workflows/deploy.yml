@@ -138,7 +138,8 @@ jobs:
           set -euo pipefail
           ACTUAL=$(git rev-parse HEAD)
           if [ -n "$REF" ]; then
-            git fetch --no-tags origin master
+            # 保存先を明示する。ref にタグやコミットを渡したときは origin/master が無い
+            git fetch --no-tags origin +master:refs/remotes/origin/master
             if ! git merge-base --is-ancestor "$ACTUAL" origin/master; then
               echo "::error::$REF のコミット $ACTUAL は master に含まれていない。master に入ったものしか出せない"
               exit 1
@@ -229,7 +230,8 @@ jobs:
         run: |
           set -euo pipefail
           ACTUAL=$(git rev-parse HEAD)
-          git fetch --no-tags origin master
+          # 保存先を明示する。コミットを checkout したランナーには origin/master が無い
+          git fetch --no-tags origin +master:refs/remotes/origin/master
           MASTER=$(git rev-parse origin/master)
           if [ -n "$REF" ]; then
             if ! git merge-base --is-ancestor "$ACTUAL" origin/master; then
