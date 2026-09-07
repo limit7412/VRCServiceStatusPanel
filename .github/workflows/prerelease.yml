@@ -113,8 +113,9 @@ jobs:
 
       # 版を決め、リリースに zip が付いているかを見る。
       #
-      # まず、再実行（run_attempt が 2 以上）のときは、起動時のコミット（落ちた実行のもの）に
-      # 付いたプレリリースのタグがあれば、zip の有無にかかわらずそれを続ける。
+      # まず、再実行（run_attempt が 2 以上）のときは、起動時のコミットから先端までに打たれた
+      # プレリリースのタグがあれば、zip の有無にかかわらず最新のものを続ける。
+      # 初回の実行はその時点の先端にタグを打つので、起動時のコミットだけを見ても見つからない。
       # タグを作った後に添付や通知で落ち、master が進んでから再実行したとき、先端だけを
       # 見るとそのタグは見つからず、資材の無いリリースが残るか、通知だけを再試行できずに
       # 別の版が作られる。続けるときはそのコミットを checkout し、zip が無ければタグの内容から作る。
@@ -149,15 +150,17 @@ jobs:
           }
 
           RESUME=""
-          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ "$GITHUB_SHA" != "$TIP" ] && git merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
-            RESUME=$(git tag --points-at "$GITHUB_SHA" | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && git merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
+            # 起動時のコミットに付いたものと、それより後で先端までに打たれたもの
+            RESUME=$( { git tag --points-at "$GITHUB_SHA"; git tag --merged HEAD --no-merged "$GITHUB_SHA"; } \
+              | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
           fi
 
           if [ -n "$RESUME" ]; then
             VERSION="$RESUME"
-            TARGET="$GITHUB_SHA"
-            git checkout -q "$GITHUB_SHA"
-            echo "::notice::起動時のコミット $GITHUB_SHA にはプレリリース $VERSION のタグがある。新しい版は作らず、そのタグの続きを行う"
+            TARGET=$(git rev-list -n 1 "$VERSION")
+            git checkout -q "$TARGET"
+            echo "::notice::再実行。起動時のコミット $GITHUB_SHA 以降にプレリリース $VERSION のタグ（$TARGET）がある。新しい版は作らず、そのタグの続きを行う"
           else
             TARGET="$TIP"
             EXISTING=$(git tag --points-at HEAD | grep -E "$PATTERN" | sort -V | tail -n 1 || true)

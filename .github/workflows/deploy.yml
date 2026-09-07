@@ -191,7 +191,9 @@ jobs:
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ runner.temp }}/deploy-inputs
-          retention-days: 1
+          # environment prod に required reviewers を置くと、承認までこのジョブの後で待つ。
+          # 一日で消すと、承認が遅れたときに deploy ジョブが受け取れない
+          retention-days: 7
           if-no-files-found: error
 
   deploy:
@@ -236,8 +238,22 @@ jobs:
             fi
             echo "$REF のコミット $ACTUAL は master に含まれている"
           elif [ "$ACTUAL" != "$MASTER" ]; then
-            echo "::error::コミット $ACTUAL は master の先端 $MASTER ではない。起こしてから master が進んだので、その内容を出す実行に任せる"
-            exit 1
+            # 先端まで進んだ差分に、出す内容へ影響するものがあれば止め、その内容を出す実行に任せる。
+            # 文書だけの取り込みなら出す内容は同じなので、このまま出す。
+            # そうしないと、対象外の取り込みが続いただけで、直前の対象の取り込みが出ないままになる。
+            # 影響するパスは deploy-dev.yml の changes の一覧と揃える
+            RELEVANT=false
+            while IFS= read -r FILE; do
+              [ -n "$FILE" ] || continue
+              case "$FILE" in
+                backend/*|infra/*|.github/workflows/deploy.yml) RELEVANT=true ;;
+              esac
+            done < <(git diff --name-only "$ACTUAL" "$MASTER")
+            if [ "$RELEVANT" = true ]; then
+              echo "::error::コミット $ACTUAL の後に master が $MASTER まで進み、出す内容に影響する変更がある。その内容を出す実行に任せる"
+              exit 1
+            fi
+            echo "::notice::master は $MASTER まで進んでいるが、差分は出す内容に影響しない。$ACTUAL を出す"
           fi
 
       # 名前は prepare が出力したものを使う（上の注記）
