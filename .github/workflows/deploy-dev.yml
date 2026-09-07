@@ -62,7 +62,9 @@ jobs:
     # master の変更が dev に出ないままになる。
     # !cancelled() を置くのは、これが無いと needs の失敗でジョブごと
     # 飛ばされ、if を読んでもらえないためである。
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
+    # force push のときも出す。changes の比較は push の前後の三点比較で、force push では
+    # 巻き戻した分（前の先端にあって新しい先端に無い変更）が差分に出ない
+    if: ${{ !cancelled() && (github.event.forced || needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       # deploy.yml を起こし、実行の一覧を読む

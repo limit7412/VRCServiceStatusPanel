@@ -31,16 +31,45 @@ EXPECTED_SHA="${3:-}"
 # 探す範囲の下限。時計のずれを見て一分前から
 SINCE=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%S+00:00)
 
+# 起こした実行を識別子で探す。見つからなければ空
+find_run() {
+  gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
+    --created ">=$SINCE" --limit 20 --json databaseId,displayTitle \
+    --jq "map(select(.displayTitle | endswith(\"[$DISPATCH_ID]\"))) | .[0].databaseId // empty"
+}
+
+# 起こした後に親のジョブが取り消されたら、起こした実行も取り消してから終える。
+# 起こした実行は独立していて、こちらが止まっても続き、親を止めた後に prod が変わる。
+# 起こしてから実行が見つかるまでのあいだに取り消されたときも、識別子で探して取り消す。
+# 取り消しはランナーが INT を送り、少し待って TERM、さらに待って KILL を送るので、
+# 探すのは短く切り上げる。承認待ちで手を離した後は、こちらは既に終わっているので掛からない
+RUN_ID=""
+on_cancel() {
+  trap - INT TERM
+  if [ -z "$RUN_ID" ]; then
+    for _ in 1 2 3; do
+      RUN_ID=$(find_run || true)
+      [ -n "$RUN_ID" ] && break
+      sleep 2
+    done
+  fi
+  if [ -n "$RUN_ID" ]; then
+    echo "::warning::親のジョブが取り消された。起こした deploy の実行 $RUN_ID も取り消す" >&2
+    gh run cancel "$RUN_ID" || true
+  else
+    echo "::warning::親のジョブが取り消されたが、起こした deploy の実行がまだ見つからない。Actions の deploy で [$DISPATCH_ID] を探し、手で取り消す" >&2
+  fi
+  exit 130
+}
+trap on_cancel INT TERM
+
 gh workflow run deploy.yml --ref master \
   -f "stack=$STACK" -f "expected_sha=$EXPECTED_SHA" -f "dispatch_id=$DISPATCH_ID"
 echo "deploy.yml を master の ref で起こした（stack=$STACK、expected_sha=${EXPECTED_SHA:-なし}、dispatch_id=$DISPATCH_ID）"
 
-RUN_ID=""
 for _ in $(seq 1 12); do
   sleep 5
-  RUN_ID=$(gh run list --workflow deploy.yml --event workflow_dispatch --branch master \
-    --created ">=$SINCE" --limit 20 --json databaseId,displayTitle \
-    --jq "map(select(.displayTitle | endswith(\"[$DISPATCH_ID]\"))) | .[0].databaseId // empty")
+  RUN_ID=$(find_run)
   [ -n "$RUN_ID" ] && break
 done
 if [ -z "$RUN_ID" ]; then
@@ -48,18 +77,6 @@ if [ -z "$RUN_ID" ]; then
   exit 1
 fi
 echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
-
-# ここから先で親のジョブが取り消されたら、起こした実行も取り消してから終える。
-# 起こした実行は独立していて、こちらが止まっても続き、親を止めた後に prod が変わる。
-# 取り消しはランナーが INT、次いで TERM を送る。承認待ちで手を離した後は、こちらは
-# 既に終わっているので掛からない
-on_cancel() {
-  trap - INT TERM
-  echo "::warning::親のジョブが取り消された。起こした deploy の実行 $RUN_ID も取り消す" >&2
-  gh run cancel "$RUN_ID" || true
-  exit 130
-}
-trap on_cancel INT TERM
 
 # 終わるまで待つ。gh run watch は使わず、状態を読んで待つ。
 # environment prod に required reviewers があると、起こした実行は承認まで waiting で止まる。
