@@ -51,6 +51,14 @@ mv package.json.tmp package.json
 # Editor/ はまだ無い。作られたら自然に入るよう、在るときだけ並べる。
 # ディレクトリがあるのに .meta が無いのは、Unity で開いていない状態なので止める。
 # .meta 無しで配ると、入れた側で GUID が振り直される。
+# package.json と package.json.meta は、無ければここで止める。zip -r は無い入力を警告で
+# 済ませ、他の入力があれば成功するので、並べただけでは欠けたまま公開される
+for FILE in package.json package.json.meta; do
+  if [ ! -f "$FILE" ]; then
+    echo "::error::$PACKAGE_DIR に $FILE が無い" >&2
+    exit 1
+  fi
+done
 ENTRIES=(package.json package.json.meta)
 for DIR in Runtime Editor; do
   if [ ! -d "$DIR" ]; then
@@ -97,7 +105,8 @@ fi
 
 ZIP="$OUTPUT_DIR/${PACKAGE_NAME}-${VERSION}.zip"
 rm -f "$ZIP"
-zip -q -r "$ZIP" "${ENTRIES[@]}"
+# -MM は、無い入力や読めない入力を警告ではなく失敗にする。上で確かめてあるが、重ねておく
+zip -q -r -MM "$ZIP" "${ENTRIES[@]}"
 
 echo "Created: $ZIP"
 unzip -l "$ZIP"

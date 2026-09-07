@@ -84,7 +84,8 @@ jobs:
       # この実行の artifact の一覧と取得（再実行の記録）、release.yml の実行の状態
       actions: read
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      # 公開の直前に読み直した版があればそれ、無ければ最初に決めた版（下の re-check）
+      version: ${{ steps.final.outputs.version || steps.version.outputs.version }}
     # 取り込みが続いたときにタグの計算が競合しないよう、直列にする。
     # 並んで走ると両方が同じ -testN を計算し、片方のタグ作成が失敗する。
     #
@@ -196,6 +197,7 @@ jobs:
           fi
 
           if [ -n "$RESUME" ]; then
+            MODE=resume
             VERSION="$RESUME"
             TARGET="$RECORDED_SHA"
             git checkout -q "$TARGET"
@@ -204,16 +206,19 @@ jobs:
             TARGET="$TIP"
             EXISTING=$(git tag --points-at HEAD | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
             if [ -n "$EXISTING" ]; then
+              MODE=existing
               VERSION="$EXISTING"
               echo "::notice::master の先端 $TIP には既にプレリリース $VERSION のタグがある。新しい版は作らず、足りないものだけを続ける"
             else
+              MODE=new
               .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
               VERSION=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
             fi
           fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION（コミット $TARGET）"
+          echo "Version: $VERSION（コミット $TARGET、$MODE）"
 
           if has_asset "$VERSION"; then
             echo "has_asset=true" >> "$GITHUB_OUTPUT"
@@ -222,13 +227,42 @@ jobs:
             echo "has_asset=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
+      - name: build package
+        if: steps.version.outputs.has_asset != 'true'
+        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
+
+      # 新しく決めた版は、公開の直前にもう一度、公開済みのタグから決め直す。
+      # 決めてから zip を作るまでのあいだに正式版 X.Y.Z が公開されると、決めた X.Y.Z-testN は
+      # その正式版より古く、公開すると利用者に新しい test 版として取れない。
+      # 変わっていれば zip を作り直す。続きを行う版（resume、existing）は決め直さない
+      - name: re-check the version right before publishing
+        id: final
+        if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
+          .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
+          LATEST=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
+          if [ "$LATEST" != "$VERSION" ]; then
+            echo "::notice::版を決めてから公開までのあいだに公開済みのタグが変わった。$VERSION ではなく $LATEST で作り直す"
+            rm -f ./*.zip
+            .github/scripts/build-package.sh "$LATEST"
+            VERSION="$LATEST"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       # 決めた版とコミットを、この実行の artifact に記録する。再実行はこれを読んで
       # 同じ版を続ける（上の restore）。タグを作る前に置くのは、タグを作った直後の添付で
       # 落ちたときも拾うため。タグを作る前に落ちていれば、再実行はタグが無いことで見分ける。
       # 再実行も同じ名前で置き直すので、上書きを許す
       - name: record the version for re-runs
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.final.outputs.version || steps.version.outputs.version }}
           SHA: ${{ steps.version.outputs.sha }}
         run: |
           set -euo pipefail
@@ -242,17 +276,12 @@ jobs:
           path: ${{ runner.temp }}/prerelease-version/version.txt
           overwrite: true
 
-      # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
-      - name: build package
-        if: steps.version.outputs.has_asset != 'true'
-        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
-
       # タグとリリースが既にあれば、このアクションは資材を足すだけで済ませる
       - name: create pre-release
         if: steps.version.outputs.has_asset != 'true'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.final.outputs.version || steps.version.outputs.version }}
           # checkout した master の先端へタグを打つ。省略するとタグ作成時の既定ブランチの
           # 先端が使われ、checkout してから進んだコミットを巻き込む
           target_commitish: ${{ steps.version.outputs.sha }}
