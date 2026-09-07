@@ -55,8 +55,12 @@ fi
 OPEN_BASES=$(candidate_tags | grep -E "$PRERELEASE_PATTERN" | sed -E 's/-test[1-9][0-9]*$//' | sort -uV || true)
 NEXT=$(printf '%s\n' "$NEXT_PATCH" $OPEN_BASES | sort -V | tail -n 1)
 
-# 同じ次期バージョンの -testN があれば N を進める。形に合うものだけを数える
-MAX_N=$(candidate_tags | grep -E "^${NEXT//./\\.}-test" | grep -E "$PRERELEASE_PATTERN" | sed -nE 's/^.*-test([1-9][0-9]*)$/\1/p' | sort -n | tail -n 1 || true)
+# 同じ次期バージョンの -testN があれば N を進める。形に合うものだけを数える。
+# ここだけは一覧で絞らず、到達性も問わず、全部のタグを見る。
+# 系列を選ぶのは公開できたタグだけでよいが、番号は使われていないものでなければならない。
+# リリースを消してタグだけが残ったものや zip の無いものと同じ名前を出すと、
+# 既存のタグは付け替えられず、新しい zip が過去のコミットのタグに付く
+MAX_N=$(git tag --list "${NEXT}-test*" | grep -E "$PRERELEASE_PATTERN" | sed -nE 's/^.*-test([1-9][0-9]*)$/\1/p' | sort -n | tail -n 1 || true)
 N=$(( 10#${MAX_N:-0} + 1 ))
 
 echo "${NEXT}-test${N}"

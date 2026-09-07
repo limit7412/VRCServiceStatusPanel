@@ -206,11 +206,39 @@ jobs:
     # 規則は admin が手で置く（docs/release.md）。置くまでは、その名前を名乗れる ref が絞られていない
     environment: ${{ inputs.stack }}
     steps:
-      # prepare が確かめたのと同じコミットを取る。ビルドはしない
+      # prepare が確かめたのと同じコミットを取る。ビルドはしない。
+      # 下の再検査で master の履歴が要るので、全部取る
       - name: checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+
+      # 出す直前に、このコミットが今も出してよいものかをもう一度見る。
+      # prepare の検査は artifact を作る前のもので、「Re-run failed jobs」でこのジョブだけを
+      # 再実行すると prepare は走らず、そのときの検査結果のまま古いコミットが渡ってくる。
+      # そのあいだに新しい master が出ていれば、ここで古い内容を出すと切り戻しになる。
+      #   ref を指定したとき（切り戻し）   master に含まれるコミットであること
+      #   それ以外                          master の先端であること。進んでいれば、その内容を
+      #                                     出す実行に任せて止める
+      - name: check the commit is still allowed
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          ACTUAL=$(git rev-parse HEAD)
+          git fetch --no-tags origin master
+          MASTER=$(git rev-parse origin/master)
+          if [ -n "$REF" ]; then
+            if ! git merge-base --is-ancestor "$ACTUAL" origin/master; then
+              echo "::error::$REF のコミット $ACTUAL は master に含まれていない"
+              exit 1
+            fi
+            echo "$REF のコミット $ACTUAL は master に含まれている"
+          elif [ "$ACTUAL" != "$MASTER" ]; then
+            echo "::error::コミット $ACTUAL は master の先端 $MASTER ではない。起こしてから master が進んだので、その内容を出す実行に任せる"
+            exit 1
+          fi
 
       # 名前は prepare が出力したものを使う（上の注記）
       - name: download build outputs
