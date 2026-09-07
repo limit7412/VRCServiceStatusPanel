@@ -59,7 +59,15 @@ jobs:
       # 正式版（プレリリースでない公開）は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
       # 昇格したプレリリースは released でしか発火しないのでここには来ないが、
       # 来ても X.Y.Z-testN の形で止まる
-      # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える
+      # 先端の比較に使う origin/master を、検査とは別のステップで取る。
+      # 検査のステップに通信を入れると、通信の失敗と拒否が同じ失敗になり、
+      # published-tags.sh が正しい正式版を拒まれたものとして数えない
+      - name: fetch master
+        if: github.event_name == 'release'
+        run: git fetch --no-tags --depth 1 origin master
+
+      # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える。
+      # このステップは通信をしないので、失敗はタグの拒否（形か、先端でない）である
       - name: verify the release tag
         if: github.event_name == 'release'
         env:

@@ -246,6 +246,10 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
+          # 採番は手元のタグとリリースの一覧を突き合わせる。checkout の後に打たれたタグ
+          # （同じコミットへの正式版など）は手元に無いので、一覧に入っていても数えられない。
+          # 決め直す前にタグを取り直す
+          git fetch --no-recurse-submodules origin '+refs/tags/*:refs/tags/*'
           .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
           LATEST=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
           if [ "$LATEST" != "$VERSION" ]; then

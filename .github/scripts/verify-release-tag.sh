@@ -3,8 +3,8 @@
 #
 #   .github/scripts/verify-release-tag.sh <タグ> <タグが指すコミット> <stable|prerelease>
 #
-# release.yml（パッケージの公開）と deploy-prod.yml（prod へのデプロイ）の両方から呼ぶ。
-# 片方にだけ書くと、パッケージは出たのにデプロイは止まる、あるいはその逆が起きる。
+# release.yml（パッケージの公開）から呼ぶ。prod へのデプロイは release.yml が起こす
+# deploy.yml で行い、そこで別に確かめる（docs/release.md）。
 #
 # 見るのは二つである。
 #   - 形。stable なら X.Y.Z、prerelease なら X.Y.Z-testN。v は付けない。
@@ -18,6 +18,10 @@
 #     prod がその時点へ巻き戻る。切り戻しは deploy.yml の手動起動で行う
 #
 # 先端の比較には origin/master のコミット ID だけが要るので、履歴は要らない。
+# origin/master は呼ぶ側が先に fetch しておく。ここでは通信をしない。
+# release.yml のこのステップの失敗は、prerelease.yml が呼ぶ published-tags.sh が
+# 「タグが拒まれた」と読む。通信の失敗が同じステップで起きると、拒まれたのと
+# 見分けが付かず、正しい正式版を数えずに採番が進む
 set -euo pipefail
 
 TAG="${1:?タグを指定すること}"
@@ -43,8 +47,10 @@ if ! echo "$TAG" | grep -qE "$PATTERN"; then
   exit 1
 fi
 
-git fetch --no-tags --depth 1 origin master
-MASTER=$(git rev-parse origin/master)
+if ! MASTER=$(git rev-parse --verify -q origin/master); then
+  echo "::error::origin/master が無い。呼ぶ側で先に fetch する（release.yml の fetch master）" >&2
+  exit 2
+fi
 if [ "$SHA" != "$MASTER" ]; then
   echo "::error::タグ $TAG のコミット $SHA が master の先端 $MASTER ではない。master の先端に打ち直す" >&2
   exit 1
