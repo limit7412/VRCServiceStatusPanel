@@ -6,7 +6,7 @@
 #
 # deploy-dev.yml と release.yml から呼ぶ。
 # 環境変数 GH_TOKEN（actions: write と checks: read を持つ GITHUB_TOKEN）と GH_REPO が要る。
-# actions: write は起こすのと、五時間たったときに取り消すのに使う。
+# actions: write は起こすのと、五時間たったときや親が取り消されたときに取り消すのに使う。
 # CANCELLED_OK=true を渡すと、起こした実行が concurrency の群で後続に置き換えられて
 # 取り消されたときは 0 で終える。dev ではそれは「後から起こした実行が代わりに出す」ことを
 # 意味し、失敗ではない。同じスタックへ後から起こした実行が見つからない取り消し
@@ -48,6 +48,18 @@ if [ -z "$RUN_ID" ]; then
   exit 1
 fi
 echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
+
+# ここから先で親のジョブが取り消されたら、起こした実行も取り消してから終える。
+# 起こした実行は独立していて、こちらが止まっても続き、親を止めた後に prod が変わる。
+# 取り消しはランナーが INT、次いで TERM を送る。承認待ちで手を離した後は、こちらは
+# 既に終わっているので掛からない
+on_cancel() {
+  trap - INT TERM
+  echo "::warning::親のジョブが取り消された。起こした deploy の実行 $RUN_ID も取り消す" >&2
+  gh run cancel "$RUN_ID" || true
+  exit 130
+}
+trap on_cancel INT TERM
 
 # 終わるまで待つ。gh run watch は使わず、状態を読んで待つ。
 # environment prod に required reviewers があると、起こした実行は承認まで waiting で止まる。

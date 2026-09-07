@@ -179,21 +179,46 @@ jobs:
           PATTERN="^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$"
           PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
 
-          # リリースに zip が付いているか。リリースそのものが無ければ view が失敗し、無いと数える
+          # プレリリースとして公開されたリリースに zip が付いているか。
+          # リリースそのものが無ければ view が失敗し、無いと数える。
+          # 下書きは書き込み権限のトークンだと view が返すが、公開されていないので数えない。
+          # 数えると、下書きのまま作成を飛ばして通知だけが走る
           has_asset() {
-            gh release view "$1" --json assets --jq '.assets[].name' 2>/dev/null \
+            gh release view "$1" --json isDraft,isPrerelease,assets \
+              --jq 'select((.isDraft | not) and .isPrerelease) | .assets[].name' 2>/dev/null \
               | grep -qxF "${PACKAGE_NAME}-$1.zip"
           }
 
+          # 記録は「コミット」か「コミット タグ」。タグは打った後に記録し直す（下の re-record）。
+          # タグの記録があればそれだけを続ける。同じコミットに別のタグ（手で打った次の系列など）が
+          # あっても、それを前の試行のものと取り違えない。
+          # タグの記録が無いのは、前の試行がタグを打つ前か、打った直後の記録し直しの前に落ちた場合。
+          # そのコミットのタグが一つならそれを続け、無ければ先端から決め、二つ以上なら
+          # どれが前の試行のものか分からないので止める
           RESUME=""
           RECORD="$RUNNER_TEMP/prerelease-version/target.txt"
           if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ -f "$RECORD" ]; then
-            read -r RECORDED_SHA < "$RECORD"
-            if git merge-base --is-ancestor "$RECORDED_SHA" HEAD; then
-              RESUME=$(git tag --points-at "$RECORDED_SHA" | grep -E "$PATTERN" | sort -V | tail -n 1 || true)
+            read -r RECORDED_SHA RECORDED_TAG < "$RECORD"
+            if ! git merge-base --is-ancestor "$RECORDED_SHA" HEAD; then
+              echo "::error::再実行。前の試行が記録したコミット $RECORDED_SHA が master に無い" >&2
+              exit 1
             fi
-            if [ -z "$RESUME" ]; then
-              echo "::notice::再実行。前の試行はコミット $RECORDED_SHA を記録しているが、そこにプレリリースのタグが無い。続けるものが無いので、先端から決める"
+            if [ -n "$RECORDED_TAG" ]; then
+              if [ "$(git rev-list -n 1 "refs/tags/$RECORDED_TAG" 2>/dev/null || true)" = "$RECORDED_SHA" ]; then
+                RESUME="$RECORDED_TAG"
+              else
+                echo "::notice::再実行。前の試行はタグ $RECORDED_TAG（コミット $RECORDED_SHA）を記録しているが、そのタグが無いか、別のコミットを指している。続けるものが無いので、先端から決める"
+              fi
+            else
+              CANDIDATES=$(git tag --points-at "$RECORDED_SHA" | grep -E "$PATTERN" || true)
+              case "$(printf '%s' "$CANDIDATES" | grep -c .)" in
+                0) echo "::notice::再実行。前の試行はコミット $RECORDED_SHA を記録しているが、そこにプレリリースのタグが無い。タグを打つ前に落ちているので、先端から決める" ;;
+                1) RESUME="$CANDIDATES" ;;
+                *)
+                  echo "::error::再実行。前の試行が記録したコミット $RECORDED_SHA に複数のプレリリースのタグ（$(echo "$CANDIDATES" | tr '\n' ' ')）があり、どれを続けるか決められない。前の試行のタグを確かめ、他を消すか、そのタグに zip を手で付ける" >&2
+                  exit 1
+                  ;;
+              esac
             fi
           fi
 
@@ -231,14 +256,21 @@ jobs:
       # 出すコミットを、この実行の artifact に記録する。再実行はこれを読んで、そこに
       # 打たれたタグの続きを行う（上の restore）。タグを作る前に置くのは、タグを作った直後の
       # 添付で落ちたときも拾うため。タグを作る前に落ちていれば、再実行はタグが無いことで見分ける。
-      # 再実行も同じ名前で置き直すので、上書きを許す
+      # タグが既に決まっている（resume、existing）ならタグ名も添える。新しく打つ場合は
+      # 打った後に記録し直す（下の re-record）。再実行も同じ名前で置き直すので、上書きを許す
       - name: record the target for re-runs
         env:
           SHA: ${{ steps.version.outputs.sha }}
+          MODE: ${{ steps.version.outputs.mode }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/prerelease-version"
-          echo "$SHA" > "$RUNNER_TEMP/prerelease-version/target.txt"
+          if [ "$MODE" = new ]; then
+            echo "$SHA" > "$RUNNER_TEMP/prerelease-version/target.txt"
+          else
+            echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-version/target.txt"
+          fi
 
       - name: upload the record
         uses: actions/upload-artifact@v7
@@ -324,6 +356,16 @@ jobs:
           done
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "タグ $VERSION をコミット $SHA に打った"
+          echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-version/target.txt"
+
+      # 打ったタグの名前を記録し直す。再実行はこれで前の試行のタグを照合する（上の determine version）
+      - name: re-record the target with the tag
+        if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
+        uses: actions/upload-artifact@v7
+        with:
+          name: prerelease-version
+          path: ${{ runner.temp }}/prerelease-version/target.txt
+          overwrite: true
 
       # タグは上で打ってあるか（new）、既にある（resume、existing）。
       # このアクションはそのタグにリリースを作り、zip を付ける。リリースが既にあれば zip を足すだけで済ませる
