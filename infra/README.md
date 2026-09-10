@@ -768,6 +768,11 @@ environment を参照するワークフローが `master` に入り、`dev` デ�
 コンソールなら同じ issuer のポリシーで Allow を足し、あとで減らす。
 REST API なら下の `PATCH` で並べて送る。
 
+こちらも二段とも 2026-09-10 に済ませ、いまは environment の四つだけである。
+AWS 側より遅れて足したので、そのあいだの `dev` デプロイは `assume aws deploy role` を越え、
+`authenticate to pulumi cloud` が `Invalid response from token exchange 401: Unauthorized (access_denied: unauthorized)` で止まった。
+四つを足すと `dev` デプロイが最後まで通ったので、AWS 側と揃えて `master` の ref の二つを消した。
+
 REST API で行うなら三つを順に叩く。
 `<orgName>` は個人アカウントならユーザー名である。
 `Authorization: token <アクセストークン>` を付ける。
