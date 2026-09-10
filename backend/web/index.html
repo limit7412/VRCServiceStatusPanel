@@ -14,7 +14,7 @@
          書き換えたまま貼り替え忘れると pulumi up が止まる。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'self'; script-src 'sha256-X3kQo+ieM+pOIZJzsVsKJIsFym7PytQk3JP/qvVv3os='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; connect-src 'self'; script-src 'sha256-phG4tcM6BVMhKtSxtvfxPvxRlQME/FhV97WzMDVIq1g='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
     />
     <title>関連サービスの状態</title>
     <style>
@@ -338,6 +338,32 @@
           raw.hidden = false;
         }
 
+        // 使う項目だけを見る。型が違っても JavaScript は暗黙に変換して通すので、
+        // 例外に頼ると「null（NaN 日前）」のような表示になり、本文も隠れる。
+        // 表示に使わない項目（id、url、checked_unix）は見ない。
+        function isService(service) {
+          return (
+            service !== null &&
+            typeof service === "object" &&
+            typeof service.name === "string" &&
+            typeof service.level === "number" &&
+            typeof service.label === "string" &&
+            typeof service.note === "string" &&
+            typeof service.source === "string"
+          );
+        }
+
+        function isFeed(feed) {
+          return (
+            typeof feed.generated_unix === "number" &&
+            Number.isFinite(feed.generated_unix) &&
+            typeof feed.generated_jst === "string" &&
+            typeof feed.stale === "boolean" &&
+            Array.isArray(feed.services) &&
+            feed.services.every(isService)
+          );
+        }
+
         function handle(body) {
           var feed;
           try {
@@ -364,7 +390,12 @@
             return;
           }
 
-          // v が合っていても、欠けている項目や型の違う項目はありうる。
+          if (!isFeed(feed)) {
+            renderUnformatted("v1 の形になっていない項目があります。", body);
+            return;
+          }
+
+          // 形を見た後も、想定していない壊れ方は残りうる。
           // 整形の途中で落ちたときも本文を残す。壊れた配信内容を見るための
           // ページで「取得に失敗しました」とだけ出しては、材料が残らない。
           try {
