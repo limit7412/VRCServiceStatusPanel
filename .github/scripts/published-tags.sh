@@ -94,7 +94,7 @@ while :; do
       case "$TAG" in
         *-test*) continue ;;
       esac
-      echo "::error::正式版 $TAG のリリースに zip が無く、release.yml の実行も無い。release.yml を手で流して zip を付けるか、そのリリースとタグを消すまで採番しない" >&2
+      echo "::error::正式版 $TAG のリリースに zip が無く、release.yml の実行も無い。release.yml を手で流し（version に $TAG、attach を立てる）て zip を付けるか、そのリリースとタグを消すまで採番しない" >&2
       exit 1
     fi
 
@@ -111,6 +111,7 @@ while :; do
     PENDING=""
     VERIFIED=false
     REJECTED=false
+    UNVERIFIED=false
     for RUN_ID in $RUN_IDS; do
       ATTEMPTS=$(gh run view "$RUN_ID" --json attempt --jq '.attempt')
       for K in $(seq 1 "$ATTEMPTS"); do
@@ -127,6 +128,9 @@ while :; do
           VERIFIED=true
         elif printf '%s\n' "$CONCLUSIONS" | grep -qx failure; then
           REJECTED=true
+        else
+          # 検査まで進んでいない試行。落ちた試行と混ぜると、拒まれたものとして数えない側へ倒れる
+          UNVERIFIED=true
         fi
       done
     done
@@ -136,6 +140,13 @@ while :; do
     fi
     if [ "$VERIFIED" = true ]; then
       echo "::error::$TAG の release.yml はタグの検査を通っているのに、リリースに zip が無い。再実行して zip を付けるか、リリースとタグを消すまで採番しない" >&2
+      exit 1
+    fi
+    # 検査まで進まなかった試行が一つでもあれば、拒まれたかどうかは分からない。
+    # 落ちた試行と混ぜて数えないと、打ち直したタグの新しい実行が検査の前で落ちたときに、
+    # 古い試行の failure だけを見て拒まれたものとして数えず、それより古い版を出す
+    if [ "$UNVERIFIED" = true ]; then
+      echo "::error::$TAG の release.yml に、タグの検査まで進まずに落ちた実行がある。拒まれたのかどうか分からないので採番しない。再実行して zip を付けるか、リリースとタグを消す" >&2
       exit 1
     fi
     if [ "$REJECTED" = true ]; then

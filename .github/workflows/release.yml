@@ -38,6 +38,11 @@ on:
         description: 版（例 0.1.0）。空なら package.json の version
         required: false
         type: string
+      attach:
+        description: その版のリリースへ zip を添付する（既定は artifact に置くだけ）
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -116,10 +121,16 @@ jobs:
           name: package-${{ github.run_attempt }}
           path: "*.zip"
 
+      # 手で流したときは、既定では artifact に置くだけで、リリースには添付しない。
+      # タグを打つ前に中身を確かめる用途なので、うっかり添付しないようにしてある。
+      # attach を立てると、その版のリリースへ添付する。
+      # Actions が止まっていたあいだに公開された正式版のように、リリースはあるのに
+      # zip が無いものを直す経路である（published-tags.sh がこれを案内する）
       - name: upload to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.attach
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.version.outputs.version }}
           files: "*.zip"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

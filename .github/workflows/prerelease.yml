@@ -422,12 +422,17 @@ jobs:
 
           # 採番し直す。自分が打ったタグは手元から外してから決める。
           # 外さないと、番号の重複を避ける計算がそのタグを数え、必ず次の番号が出る
+          # 自分のタグは、手元からも公開済みの一覧からも外す。
+          # 手元から外すだけだと、next-prerelease-version.sh の到達性の検査が、
+          # 一覧にあって手元に無いそのタグを「master から辿れない」と読んで止まる
           decide() {
             git fetch --no-recurse-submodules origin \
               '+refs/heads/master:refs/remotes/origin/master' '+refs/tags/*:refs/tags/*'
             git tag -d "$VERSION" >/dev/null
             .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt" >&2
-            .github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt"
+            grep -vxF "$VERSION" "$RUNNER_TEMP/published-tags.txt" \
+              > "$RUNNER_TEMP/published-tags-others.txt" || true
+            .github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags-others.txt"
           }
 
           # リリースが無ければ作り、あれば zip を足す。
