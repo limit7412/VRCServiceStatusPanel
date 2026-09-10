@@ -38,14 +38,16 @@ find_run() {
     --jq "map(select(.displayTitle | endswith(\"[$DISPATCH_ID]\"))) | .[0].databaseId // empty"
 }
 
-# 起こした後に親のジョブが取り消されたら、起こした実行も取り消してから終える。
+# 起こした実行を、こちらが先に終わるときは取り消す。
 # 起こした実行は独立していて、こちらが止まっても続き、親を止めた後に prod が変わる。
-# 起こしてから実行が見つかるまでのあいだに取り消されたときも、識別子で探して取り消す。
-# 取り消しはランナーが INT を送り、少し待って TERM、さらに待って KILL を送るので、
-# 探すのは短く切り上げる。承認待ちで手を離した後は、こちらは既に終わっているので掛からない
+# 取り消すのは、親のジョブが取り消されたとき（ランナーが INT、次いで TERM を送る）と、
+# 状態を読めないなど、こちらが結果を見届けられずに落ちるときである。
+# 見届けたとき（終わった、承認待ちで手を離した）は CLEANUP を none にしてから終える。
+# 起こしてから実行が見つかるまでのあいだに落ちたときも、識別子で探して取り消す。
+# 取り消しの後 KILL までは間があるが長くはないので、探すのは短く切り上げる
 RUN_ID=""
-on_cancel() {
-  trap - INT TERM
+CLEANUP=cancel
+cancel_child() {
   if [ -z "$RUN_ID" ]; then
     for _ in 1 2 3; do
       RUN_ID=$(find_run || true)
@@ -54,13 +56,29 @@ on_cancel() {
     done
   fi
   if [ -n "$RUN_ID" ]; then
-    echo "::warning::親のジョブが取り消された。起こした deploy の実行 $RUN_ID も取り消す" >&2
+    echo "::warning::起こした deploy の実行 $RUN_ID を取り消す" >&2
     gh run cancel "$RUN_ID" || true
   else
-    echo "::warning::親のジョブが取り消されたが、起こした deploy の実行がまだ見つからない。Actions の deploy で [$DISPATCH_ID] を探し、手で取り消す" >&2
+    echo "::warning::起こした deploy の実行がまだ見つからない。Actions の deploy で [$DISPATCH_ID] を探し、手で取り消す" >&2
   fi
+  CLEANUP=none
+}
+on_exit() {
+  CODE=$?
+  trap - EXIT
+  if [ "$CLEANUP" = cancel ]; then
+    echo "::warning::deploy の結果を見届けられずに $CODE で終わる" >&2
+    cancel_child
+  fi
+  exit "$CODE"
+}
+on_cancel() {
+  trap - INT TERM
+  echo "::warning::親のジョブが取り消された" >&2
+  cancel_child
   exit 130
 }
+trap on_exit EXIT
 trap on_cancel INT TERM
 
 gh workflow run deploy.yml --ref master \
@@ -98,6 +116,8 @@ echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
 SAME_STACK="(.displayTitle == \"deploy $STACK\" or (.displayTitle | startswith(\"deploy $STACK [\")))"
 
 hand_off() {
+  # 承認待ちは人の手を待つ状態で、こちらが見届けるものではない。取り消さずに終える
+  CLEANUP=none
   echo "::notice::deploy の実行 $RUN_ID は $1。ここでは待たず、その先の結果はその実行で見る"
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "deploy の実行 $RUN_ID は $1。その先の結果は https://github.com/$GH_REPO/actions/runs/$RUN_ID で見る" >> "$GITHUB_STEP_SUMMARY"
@@ -105,9 +125,24 @@ hand_off() {
   exit 0
 }
 
+# 状態を読む。一度の失敗で落とすと、API の一時的な不調で prod のデプロイを取り消してしまう。
+# 三度まで試し、それでも読めなければ落ちる（上の on_exit が起こした実行を取り消す）
+run_status() {
+  for K in 1 2 3; do
+    if OUT=$(gh run view "$RUN_ID" --json status --jq '.status'); then
+      printf '%s\n' "$OUT"
+      return 0
+    fi
+    echo "::warning::deploy の実行 $RUN_ID の状態を読めない（$K 度目）" >&2
+    sleep 10
+  done
+  echo "::error::deploy の実行 $RUN_ID の状態を三度読めない" >&2
+  return 1
+}
+
 STARTED=$(date +%s)
 while :; do
-  STATUS=$(gh run view "$RUN_ID" --json status --jq '.status')
+  STATUS=$(run_status)
   case "$STATUS" in
     completed)
       break
@@ -119,20 +154,24 @@ while :; do
       ;;
     *)
       # queued、pending、requested。群の空きを待っている先が承認待ちなら、いつ空くか分からない
+      # 一覧を読めないときは 0 と見て待ち続ける。ここで落とす理由は無い
       BLOCKED=$(gh run list --workflow deploy.yml --status waiting --limit 20 --json databaseId,displayTitle \
-        --jq "map(select(.databaseId < $RUN_ID and $SAME_STACK)) | length")
+        --jq "map(select(.databaseId < $RUN_ID and $SAME_STACK)) | length" || echo 0)
       if [ "$BLOCKED" -gt 0 ]; then
         hand_off "同じスタックの前の実行が承認待ちで止まっていて、その後ろに並んでいる"
       fi
       ;;
   esac
   if [ $(( $(date +%s) - STARTED )) -ge $(( 5 * 60 * 60 )) ]; then
-    echo "::error::deploy の実行 $RUN_ID は五時間たっても終わっていない（状態 $STATUS）。取り消して失敗にする。pulumi up の途中なら state のロックが残ることがあり、その場合は pulumi cancel で外す" >&2
-    gh run cancel "$RUN_ID" || true
+    # 取り消しは上の on_exit が行う。pulumi up の途中で取り消すと state のロックが
+    # 残ることがあり、その場合は pulumi cancel で外す
+    echo "::error::deploy の実行 $RUN_ID は五時間たっても終わっていない（状態 $STATUS）。取り消して失敗にする" >&2
     exit 1
   fi
   sleep 20
 done
+# 終わったので、この先で落ちても取り消すものは無い
+CLEANUP=none
 CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
 case "$CONCLUSION" in
   success)

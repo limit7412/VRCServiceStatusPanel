@@ -86,8 +86,8 @@ jobs:
       # この実行の artifact の一覧と取得（再実行の記録）、release.yml の実行の状態
       actions: read
     outputs:
-      # 公開の直前に読み直した版があればそれ、無ければ最初に決めた版（下の re-check）
-      version: ${{ steps.final.outputs.version || steps.version.outputs.version }}
+      # 公開した版があればそれ、無ければ最初に決めた版（zip が既に付いていて公開を飛ばした場合）
+      version: ${{ steps.publish.outputs.version || steps.version.outputs.version }}
     # 取り込みが続いたときにタグの計算が競合しないよう、直列にする。
     # 並んで走ると両方が同じ -testN を計算し、片方のタグ作成が失敗する。
     #
@@ -116,27 +116,39 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      # 再実行（run_attempt が 2 以上）のときは、前の試行が記録したコミットを取る。
-      # 記録は下の record the target が同じ実行の artifact に置く。artifact は実行に
-      # 属し、試行をまたいで残る。
-      # まず一覧で有無を見る。無いのは前の試行が記録する前に落ちた場合で、それは
-      # 初回と同じに進む。一覧や取得そのものが失敗したときは止める。
+      # 再実行（run_attempt が 2 以上）のときは、前の試行が残した記録を取る。
+      # 記録は同じ実行の artifact に置く（下の record）。artifact は実行に属し、試行をまたいで残る。
+      # 名前は prerelease-target-<試行番号>（出すコミット）と prerelease-tag-<試行番号>
+      # （打ったタグまで）の二つで、どちらも一度だけ置き、上書きしない。
+      # 一つの名前を上書きする形にすると、upload-artifact が先に古いものを消すので、
+      # その隙に落ちると記録が一つも残らず、再実行が打ったばかりのタグを見失う。
+      # 試行番号のいちばん大きいものを、タグまで記録したものを先に見る。
+      # どれも無いのは前の試行が記録する前に落ちた場合で、それは初回と同じに進む。
+      # 一覧や取得そのものが失敗したときは止める。
       # 失敗も無いことにして進むと、記録したコミットのタグに zip が無いまま新しい版が作られる
-      - name: restore the target recorded by the previous attempt
+      - name: restore the record left by the previous attempt
+        id: restore
         if: ${{ fromJSON(github.run_attempt) > 1 }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          COUNT=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts?name=prerelease-version" \
-            --jq '[.artifacts[] | select(.expired | not)] | length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::notice::前の試行は版を記録する前に落ちている。初回と同じに先端から決める"
+          gh api --paginate "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired | not) | .name' > "$RUNNER_TEMP/artifacts.txt"
+          NAMES=$(grep -E '^prerelease-(tag|target)-[1-9][0-9]*$' "$RUNNER_TEMP/artifacts.txt" || true)
+          if [ -z "$NAMES" ]; then
+            echo "::notice::前の試行は記録する前に落ちている。初回と同じに先端から決める"
             exit 0
           fi
-          gh run download "$GITHUB_RUN_ID" -n prerelease-version -D "$RUNNER_TEMP/prerelease-version"
-          echo "前の試行の記録（コミット）: $(cat "$RUNNER_TEMP/prerelease-version/target.txt")"
+          LATEST=$(printf '%s\n' "$NAMES" | sed -E 's/.*-([1-9][0-9]*)$/\1/' | sort -n | tail -n 1)
+          for NAME in "prerelease-tag-$LATEST" "prerelease-target-$LATEST"; do
+            printf '%s\n' "$NAMES" | grep -qxF "$NAME" || continue
+            gh run download "$GITHUB_RUN_ID" -n "$NAME" -D "$RUNNER_TEMP/prerelease-record"
+            echo "recorded=true" >> "$GITHUB_OUTPUT"
+            echo "前の試行の記録（$NAME）: $(cat "$RUNNER_TEMP/prerelease-record/target.txt")"
+            break
+          done
 
       # 版を決め、リリースに zip が付いているかを見る。
       #
@@ -182,13 +194,15 @@ jobs:
           PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
 
           # プレリリースとして公開されたリリースに zip が付いているか。
-          # リリースそのものが無ければ view が失敗し、無いと数える。
-          # 下書きは書き込み権限のトークンだと view が返すが、公開されていないので数えない。
+          # リリースそのものが無ければ無いと数える。照会が失敗したときは release-json.sh が止める。
+          # 下書きは書き込み権限のトークンだと API が返すが、公開されていないので数えない。
           # 数えると、下書きのまま作成を飛ばして通知だけが走る
           has_asset() {
-            gh release view "$1" --json isDraft,isPrerelease,assets \
-              --jq 'select((.isDraft | not) and .isPrerelease) | .assets[].name' 2>/dev/null \
-              | grep -qxF "${PACKAGE_NAME}-$1.zip"
+            local json
+            json=$(.github/scripts/release-json.sh "$1")
+            [ -n "$json" ] || return 1
+            printf '%s' "$json" | jq -e --arg name "${PACKAGE_NAME}-$1.zip" \
+              '(.draft | not) and .prerelease and any(.assets[]; .name == $name)' >/dev/null
           }
 
           # 記録は「コミット」か「コミット タグ」。タグは打った後に記録し直す（下の re-record）。
@@ -198,7 +212,7 @@ jobs:
           # そのコミットのタグが一つならそれを続け、無ければ先端から決め、二つ以上なら
           # どれが前の試行のものか分からないので止める
           RESUME=""
-          RECORD="$RUNNER_TEMP/prerelease-version/target.txt"
+          RECORD="$RUNNER_TEMP/prerelease-record/target.txt"
           if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ -f "$RECORD" ]; then
             read -r RECORDED_SHA RECORDED_TAG < "$RECORD"
             if ! git merge-base --is-ancestor "$RECORDED_SHA" HEAD; then
@@ -255,7 +269,9 @@ jobs:
             EXPECTED=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
             git fetch --no-recurse-submodules origin "+refs/tags/$VERSION:refs/tags/$VERSION"
             if [ "$EXPECTED" != "$VERSION" ]; then
-              if gh release view "$VERSION" >/dev/null 2>&1; then
+              # リリースの有無は release-json.sh で見る。照会の失敗を「無い」と読むと、
+              # 人が公開したリリースのタグを作りかけとして消す
+              if [ -n "$(.github/scripts/release-json.sh "$VERSION")" ]; then
                 echo "::error::続けるはずのプレリリース $VERSION は、公開済みの最新より古い（いま決めると $EXPECTED）。リリースがあるので消さずに止める。そのリリースとタグを消すか、zip を手で付ける" >&2
                 exit 1
               fi
@@ -287,50 +303,55 @@ jobs:
           fi
 
       # 出すコミットを、この実行の artifact に記録する。再実行はこれを読んで、そこに
-      # 打たれたタグの続きを行う（上の restore）。タグを作る前に置くのは、タグを作った直後の
-      # 添付で落ちたときも拾うため。タグを作る前に落ちていれば、再実行はタグが無いことで見分ける。
+      # 打たれたタグの続きを行う（上の restore）。公開の前に置くのは、タグを打った直後や
+      # 添付の途中で落ちたときも拾うためである。記録する前に落ちていれば、再実行は
+      # 記録が無いことで見分ける。
       # タグが既に決まっている（resume、existing）ならタグ名も添える。新しく打つ場合は
-      # 打った後に記録し直す（下の re-record）。再実行も同じ名前で置き直すので、上書きを許す
+      # 公開まで済ませてから、タグ名を添えた記録を別に置く（下の record the tag）。
+      # 前の試行の記録がそのまま使えるときは置き直さない。名前に試行番号を入れて上書きを避ける
       - name: record the target for re-runs
+        if: steps.restore.outputs.recorded != 'true'
         env:
           SHA: ${{ steps.version.outputs.sha }}
           MODE: ${{ steps.version.outputs.mode }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/prerelease-version"
+          mkdir -p "$RUNNER_TEMP/prerelease-record"
           if [ "$MODE" = new ]; then
-            echo "$SHA" > "$RUNNER_TEMP/prerelease-version/target.txt"
+            echo "$SHA" > "$RUNNER_TEMP/prerelease-record/target.txt"
           else
-            echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-version/target.txt"
+            echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-record/target.txt"
           fi
 
       - name: upload the record
+        if: steps.restore.outputs.recorded != 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: prerelease-version
-          path: ${{ runner.temp }}/prerelease-version/target.txt
-          overwrite: true
+          name: prerelease-target-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prerelease-record/target.txt
 
       # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
       - name: build package
         if: steps.version.outputs.has_asset != 'true'
         run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
 
-      # 新しく決めた版は、公開済みのタグからもう一度決め直し、そのままタグを打って push する。
-      # 決めてから zip を作るまでのあいだに正式版 X.Y.Z が公開されると、決めた X.Y.Z-testN は
+      # 新しく決めた版は、公開済みのタグからもう一度決め直し、タグを打ち、リリースを作って
+      # zip を付けるところまでを一つのステップで行う。
+      # 決めてから公開までのあいだに正式版 X.Y.Z が公開されると、決めた X.Y.Z-testN は
       # その正式版より古く、公開すると利用者に新しい test 版として取れない。
-      # 決め直しとタグの作成を一つのステップに置き、そのあいだに他のステップを挟まない。
-      # 打った後にもう一度決め直し（自分のタグは手元から外して）、同じ版が出れば確定する。
-      # 違えば、そのあいだに正式版が公開されている。打ったタグを消して、決め直した版でやり直す。
-      # タグを作れば版は確定し、下の create pre-release はそのタグにリリースと zip を付けるだけになる。
-      # 続きを行う版（resume、existing）はタグが既にあるので、決め直さない
-      - name: settle the version and create the tag
-        id: final
-        if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
+      # 決め直しから公開までのあいだに他のステップを挟まず、公開した後にもう一度決め直して
+      # （自分のタグとリリースは外して）、同じ版が出れば確定する。
+      # 違えば、そのあいだに正式版が公開されている。作ったリリースとタグを消してやり直す。
+      # 三度やっても定まらなければ、公開したものを残さずに止める。
+      # 続きを行う版（resume、existing）はタグが既にあるので、決め直さずに公開だけを続ける
+      - name: publish the pre-release
+        id: publish
+        if: steps.version.outputs.has_asset != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          MODE: ${{ steps.version.outputs.mode }}
           VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ steps.version.outputs.sha }}
         run: |
@@ -350,6 +371,30 @@ jobs:
             .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt" >&2
             .github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt"
           }
+
+          # リリースが無ければ作り、あれば zip を足す。
+          # 下書きは人が作ったものなので、勝手に公開せず止める
+          publish() {
+            local json
+            json=$(.github/scripts/release-json.sh "$1")
+            if [ -z "$json" ]; then
+              gh release create "$1" --target "$SHA" --prerelease --generate-notes --title "$1" ./*.zip
+              echo "リリース $1 を作り、zip を付けた"
+              return 0
+            fi
+            if [ "$(printf '%s' "$json" | jq -r '.draft')" = true ]; then
+              echo "::error::リリース $1 は下書きで残っている。人が作ったものなので触らない。公開するか消してから流し直す" >&2
+              return 1
+            fi
+            gh release upload "$1" ./*.zip --clobber
+            echo "リリース $1 に zip を足した"
+          }
+
+          if [ "$MODE" != new ]; then
+            publish "$VERSION"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           ATTEMPT=0
           while :; do
@@ -375,12 +420,15 @@ jobs:
               continue
             fi
 
-            # 打った後にもう一度。自分のタグを手元から外して決め直し、同じなら確定
+            publish "$VERSION"
+
+            # 公開した後にもう一度。自分のタグを手元から外して決め直し、同じなら確定
             CHECK=$(decide "$VERSION")
             if [ "$CHECK" = "$VERSION" ]; then
               break
             fi
-            echo "::notice::タグ $VERSION を打つあいだに公開済みのタグが変わった（決め直すと $CHECK）。打ったタグを消してやり直す"
+            echo "::notice::プレリリース $VERSION を公開するあいだに公開済みのタグが変わった（決め直すと $CHECK）。作ったリリースとタグを消してやり直す"
+            gh release delete "$VERSION" --yes
             git push origin ":refs/tags/$VERSION"
             if [ "$ATTEMPT" -ge 3 ]; then
               echo "::error::三度やり直しても版が定まらない。止める" >&2
@@ -388,33 +436,20 @@ jobs:
             fi
           done
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "タグ $VERSION をコミット $SHA に打った"
-          echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-version/target.txt"
+          echo "プレリリース $VERSION をコミット $SHA で公開した"
+          mkdir -p "$RUNNER_TEMP/prerelease-record"
+          echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-record/target.txt"
 
-      # 打ったタグの名前を記録し直す。再実行はこれで前の試行のタグを照合する（上の determine version）
-      - name: re-record the target with the tag
+      # 打ったタグの名前を記録する。再実行はこれで前の試行のタグを照合し、同じコミットに
+      # 別のタグ（手で打った次の系列など）があっても取り違えない。
+      # コミットだけの記録とは別の名前で置くので、これが失敗しても先の記録は残る
+      - name: record the tag for re-runs
         if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
         uses: actions/upload-artifact@v7
         with:
-          name: prerelease-version
-          path: ${{ runner.temp }}/prerelease-version/target.txt
+          name: prerelease-tag-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prerelease-record/target.txt
           overwrite: true
-
-      # タグは上で打ってあるか（new）、既にある（resume、existing）。
-      # このアクションはそのタグにリリースを作り、zip を付ける。リリースが既にあれば zip を足すだけで済ませる
-      - name: create pre-release
-        if: steps.version.outputs.has_asset != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.final.outputs.version || steps.version.outputs.version }}
-          # タグは既にあるので使われないが、無かったときに既定ブランチの先端へ打たれないよう、
-          # 出すコミットを明示しておく
-          target_commitish: ${{ steps.version.outputs.sha }}
-          prerelease: true
-          generate_release_notes: true
-          files: "*.zip"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # secrets コンテキストはジョブの if で参照できないため、
   # トークンの有無を先行ジョブの出力へ移してから分岐する（unity-test.yml と同じ形）。
