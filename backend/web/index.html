@@ -14,7 +14,7 @@
          書き換えたまま貼り替え忘れると pulumi up が止まる。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'self'; script-src 'sha256-2jQJxQEjbk2Yyke3qrNcaT7AkWCKaxLEvQ3izEIRR04='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; connect-src 'self'; script-src 'sha256-VzsqBMLOOLsAwo10U0yJyL4SheCoZGwKQddgtE7c0qg='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
     />
     <title>関連サービスの状態</title>
     <style>
@@ -289,7 +289,11 @@
             return;
           }
           if (feed.stale) {
-            show(notice, "上流の取得がすべて失敗しました。前回の状態を表示しています。");
+            // stale が立つのは、成功した観測が一件も無いときである
+            // （backend の Status::Usecase）。取得できなかったサービスが
+            // 何を表示するかは source によって違うので、ここでは言わない。
+            // official は前回値を引き継ぎ、synthetic は今回の結果から決め直す。
+            show(notice, "取得に成功した上流が一つもありません。");
           }
         }
 
@@ -353,15 +357,18 @@
         // 定義の外の値が来ると黙って別の意味に化ける。level 99 は色が引けずに
         // Unknown と同じ灰色になり、source の綴りが違えば「推定」が消える。
         //
-        // label は level と組で見る。level が範囲の外なら添字が外れて弾かれ、
-        // level 0 に「Major Outage」のような食い違いも弾かれる。
-        // 緑の点と障害の表示が同じ行に並ぶと、壊れた配信内容が正常な状態に見える。
+        // label は level と組で見る。level 0 に「Major Outage」のような食い違いは、
+        // 緑の点と障害の表示が同じ行に並んで、壊れた配信内容が正常な状態に見える。
+        // 範囲は別に見る。組の一致だけに任せると、level が範囲の外で label も
+        // 欠けた組（どちらも undefined）が通ってしまう。
         function isService(service) {
           return (
             service !== null &&
             typeof service === "object" &&
             typeof service.name === "string" &&
-            typeof service.level === "number" &&
+            Number.isInteger(service.level) &&
+            service.level >= 0 &&
+            service.level < LABELS.length &&
             service.label === LABELS[service.level] &&
             typeof service.note === "string" &&
             SOURCES.indexOf(service.source) !== -1
@@ -370,8 +377,7 @@
 
         function isFeed(feed) {
           return (
-            typeof feed.generated_unix === "number" &&
-            Number.isFinite(feed.generated_unix) &&
+            Number.isSafeInteger(feed.generated_unix) &&
             typeof feed.generated_jst === "string" &&
             typeof feed.stale === "boolean" &&
             Array.isArray(feed.services) &&
