@@ -132,12 +132,20 @@ environment を参照するジョブのトークンは `sub` が `environment:<�
 起こす形にしてあるので、タグの ref から名乗る必要が無い。
 ロールから見える条件は environment の名前だけで、ref の判定は GitHub 側に置く。
 
-environment の四つは 2026 年 9 月に置き換えた。
-それより前に作ったロールは `master` の ref の二つ（`...:ref:refs/heads/master`）を持っている。
+上の JSON は移行が済んだ姿である。
+environment の四つを足したのは 2026 年 9 月で、それより前に作ったロールは `master` の ref の二つ（`...:ref:refs/heads/master`）を持っている。
 移行は二段で行う。
 
 1. `master` の ref の二つを残したまま、environment の四つを足す（六つ並ぶ）
 2. environment を参照するワークフローが `master` に入り、`dev` デプロイが通ったら、`master` の ref の二つを消して上の JSON にする
+
+一段目は 2026-09-10 に済ませた。いまは六つ並んでいる。
+このときは順序が逆になり、environment を参照する `deploy.yml` が先に `master` へ入った。
+そのため一段目より前に走った `dev` デプロイが `Not authorized to perform sts:AssumeRoleWithWebIdentity` で止まった（#67）。
+足した後に `deploy.yml` を `dev` へ手で流すと、この段は通った。
+同じ実行は次の `authenticate to pulumi cloud` で止まっており、
+Pulumi Cloud 側の認可ポリシーはまだ `master` の ref の二つのままである（`infra/README.md`）。
+二段目は、そちらも足して `dev` デプロイが最後まで通ってから行う。
 
 先に消すと、それまでの `master` の ref で動く `deploy.yml` が `AssumeRoleWithWebIdentity` で止まる。
 足さずにワークフローを入れると、environment を参照する新しい `deploy.yml` が止まる。
