@@ -142,6 +142,10 @@ environment の四つを足したのは 2026 年 9 月で、それより前に�
 一段目は 2026-09-10 に済ませた。いまは六つ並んでいる。
 このときは順序が逆になり、environment を参照する `deploy.yml` が先に `master` へ入った。
 そのため一段目より前に走った `dev` デプロイが `Not authorized to perform sts:AssumeRoleWithWebIdentity` で止まった（#67）。
+足した後に `deploy.yml` を `dev` へ手で流すと、この段は通った。
+同じ実行は次の `authenticate to pulumi cloud` で止まっており、
+Pulumi Cloud 側の認可ポリシーはまだ `master` の ref の二つのままである（`infra/README.md`）。
+二段目は、そちらも足して `dev` デプロイが最後まで通ってから行う。
 
 先に消すと、それまでの `master` の ref で動く `deploy.yml` が `AssumeRoleWithWebIdentity` で止まる。
 足さずにワークフローを入れると、environment を参照する新しい `deploy.yml` が止まる。
