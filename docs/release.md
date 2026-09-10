@@ -145,19 +145,14 @@ environment の規則が `master` だけを許すので、他の ref からは�
 
 ## 手で行う作業
 
-**VPM リスティングへ本リポジトリを足す。**
-リスティングは `limit7412/vcc-vpm` にあり、`source.json` の `githubRepos` に並んだリポジトリのリリースから索引を作る。
-そこへ `limit7412/VRCServiceStatusPanel` を足す。
+デプロイ定義に載らず、人が置くものが五つある。
+三つは置いてあり、残る二つはワールド側アセットの実装を待っている。
 
-**`LISTING_DISPATCH_TOKEN` を Secrets へ置く。**
-`vcc-vpm` だけをスコープとし Contents の読み書きを持つ fine-grained PAT を作り、本リポジトリの Secrets に `LISTING_DISPATCH_TOKEN` として置く。
-本リポジトリの `GITHUB_TOKEN` は他リポジトリへ届かないため、通知にはこれが要る。
-置くまでのあいだ、`prerelease.yml` と `release.yml` は通知を飛ばして notice を出す。プレリリースと zip の添付は置かなくても動く。
-
-**environment `dev` と `prod` を作り、規則を置く。**
+**environment `dev` と `prod`。置いてある。**
 `deploy.yml` のジョブは出す先と同じ名前の environment を参照する。
-存在しない environment を参照して動かすと、保護規則の無い environment が自動で作られるので、先に admin が作って規則を置く。
-Settings の Environments で、それぞれ Deployment branches and tags を「Selected branches and tags」にし、次を許す。
+存在しない environment を参照して動かすと、保護規則の無い environment が自動で作られる。
+`dev` はその状態になっていたので規則を足し、`prod` は無かったので作った（2026 年 9 月）。
+Settings の Environments で、どちらも Deployment branches and tags を「Selected branches and tags」にし、次だけを許してある。
 
 | environment | 許す ref |
 | --- | --- |
@@ -173,19 +168,38 @@ Settings の Environments で、それぞれ Deployment branches and tags を「
 承認待ちに入ると、起こした側の `release.yml` はそこで待つのをやめ、承認後の結果は `deploy.yml` の実行で見る。
 ジョブは六時間で打ち切られるので、承認が遅れたときに `release.yml` だけが失敗して食い違うことを避けている。
 
-**OIDC の信頼設定を environment に変える。**
+**OIDC の信頼設定。environment の形にしてある。**
 environment を参照するジョブが受け取る OIDC トークンの `sub` は `environment:<名前>` になり、ブランチもタグも含まない。
-AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは `ref:refs/heads/master` を通していたので、どちらも `environment:dev` と `environment:prod`（新旧の形で四つ）にする。
-移行は二段で行う。
-まず `master` の ref の二つを残したまま environment の四つを足し、environment を参照するワークフローを `master` へ入れる。
-`dev` デプロイが通ったら、`master` の ref の二つを消す。
-先に消すと、それまでの `master` の ref で動く `deploy.yml` が入れずに止まる。
-手順は `docs/aws-oidc.md` の「誰がロールを引けるか」と、`infra/README.md` の「手で行う作業」にある。
+AWS の信頼ポリシーと Pulumi Cloud の認可ポリシーは `ref:refs/heads/master` を通していたので、どちらも `environment:dev` と `environment:prod`（新旧の形で四つ）に移した。
+移行は二段で行い、まず `master` の ref の二つを残したまま四つを足し、`dev` デプロイが通ってから二つを消した（2026 年 9 月）。
+先に消すと、それまでの `master` の ref で動く `deploy.yml` が入れなくなる。
+いま通るのは environment の四つだけである。
+現物と手順は `docs/aws-oidc.md` の「誰がロールを引けるか」と、`infra/README.md` の「手で行う作業」にある。
 
 ref ではなく environment で絞るのは、タグの ref を `*` で通す形だと、write 権限を持つ者が任意のブランチにタグを打って `deploy.yml` を手で流すだけでロールを引けるためである。
 `master` のブランチ保護を経ない経路が一つ増える。
 environment なら、どの ref からその名前を名乗れるかを GitHub 側の規則が決め、ロールから見える条件は名前だけになる。
 
-**`master` のブランチ保護。**
+**`master` のブランチ保護。ruleset を置いてある。**
 `deploy-dev.yml` は検査の成功を前提にしていない。
-`backend-ci` と `unity-test` は同じ push で並んで走るだけで、required status check で pull request を縛っていなければ、未検証の内容が `dev` に出る。
+`backend-ci` と `unity-test` は同じ push で並んで走るだけなので、`master` に何が入るかを決めるのは ruleset の側である。
+置いてあるのは、ブランチの削除の禁止、fast-forward でない更新の禁止、それに六つの検査を required にしたものである。
+六つは、変更の判定、鍵の混入の検査、backend の format / lint / spec、infra の typecheck と static build、unity の EditMode tests である。
+最新の base を要求する設定（strict）も入れてある。
+
+pull request を必須にする規則は入れていない。
+required にした検査は直接の push にも掛かるので、検査を通らない内容は入らない。
+入るのは、検査を通したうえでレビューを経ていない内容である。
+一人で書いているあいだにそれを縛るかどうかは、まだ決めていない。
+
+**VPM リスティングへ本リポジトリを足す。まだ。**
+リスティングは `limit7412/vcc-vpm` にあり、`source.json` の `githubRepos` に並んだリポジトリのリリースから索引を作る。
+そこへ `limit7412/VRCServiceStatusPanel` を足す。
+足すのは、ワールド側アセット（仕様書 8）の実装がある程度進んでからにする（2026 年 9 月の判断）。
+リスティングに載るのは配布物であり、いま載せると中身の揃っていない版が Creator Companion に並ぶ。
+
+**`LISTING_DISPATCH_TOKEN` を Secrets へ置く。まだ。**
+`vcc-vpm` だけをスコープとし Contents の読み書きを持つ fine-grained PAT を作り、本リポジトリの Secrets に `LISTING_DISPATCH_TOKEN` として置く。
+本リポジトリの `GITHUB_TOKEN` は他リポジトリへ届かないため、通知にはこれが要る。
+要るのはリスティングへ足した後なので、置くのも上と同じ時期でよい。
+置くまでのあいだ、`prerelease.yml` と `release.yml` は通知を飛ばして notice を出す。プレリリースと zip の添付は置かなくても動く。
