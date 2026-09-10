@@ -31,6 +31,13 @@ const r2Provider = new aws.Provider("r2", {
     region: "auto",
     accessKey: r2AccessKeyId,
     secretKey: r2SecretAccessKey,
+    // 空を明示する。CI では configure-aws-credentials が AWS_SESSION_TOKEN を
+    // 置いたまま pulumi up が走るので、渡さないでおくとこのプロバイダが
+    // R2 の鍵に AWS の STS のセッショントークンを添えて署名しうる。
+    // R2 はそれを受け取らない。
+    // Output を渡すのは、素の "" が偽値として捨てられ、渡さないのと同じに
+    // なるためである（@pulumi/aws の provider は args.token を真偽で見る）。
+    token: pulumi.output(""),
     endpoints: [{ s3: r2Endpoint }],
     // R2 は仮想ホスト形式のバケット名を解決しない。
     s3UsePathStyle: true,
@@ -61,7 +68,11 @@ function sha256Base64(body: string): string {
 // 配るものは常に正しくしたいので、ここで計算し直して置き換える。
 // 食い違いは警告に出し、貼り替えの手がかりを残す。
 function renderPage(): string {
-    const source = fs.readFileSync(HTML_PATH, "utf8");
+    // 改行を LF へ揃えてから計算する。
+    // HTML の構文解析は CR LF を LF へ直してから script と style の中身を読むので、
+    // CRLF のまま計算した値はブラウザ側の計算と一致せず、どちらも拒まれる。
+    // 揃えた本文をそのまま配るので、置いてあるものと計算の対象も一致する。
+    const source = fs.readFileSync(HTML_PATH, "utf8").replace(/\r\n/g, "\n");
     let html = source;
 
     for (const tag of ["style", "script"]) {

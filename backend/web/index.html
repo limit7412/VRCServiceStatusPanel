@@ -14,7 +14,7 @@
          書き換えたまま貼り替え忘れると pulumi up が止まる。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'self'; script-src 'sha256-aI5pCzRc8AeUJQC56sZP8iy3TRSnE2OFRximZt+WbIQ='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; connect-src 'self'; script-src 'sha256-X3kQo+ieM+pOIZJzsVsKJIsFym7PytQk3JP/qvVv3os='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
     />
     <title>関連サービスの状態</title>
     <style>
@@ -319,8 +319,20 @@
           services.hidden = false;
         }
 
+        function reset() {
+          notice.hidden = true;
+          notice.textContent = "";
+          services.hidden = true;
+          services.textContent = "";
+          raw.hidden = true;
+          raw.textContent = "";
+        }
+
         // 整形できない応答は、判断の材料が残るように本文をそのまま出す。
+        // 途中まで並べた行は消す。読めた分と読めなかった分が混じって見えると、
+        // どこまでが応答の中身なのか分からなくなる。
         function renderUnformatted(message, body) {
+          reset();
           generated.textContent = message;
           raw.textContent = body;
           raw.hidden = false;
@@ -335,6 +347,13 @@
             return;
           }
 
+          // JSON として読めても、配信 JSON の形とは限らない。
+          // null も配列も JSON.parse を通るので、ここで弾く。
+          if (feed === null || typeof feed !== "object" || Array.isArray(feed)) {
+            renderUnformatted("配信 JSON の形ではありません。", body);
+            return;
+          }
+
           if (feed.v !== SCHEMA_VERSION) {
             renderUnformatted(
               "このページが知らないスキーマです（v" +
@@ -345,7 +364,14 @@
             return;
           }
 
-          renderFeed(feed);
+          // v が合っていても、欠けている項目や型の違う項目はありうる。
+          // 整形の途中で落ちたときも本文を残す。壊れた配信内容を見るための
+          // ページで「取得に失敗しました」とだけ出しては、材料が残らない。
+          try {
+            renderFeed(feed);
+          } catch (error) {
+            renderUnformatted("応答を整形できませんでした（" + error.message + "）。", body);
+          }
         }
 
         // ブラウザの写しではなく、ワールドが読むのと同じ経路の応答を見たい。
