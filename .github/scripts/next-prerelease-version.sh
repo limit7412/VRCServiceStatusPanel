@@ -3,7 +3,7 @@
 #
 #   .github/scripts/next-prerelease-version.sh <安定版タグが無いときの次期バージョン> [公開済みタグの一覧]
 #
-# HEAD（master の先端）から辿れるタグだけを見る。
+# 基準（環境変数 BASE_REF、既定は HEAD）から辿れるタグだけを見る。
 # 別のブランチに打たれたタグは数えない。
 # 第二引数に、一行に一つタグを並べたファイルを渡すと、そこにあるタグだけを見る。
 # prerelease.yml は zip の付いたリリースのあるタグの一覧（published-tags.sh）を渡す。
@@ -27,13 +27,22 @@ set -euo pipefail
 
 FIRST_VERSION="${1:?安定版タグが無いときの次期バージョンを指定すること（例: 0.1.0）}"
 PUBLISHED_LIST="${2:-}"
+BASE="${BASE_REF:-HEAD}"
+if ! git rev-parse --verify -q "$BASE" >/dev/null; then
+  echo "::error::採番の基準 $BASE が無い。呼ぶ側で先に fetch する" >&2
+  exit 2
+fi
 
-# 候補にするタグ。HEAD から辿れるもので、一覧が渡されていればその中にあるものに限る
+# 候補にするタグ。基準から辿れるもので、一覧が渡されていればその中にあるものに限る。
+# 基準は環境変数 BASE_REF で、既定は HEAD。
+# prerelease.yml は取り直した origin/master を渡す。checkout した後に master が進み、
+# その先で正式版が公開されたとき、HEAD を基準にするとその正式版が候補から外れ、
+# それより古い X.Y.Z-testN を後から出す
 candidate_tags() {
   if [ -n "$PUBLISHED_LIST" ]; then
-    git tag --merged HEAD | grep -xFf "$PUBLISHED_LIST" || true
+    git tag --merged "$BASE" | grep -xFf "$PUBLISHED_LIST" || true
   else
-    git tag --merged HEAD
+    git tag --merged "$BASE"
   fi
 }
 

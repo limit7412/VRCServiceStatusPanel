@@ -193,8 +193,11 @@ jobs:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ runner.temp }}/deploy-inputs
           # environment prod に required reviewers を置くと、承認までこのジョブの後で待つ。
-          # 一日で消すと、承認が遅れたときに deploy ジョブが受け取れない
-          retention-days: 7
+          # そのあいだ deploy ジョブは始まっておらず、artifact が先に消えると、承認の後で
+          # 受け取れずに落ちる。起こした側は承認待ちで手を離しているので、正式版の実行は
+          # 緑のまま prod が出ない。environment の承認待ちの上限（三十日）まで残す。
+          # リポジトリの上限を超える指定は upload-artifact が上限へ丸める
+          retention-days: 30
           if-no-files-found: error
 
   deploy:

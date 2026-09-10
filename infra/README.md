@@ -562,6 +562,8 @@ OIDC で交換したトークンで `pulumi stack ls` を打つと `limit7412/de
 `id-token: write` はジョブ全体に効き、そのジョブで動くどのプロセスも `ACTIONS_ID_TOKEN_REQUEST_TOKEN` で OIDC トークンを発行できる。
 認証のステップより前にある `npm ci` や `build.sh` が起こす docker も、その気になれば AWS と Pulumi Cloud に入れるトークンを取れる。
 実物の `deploy.yml` はビルドと依存の取得を `id-token` の無いジョブで済ませ、`bootstrap.zip` と `infra` の `node_modules` を artifact で `pulumi up` のジョブへ渡す。
+その artifact は三十日残す。
+`prod` に required reviewers を掛けると、承認まで `pulumi up` のジョブは始まらず、先に消えると承認の後で受け取れない。
 下の例は並びの理由を示すために一つのジョブに並べた形で、実物とはそこが違う。
 
 ```yaml

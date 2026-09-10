@@ -186,8 +186,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          # 採番は master の先端から辿れるタグを見る。checkout した後に master が進み、
+          # その先で正式版が公開されたとき、手元の HEAD を基準にするとその正式版が
+          # 候補から外れ、それより古い X.Y.Z-testN を後から出す
+          BASE_REF: origin/master
         run: |
           set -euo pipefail
+          # 採番の基準にする master の先端と、そこに打たれたタグを取り直す
+          git fetch --no-recurse-submodules origin \
+            '+refs/heads/master:refs/remotes/origin/master' '+refs/tags/*:refs/tags/*'
           TIP=$(git rev-parse HEAD)
           NUM='(0|[1-9][0-9]*)'
           PATTERN="^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$"
@@ -256,14 +263,16 @@ jobs:
             fi
           fi
 
-          # 続ける版に zip が無ければ、その版がまだ出せるものかを、先端で確かめる。
+          # 続ける版が、まだ出せるものかを先端で確かめる。zip が付いていても確かめる。
+          # 競合を見つけて消そうとしたリリースとタグが、消しきれずに zip 付きで残ることがあり、
+          # zip があるものを完了と見なすと、正式版より古いプレリリースがそのまま残る。
           # 前の試行が競合を見つけて打ったタグを消そうとし、消せずに落ちたとき、そのタグは
           # 残ったまま記録には無く、再実行はそれを続けようとする。続けるあいだに正式版や
           # 次の系列が公開されたときも同じで、どちらもその版は公開済みの最新より古い。
           # そのタグを手元から外して先端で決め直し、同じ版が出なければ古い。
           # リリースが無ければ（人は触っていない）作りかけのタグなので消し、先端から決め直す。
           # リリースがあれば人が触っているので、止める
-          if [ "$MODE" != new ] && ! has_asset "$VERSION"; then
+          if [ "$MODE" != new ]; then
             git tag -d "$VERSION" >/dev/null
             .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
             EXPECTED=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
@@ -354,6 +363,8 @@ jobs:
           MODE: ${{ steps.version.outputs.mode }}
           VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ steps.version.outputs.sha }}
+          # determine version と同じ基準で採番する
+          BASE_REF: origin/master
         run: |
           set -euo pipefail
           PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
@@ -364,7 +375,8 @@ jobs:
           # 第一引数に自分が打ったタグを渡すと、取り直した後にそれを手元から外して決める。
           # 外さないと、番号の重複を避ける計算がそのタグを数え、必ず次の番号が出る
           decide() {
-            git fetch --no-recurse-submodules origin '+refs/tags/*:refs/tags/*'
+            git fetch --no-recurse-submodules origin \
+              '+refs/heads/master:refs/remotes/origin/master' '+refs/tags/*:refs/tags/*'
             if [ -n "${1:-}" ]; then
               git tag -d "$1" >/dev/null
             fi
@@ -373,7 +385,9 @@ jobs:
           }
 
           # リリースが無ければ作り、あれば zip を足す。
-          # 下書きは人が作ったものなので、勝手に公開せず止める
+          # 下書きも、プレリリースでない（正式版として公開された）ものも、人が作ったものなので
+          # 勝手に触らず止める。X.Y.Z-testN を正式版として公開してしまったときに、
+          # そこへ zip を付けて通知まで走らせると、test 版が正式版として配られる
           publish() {
             local json
             json=$(.github/scripts/release-json.sh "$1")
@@ -384,6 +398,10 @@ jobs:
             fi
             if [ "$(printf '%s' "$json" | jq -r '.draft')" = true ]; then
               echo "::error::リリース $1 は下書きで残っている。人が作ったものなので触らない。公開するか消してから流し直す" >&2
+              return 1
+            fi
+            if [ "$(printf '%s' "$json" | jq -r '.prerelease')" != true ]; then
+              echo "::error::リリース $1 はプレリリースではなく公開されている。$1 は test 版の形なので、正式版として配ってはいけない。そのリリースを消すか、プレリリースに直してから流し直す" >&2
               return 1
             fi
             gh release upload "$1" ./*.zip --clobber
