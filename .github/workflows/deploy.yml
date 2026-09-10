@@ -254,7 +254,7 @@ jobs:
             while IFS= read -r FILE; do
               [ -n "$FILE" ] || continue
               case "$FILE" in
-                backend/*|infra/*|web/*|.github/workflows/deploy.yml) RELEVANT=true ;;
+                backend/*|infra/*|.github/workflows/deploy.yml) RELEVANT=true ;;
               esac
             done < <(git diff --name-only --no-renames "$ACTUAL" "$MASTER")
             if [ "$RELEVANT" = true ]; then
