@@ -85,7 +85,6 @@ handler 名にも同じ事情がある。
 | `src/roles.ts` | 実行時のロール |
 | `src/compute.ts` | Lambda、ロググループ、Scheduler（仕様書 5.1） |
 | `src/page.ts` | 確認用 HTML ページを配信バケットへ置く（仕様書 6.1） |
-| `assets/index.html` | そのページの中身 |
 
 ## 何を作るか
 
@@ -113,7 +112,8 @@ CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 ### 確認用ページ
 
 配信バケットの `index.html` に置く一枚の HTML である（仕様書 6.1）。
-中身は `assets/index.html` にあり、`src/page.ts` がそれを R2 へ上げる。
+中身はリポジトリ直下の `web/index.html` にあり、`src/page.ts` がそれを R2 へ上げる。
+`infra/` は Pulumi の定義だけを置く場所なので、配るものはここへ持ち込まない。
 Cloudflare のプロバイダにオブジェクトを置くリソースが無いので、AWS プロバイダの向き先を R2 の S3 互換エンドポイントへ変えて使う。
 鍵は集約サーバーへ渡すものと同じ一組である。
 
@@ -128,7 +128,7 @@ HTML に書いてある値と食い違ったときは `pulumi up` が警告を�
 
 ```
 mkdir -p /tmp/page/v1
-cp assets/index.html /tmp/page/
+cp ../web/index.html /tmp/page/
 curl -s "$(pulumi stack output deliveryUrl)" > /tmp/page/v1/status.json
 python3 -m http.server -d /tmp/page 8080
 ```

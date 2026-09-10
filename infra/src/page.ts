@@ -15,7 +15,10 @@ import { publicBucket } from "./delivery";
 // 集約サーバーに HTML を生成させると、生成の不具合で写しと配信物が食い違い、
 // 確認のためのページが確認対象と違うものを見せることになる。
 
-const HTML_PATH = path.join(__dirname, "..", "assets", "index.html");
+// 配信するページの中身はリポジトリ直下の web/ にある。
+// infra/ は Pulumi の定義だけを置く場所なので、配るものはここへ持ち込まない。
+// backend の zip を ../backend から取るのと同じ形である（src/compute.ts）。
+const HTML_PATH = path.join(__dirname, "..", "..", "web", "index.html");
 const KEY = "index.html";
 
 // R2 は S3 互換 API を持つが、Cloudflare プロバイダにオブジェクトを置く
@@ -69,7 +72,7 @@ function renderPage(): string {
         }
         if (written[1] !== expected) {
             pulumi.log.warn(
-                `assets/index.html の ${tag}-src のハッシュが中身と合っていない。` +
+                `web/index.html の ${tag}-src のハッシュが中身と合っていない。` +
                     `配るものは直したが、手元で開くために ${expected} へ貼り替えること。`,
             );
             html = html.replace(written[1], expected);
