@@ -84,6 +84,8 @@ handler 名にも同じ事情がある。
 | `src/functions.ts` | 関数の一覧。増やすときはここ |
 | `src/roles.ts` | 実行時のロール |
 | `src/compute.ts` | Lambda、ロググループ、Scheduler（仕様書 5.1） |
+| `src/page.ts` | 確認用 HTML ページを配信バケットへ置く（仕様書 6.1） |
+| `assets/index.html` | そのページの中身 |
 
 ## 何を作るか
 
@@ -92,6 +94,7 @@ handler 名にも同じ事情がある。
 | 配信バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-public`） | `cloudflare.R2Bucket` | 6 |
 | 内部バケット（既定 `qazx7412-vrc-service-status-panel-<スタック名>-state`） | `cloudflare.R2Bucket` | 6 |
 | R2 の S3 互換トークン | `cloudflare.AccountToken` | 9 |
+| 確認用 HTML ページ（配信バケットの `index.html`） | `aws.s3.BucketObject` | 6.1 |
 | 集約サーバー | `aws.lambda.Function` | 5.1 |
 | ロググループと実行ロール | `aws.cloudwatch.LogGroup` / `aws.iam.Role` | — |
 | 60 秒間隔の起動 | `aws.scheduler.Schedule` | 5.1 |
@@ -106,6 +109,29 @@ CLI で作ってあり、中身は `docs/aws-oidc.md` にある。
 
 カスタムドメインと Cache Rules は作らない。
 理由はどちらも下の「手で行う作業」にある。
+
+### 確認用ページ
+
+配信バケットの `index.html` に置く一枚の HTML である（仕様書 6.1）。
+中身は `assets/index.html` にあり、`src/page.ts` がそれを R2 へ上げる。
+Cloudflare のプロバイダにオブジェクトを置くリソースが無いので、AWS プロバイダの向き先を R2 の S3 互換エンドポイントへ変えて使う。
+鍵は集約サーバーへ渡すものと同じ一組である。
+
+ページは外部から何も読み込まない。
+script も style も HTML に含め、CSP のハッシュで許可する。
+そのハッシュは `src/page.ts` が中身から計算し直して差し込むので、配るものは常に合っている。
+HTML に書いてある値と食い違ったときは `pulumi up` が警告を出す。
+手元でファイルを開くときに使われるのは書いてあるほうなので、警告が出たら貼り替える。
+
+手元で見るには、同じ階層に `v1/status.json` を置いて HTTP で配る。
+`file://` では fetch が同一オリジンにならない。
+
+```
+mkdir -p /tmp/page/v1
+cp assets/index.html /tmp/page/
+curl -s "$(pulumi stack output deliveryUrl)" > /tmp/page/v1/status.json
+python3 -m http.server -d /tmp/page 8080
+```
 
 ### 止まったことを知らせる経路
 
@@ -832,7 +858,8 @@ Pulumi の Cloudflare プロバイダは同じ Terraform プロバイダを包�
 
 **Cache Rules を置く。**
 配信 JSON は `.json` なので、既定ではキャッシュの対象に入らない（仕様書 6）。
-ゾーンの Cache Rules で、配信ホストの `/v1/` 以下を対象へ入れる。
+確認用ページの `index.html` も、既定の対象に入る拡張子ではない（仕様書 6.1）。
+ゾーンの Cache Rules で、配信ホストの `/v1/` 以下と `/index.html` を対象へ入れる。
 
 ダッシュボードなら Caching → Cache Rules → Create rule。
 API なら entrypoint をまとめて置き換える。
@@ -853,8 +880,8 @@ curl -X PUT \
   "rules": [
     {
       "ref": "cache_status_feed",
-      "description": "v1 以下をキャッシュし、TTL はオブジェクトに従う",
-      "expression": "(http.host in {\"vrc-status.oxymoron.link\" \"vrc-status-dev.oxymoron.link\"} and starts_with(http.request.uri.path, \"/v1/\"))",
+      "description": "v1 以下と確認用ページをキャッシュし、TTL はオブジェクトに従う",
+      "expression": "(http.host in {\"vrc-status.oxymoron.link\" \"vrc-status-dev.oxymoron.link\"} and (starts_with(http.request.uri.path, \"/v1/\") or http.request.uri.path eq \"/index.html\"))",
       "action": "set_cache_settings",
       "action_parameters": {
         "cache": true,
@@ -877,6 +904,7 @@ curl -H "Authorization: Bearer $cloudflare_token" \
 
 `edge_ttl` は `respect_origin` にする。
 仕様書 6 の「オブジェクトの `Cache-Control` に従い 30 秒」がこれにあたる。
+確認用ページは同じ規則で 300 秒になる。オブジェクトごとの `Cache-Control` に従うので、規則を分ける必要は無い。
 `override_origin` で 30 秒を書くことはできない。
 Edge Cache TTL の下限が Free で 2 時間、Pro で 1 時間あり、Business 以上でないと 30 秒を指定できない。
 
