@@ -192,9 +192,13 @@ jobs:
           BASE_REF: origin/master
         run: |
           set -euo pipefail
-          # 採番の基準にする master の先端と、そこに打たれたタグを取り直す
+          # 採番の基準にする master の先端と、そこに打たれたタグを取り直し、作業ツリーも
+          # そこへ進める。checkout してから master が進むことがあり、基準だけを新しくすると、
+          # 新しい先端を見て決めた最新の番号を、古い内容に付けて出すことになる。
+          # 出す内容も採番も、取り直した先端に揃える（仕様書 9.2 の「走った時点の先端」）
           git fetch --no-recurse-submodules origin \
             '+refs/heads/master:refs/remotes/origin/master' '+refs/tags/*:refs/tags/*'
+          git checkout -q --detach origin/master
           TIP=$(git rev-parse HEAD)
           NUM='(0|[1-9][0-9]*)'
           PATTERN="^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$"

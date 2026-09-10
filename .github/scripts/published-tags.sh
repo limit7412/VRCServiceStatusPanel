@@ -18,7 +18,8 @@
 #   - build ジョブが終わっていなければ、終わるまで待って読み直す
 #   - build ジョブがどの試行でもタグの検査で落ちていれば、拒まれたリリース（形が違うか、
 #     先端でない）で、数えない。検査のステップは通信をしないので、その失敗は拒否に限る。
-#     どれかの試行で通っていれば、公開の時点では正しく、下の「止める」に入る
+#     どれかの試行で通っていれば、公開の時点では正しく、下の「止める」に入る。
+#     検査が一度も実行されていない（その前のステップで落ちた）ときも、拒まれたか分からないので止める
 #   - それ以外で build ジョブが成功していない（検査の後で落ちた、取り消された）か、
 #     成功しているのに zip が無い（後から消された）なら、止める。
 #     数えないまま進むと、そのリリースより古い版を後から出す。直すか消すまで採番しない
@@ -75,25 +76,38 @@ while :; do
       echo "::error::$TAG の release.yml の実行 $RUN_ID は成功しているのに、リリースに zip が無い。zip を戻すかリリースを消すまで採番しない" >&2
       exit 1
     fi
-    # 拒まれたリリース（形が違うか、先端でない）は数えない。
+    # 検査のステップの結論を、すべての試行について見る。
     # 検査のステップは通信をしない（fetch は前のステップ）ので、その失敗は拒否に限る。
-    # ただし、どの試行かで検査が通っていれば、公開の時点では先端だった正しいリリースで、
-    # その後の build の失敗と、master が進んでからの再実行で検査が落ちただけである。
-    # 最新の試行だけを見ると、それを拒まれたものと取り違えて数えず、それより古い版を出す
+    #   - どれかの試行で通っていれば、公開の時点では先端だった正しいリリースである。
+    #     その後の build の失敗と、master が進んでからの再実行で検査が落ちただけなので、
+    #     直すか消すまで採番を止める。最新の試行だけを見ると、これを拒まれたものと
+    #     取り違えて数えず、それより古い版を出す
+    #   - 通った試行が無く、落ちた試行があれば、拒まれたリリース（形が違うか、先端でない）。数えない
+    #   - どちらも無いのは、検査が一度も実行されていない場合である。前のステップ（fetch）が
+    #     落ちた、取り消された、などで、拒まれたかどうかは分からない。数えずに進むと、
+    #     zip の無い正しい正式版より古い版を出すので、止める
     ATTEMPTS=$(gh run view "$RUN_ID" --json attempt --jq '.attempt')
     VERIFIED=false
+    REJECTED=false
     for K in $(seq 1 "$ATTEMPTS"); do
-      PASSED=$(gh run view "$RUN_ID" --attempt "$K" --json jobs \
-        --jq "[.jobs[] | select(.name == \"$BUILD_JOB\") | .steps[] | select(.name == \"$VERIFY_STEP\" and .conclusion == \"success\")] | length")
-      if [ "$PASSED" -gt 0 ]; then
+      CONCLUSIONS=$(gh run view "$RUN_ID" --attempt "$K" --json jobs \
+        --jq ".jobs[] | select(.name == \"$BUILD_JOB\") | .steps[] | select(.name == \"$VERIFY_STEP\") | .conclusion")
+      if printf '%s\n' "$CONCLUSIONS" | grep -qx success; then
         VERIFIED=true
         break
       fi
+      if printf '%s\n' "$CONCLUSIONS" | grep -qx failure; then
+        REJECTED=true
+      fi
     done
-    if [ "$VERIFIED" = false ]; then
+    if [ "$VERIFIED" = true ]; then
+      echo "::error::$TAG の release.yml の実行 $RUN_ID はタグの検査を通った後で落ちている。再実行して zip を付けるか、リリースとタグを消すまで採番しない" >&2
+      exit 1
+    fi
+    if [ "$REJECTED" = true ]; then
       continue
     fi
-    echo "::error::$TAG の release.yml の実行 $RUN_ID はタグの検査を通った後で落ちている。再実行して zip を付けるか、リリースとタグを消すまで採番しない" >&2
+    echo "::error::$TAG の release.yml の実行 $RUN_ID は、タグの検査まで進まずに落ちている。拒まれたのかどうか分からないので採番しない。再実行して zip を付けるか、リリースとタグを消す" >&2
     exit 1
   done < <(jq -r --arg pkg "$PACKAGE_NAME" --arg pat "$TAG_PATTERN" '
       .[] | select(.draft | not) | . as $r
