@@ -85,13 +85,15 @@ gh workflow run deploy.yml --ref master \
   -f "stack=$STACK" -f "expected_sha=$EXPECTED_SHA" -f "dispatch_id=$DISPATCH_ID"
 echo "deploy.yml を master の ref で起こした（stack=$STACK、expected_sha=${EXPECTED_SHA:-なし}、dispatch_id=$DISPATCH_ID）"
 
+# 一覧を読めなかったときは空と同じに扱い、残りの回数で読み直す。
+# 一度の失敗で落とすと、起こした実行が動いているのに、単発の読み取りの失敗で取り消してしまう
 for _ in $(seq 1 12); do
   sleep 5
-  RUN_ID=$(find_run)
+  RUN_ID=$(find_run || true)
   [ -n "$RUN_ID" ] && break
 done
 if [ -z "$RUN_ID" ]; then
-  echo "::error::起こした deploy の実行が一分たっても見つからない。Actions の deploy を見る" >&2
+  echo "::error::起こした deploy の実行が一分たっても見つからない（一覧を読めなかった場合も含む）。Actions の deploy で [$DISPATCH_ID] を探す" >&2
   exit 1
 fi
 echo "deploy の実行: https://github.com/$GH_REPO/actions/runs/$RUN_ID"

@@ -65,7 +65,17 @@ while :; do
         WAIT_FOR="$TAG（公開の直後で release.yml の実行がまだ無い）"
         break
       fi
-      continue
+      # 実行が無いまま五分を過ぎたもの。
+      # X.Y.Z-testN は prerelease.yml が GITHUB_TOKEN で作るので release イベントが起きず、
+      # 実行が無いのが普通である。zip が無いのは途中で落ちた自動のプレリリースで、数えない。
+      # 正式版は人が公開するので実行が作られる。無いのは、Actions かワークフローが
+      # 止まっていたあいだに公開された場合で、zip は後からも付かない。
+      # 数えずに進むと、その正式版より古い X.Y.Z-testN を出すので、止める
+      case "$TAG" in
+        *-test*) continue ;;
+      esac
+      echo "::error::正式版 $TAG のリリースに zip が無く、release.yml の実行も無い。release.yml を手で流して zip を付けるか、そのリリースとタグを消すまで採番しない" >&2
+      exit 1
     fi
     gh run view "$RUN_ID" --json jobs --jq ".jobs[] | select(.name == \"$BUILD_JOB\")" > "$JOB"
     if [ ! -s "$JOB" ] || [ "$(jq -r '.status' "$JOB")" != completed ]; then

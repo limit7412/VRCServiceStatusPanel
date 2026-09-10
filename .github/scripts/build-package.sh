@@ -37,7 +37,16 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 
 cd "$PACKAGE_DIR"
 
-PACKAGE_NAME="$(jq -r '.name' package.json)"
+# パッケージ名（VPM の ID）。zip の名前にも使い、prerelease.yml と release.yml が
+# 同じ名前で資材を探す。VPM ではディレクトリ名と一致するので、それと突き合わせる。
+# jq は name が無いか null でも「null」を出して成功するので、値そのものを見る。
+# 通ると、名前の無い manifest を含む null-<版>.zip がそのまま公開される
+PACKAGE_NAME="$(jq -r '.name // empty' package.json)"
+EXPECTED_NAME="$(basename "$PACKAGE_DIR")"
+if [ "$PACKAGE_NAME" != "$EXPECTED_NAME" ]; then
+  echo "::error::package.json の name が「${PACKAGE_NAME:-（無い）}」で、ディレクトリ名「$EXPECTED_NAME」と違う。VPM では一致させる" >&2
+  exit 1
+fi
 
 # package.json の version はリリース時にタグから上書きする運用で、
 # リポジトリ上の値は起点に使わない（仕様書 9.2）。渡された版を書き込む。
