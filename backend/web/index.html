@@ -14,7 +14,7 @@
          書き換えたまま貼り替え忘れると pulumi up が止まる。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'self'; script-src 'sha256-JuCCNG68VxmKiECHY17skx1xgKuwIdGNOVe9nzdqokg='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; connect-src 'self'; script-src 'sha256-2jQJxQEjbk2Yyke3qrNcaT7AkWCKaxLEvQ3izEIRR04='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
     />
     <title>関連サービスの状態</title>
     <style>
@@ -221,8 +221,11 @@
         // 更新が止まったと見なす間隔（仕様書 6、8.3）。ワールド側と同じ判定にする。
         var STALE_SECONDS = 300;
 
-        // 仕様書 3.1 の四段階と、仕様書 4 の source。
-        var LEVELS = [0, 1, 2, 3];
+        // 仕様書 3.1 の四段階。level が決まれば label も決まる。
+        // 添字がそのまま level なので、対応の検査にも使う。
+        var LABELS = ["Operational", "Degraded", "Major Outage", "Unknown"];
+
+        // 仕様書 4 の source。
         var SOURCES = ["official", "synthetic"];
 
         var FEED_URL = "v1/status.json";
@@ -349,13 +352,17 @@
         // level と source は型だけでなく値も見る。どちらも表示の分岐に使うので、
         // 定義の外の値が来ると黙って別の意味に化ける。level 99 は色が引けずに
         // Unknown と同じ灰色になり、source の綴りが違えば「推定」が消える。
+        //
+        // label は level と組で見る。level が範囲の外なら添字が外れて弾かれ、
+        // level 0 に「Major Outage」のような食い違いも弾かれる。
+        // 緑の点と障害の表示が同じ行に並ぶと、壊れた配信内容が正常な状態に見える。
         function isService(service) {
           return (
             service !== null &&
             typeof service === "object" &&
             typeof service.name === "string" &&
-            LEVELS.indexOf(service.level) !== -1 &&
-            typeof service.label === "string" &&
+            typeof service.level === "number" &&
+            service.label === LABELS[service.level] &&
             typeof service.note === "string" &&
             SOURCES.indexOf(service.source) !== -1
           );
@@ -413,9 +420,12 @@
           }
         }
 
-        // ブラウザの写しではなく、ワールドが読むのと同じ経路の応答を見たい。
-        // CDN のキャッシュ（30 秒）はそのまま効く。
-        fetch(FEED_URL, { cache: "no-store" })
+        // 取り方は既定のままにする。
+        // 見せたいのはワールドが読むのと同じ URL を同じキャッシュで通した応答で、
+        // 配信 JSON の Cache-Control は 30 秒なので、写しもそれだけで切れる。
+        // no-store を指定すると、ブラウザによっては要求に再検証の指示が付き、
+        // CDN の写しを飛ばして取り直すことになる（仕様書 6.1）。
+        fetch(FEED_URL)
           .then(function (response) {
             if (response.status === 404) {
               // 集約サーバーより先にこのページだけを置いた段階がこれにあたる。
