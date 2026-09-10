@@ -14,7 +14,7 @@
          書き換えたまま貼り替え忘れると pulumi up が止まる。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'self'; script-src 'sha256-phG4tcM6BVMhKtSxtvfxPvxRlQME/FhV97WzMDVIq1g='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; connect-src 'self'; script-src 'sha256-JuCCNG68VxmKiECHY17skx1xgKuwIdGNOVe9nzdqokg='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
     />
     <title>関連サービスの状態</title>
     <style>
@@ -221,6 +221,10 @@
         // 更新が止まったと見なす間隔（仕様書 6、8.3）。ワールド側と同じ判定にする。
         var STALE_SECONDS = 300;
 
+        // 仕様書 3.1 の四段階と、仕様書 4 の source。
+        var LEVELS = [0, 1, 2, 3];
+        var SOURCES = ["official", "synthetic"];
+
         var FEED_URL = "v1/status.json";
 
         var generated = document.getElementById("generated");
@@ -341,15 +345,19 @@
         // 使う項目だけを見る。型が違っても JavaScript は暗黙に変換して通すので、
         // 例外に頼ると「null（NaN 日前）」のような表示になり、本文も隠れる。
         // 表示に使わない項目（id、url、checked_unix）は見ない。
+        //
+        // level と source は型だけでなく値も見る。どちらも表示の分岐に使うので、
+        // 定義の外の値が来ると黙って別の意味に化ける。level 99 は色が引けずに
+        // Unknown と同じ灰色になり、source の綴りが違えば「推定」が消える。
         function isService(service) {
           return (
             service !== null &&
             typeof service === "object" &&
             typeof service.name === "string" &&
-            typeof service.level === "number" &&
+            LEVELS.indexOf(service.level) !== -1 &&
             typeof service.label === "string" &&
             typeof service.note === "string" &&
-            typeof service.source === "string"
+            SOURCES.indexOf(service.source) !== -1
           );
         }
 
