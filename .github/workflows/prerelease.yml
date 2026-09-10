@@ -315,19 +315,76 @@ jobs:
             echo "has_asset=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
+      - name: build package
+        if: steps.version.outputs.has_asset != 'true'
+        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
+
+      # 新しく決めた版は、公開の直前にもう一度、公開済みのタグと master の先端から決め直す。
+      # 決めてから zip を作るまでのあいだに正式版が公開されたり master が進んだりすると、
+      # 決めた版はその正式版より古く、また新しい番号を古い内容に付けることになる。
+      # どちらかが変わっていれば、出す先も版も揃え直して zip を作り直し、もう一度確かめる。
+      # 変わらなくなってからタグを打つ（下の publish）。
+      # ここでタグを打たないのは、打つ前に出す先を記録に残すためである（下の record）。
+      # 記録より後で出す先が変わると、公開の途中で落ちたときに再実行がそのタグを見つけられない。
+      # 続きを行う版（resume、existing）はタグが既にあるので、決め直さない
+      - name: settle the version and the target
+        id: settle
+        if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+          # determine version と同じ基準で採番する
+          BASE_REF: origin/master
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
+
+          for ATTEMPT in 1 2 3; do
+            # 採番は手元のタグとリリースの一覧を突き合わせる。checkout の後に打たれたタグ
+            # （同じコミットへの正式版など）は手元に無いので、一覧に入っていても数えられない
+            git fetch --no-recurse-submodules origin \
+              '+refs/heads/master:refs/remotes/origin/master' '+refs/tags/*:refs/tags/*'
+            .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt"
+            LATEST=$(.github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt")
+            TIP=$(git rev-parse origin/master)
+            if [ "$LATEST" = "$VERSION" ] && [ "$TIP" = "$SHA" ]; then
+              break
+            fi
+            if [ "$ATTEMPT" -eq 3 ]; then
+              echo "::error::三度決め直しても、公開済みのタグか master の先端が動き続けている。この実行では出さない。次の取り込みか、手で流し直す" >&2
+              exit 1
+            fi
+            echo "::notice::版を決めてから公開までのあいだに、公開済みのタグか master の先端が変わった。$VERSION（$SHA）ではなく $LATEST（$TIP）で作り直す"
+            SHA="$TIP"
+            # build-package.sh が package.json の version を書き換えているので、
+            # checkout では移れないことがある。作業ツリーごと合わせる（zip は untracked で残る）
+            git reset --hard "$SHA"
+            VERSION="$LATEST"
+            rm -f ./*.zip
+            .github/scripts/build-package.sh "$VERSION"
+          done
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "出す版とコミットが定まった: $VERSION（$SHA）"
+
       # 出すコミットを、この実行の artifact に記録する。再実行はこれを読んで、そこに
-      # 打たれたタグの続きを行う（上の restore）。公開の前に置くのは、タグを打った直後や
-      # 添付の途中で落ちたときも拾うためである。記録する前に落ちていれば、再実行は
-      # 記録が無いことで見分ける。
+      # 打たれたタグの続きを行う（上の restore）。タグを打つ前に置くので、公開の途中で
+      # 落ちても、再実行はそのコミットのタグを見つけて続けられる。
+      # 記録する前に落ちていれば、再実行は記録が無いことで見分ける。
       # タグが既に決まっている（resume、existing）ならタグ名も添える。新しく打つ場合は
       # 公開まで済ませてから、タグ名を添えた記録を別に置く（下の record the tag）。
-      # 前の試行の記録がそのまま使えるときは置き直さない。名前に試行番号を入れて上書きを避ける
+      # 名前に試行番号を入れるので、試行ごとに置いても上書きにならない。
+      # 前の試行の記録は残したまま、その試行が出す先を毎回置く。
+      # 再実行で出す先が変わる（前の試行がタグを打つ前に落ち、master が進んだ）ことがあり、
+      # 置き直さないと、打ったタグを次の試行が見つけられない
       - name: record the target for re-runs
-        if: steps.restore.outputs.recorded != 'true'
         env:
-          SHA: ${{ steps.version.outputs.sha }}
+          SHA: ${{ steps.settle.outputs.sha || steps.version.outputs.sha }}
           MODE: ${{ steps.version.outputs.mode }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.settle.outputs.version || steps.version.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/prerelease-record"
@@ -338,26 +395,17 @@ jobs:
           fi
 
       - name: upload the record
-        if: steps.restore.outputs.recorded != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: prerelease-target-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prerelease-record/target.txt
 
-      # release.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
-      - name: build package
-        if: steps.version.outputs.has_asset != 'true'
-        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
-
-      # 新しく決めた版は、公開済みのタグからもう一度決め直し、タグを打ち、リリースを作って
-      # zip を付けるところまでを一つのステップで行う。
-      # 決めてから公開までのあいだに正式版 X.Y.Z が公開されると、決めた X.Y.Z-testN は
-      # その正式版より古く、公開すると利用者に新しい test 版として取れない。
-      # 決め直しから公開までのあいだに他のステップを挟まず、公開した後にもう一度決め直して
-      # （自分のタグとリリースは外して）、同じ版が出れば確定する。
-      # 違えば、そのあいだに正式版が公開されている。作ったリリースとタグを消してやり直す。
-      # 三度やっても定まらなければ、公開したものを残さずに止める。
-      # 続きを行う版（resume、existing）はタグが既にあるので、決め直さずに公開だけを続ける
+      # タグを打ち、リリースを作り、zip を付ける。
+      # 新しく決めた版は、公開した後にもう一度採番し（自分のタグは手元から外して）、
+      # 同じ版が出れば確定する。違えば、そのあいだに正式版が公開されている。
+      # 作ったリリースとタグを消し、状態を元に戻して止める。次の取り込みか再実行が作り直す。
+      # 続きを行う版は、既にあるタグへリリースと zip を付けるだけで、古くなっていれば
+      # そのタグは前の実行か人が公開したものなので、消さずに残して止める
       - name: publish the pre-release
         id: publish
         if: steps.version.outputs.has_asset != 'true'
@@ -365,25 +413,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           MODE: ${{ steps.version.outputs.mode }}
-          VERSION: ${{ steps.version.outputs.version }}
-          SHA: ${{ steps.version.outputs.sha }}
-          # determine version と同じ基準で採番する
+          VERSION: ${{ steps.settle.outputs.version || steps.version.outputs.version }}
+          SHA: ${{ steps.settle.outputs.sha || steps.version.outputs.sha }}
           BASE_REF: origin/master
         run: |
           set -euo pipefail
           PACKAGE_NAME=$(jq -r '.name' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
 
-          # 採番は手元のタグとリリースの一覧を突き合わせる。checkout の後に打たれたタグ
-          # （同じコミットへの正式版など）は手元に無いので、一覧に入っていても数えられない。
-          # 決め直す前にタグを取り直す。
-          # 第一引数に自分が打ったタグを渡すと、取り直した後にそれを手元から外して決める。
+          # 採番し直す。自分が打ったタグは手元から外してから決める。
           # 外さないと、番号の重複を避ける計算がそのタグを数え、必ず次の番号が出る
           decide() {
             git fetch --no-recurse-submodules origin \
               '+refs/heads/master:refs/remotes/origin/master' '+refs/tags/*:refs/tags/*'
-            if [ -n "${1:-}" ]; then
-              git tag -d "$1" >/dev/null
-            fi
+            git tag -d "$VERSION" >/dev/null
             .github/scripts/published-tags.sh "$PACKAGE_NAME" "$RUNNER_TEMP/published-tags.txt" >&2
             .github/scripts/next-prerelease-version.sh "$FIRST_VERSION" "$RUNNER_TEMP/published-tags.txt"
           }
@@ -412,68 +454,30 @@ jobs:
             echo "リリース $1 に zip を足した"
           }
 
-          # 続きを行う版は、既にあるタグへリリースと zip を付けるだけ。
-          # 付けた後にもう一度決め直し、そのあいだに正式版が出ていたら止める。
-          # 新しく決めた版と違って、このタグは前の実行か人が公開したものなので、消さずに残す
-          if [ "$MODE" != new ]; then
-            publish "$VERSION"
-            CHECK=$(decide "$VERSION")
-            if [ "$CHECK" != "$VERSION" ]; then
-              echo "::error::プレリリース $VERSION に zip を付けるあいだに公開済みのタグが変わった（決め直すと $CHECK）。$VERSION は公開済みの最新より古い。そのリリースとタグを消すか、$CHECK を手で作る" >&2
-              exit 1
-            fi
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          ATTEMPT=0
-          while :; do
-            ATTEMPT=$(( ATTEMPT + 1 ))
-            LATEST=$(decide)
-            # decide は origin/master も取り直す。そのあいだに master が進んでいたら、
-            # 出す内容もそこへ揃える。版だけを新しくすると、最新の番号を古い内容に付ける
-            TIP=$(git rev-parse origin/master)
-            if [ "$LATEST" != "$VERSION" ] || [ "$TIP" != "$SHA" ]; then
-              echo "::notice::版を決めてから公開までのあいだに、公開済みのタグか master の先端が変わった。$VERSION（$SHA）ではなく $LATEST（$TIP）で作り直す"
-              SHA="$TIP"
-              # build-package.sh が package.json の version を書き換えているので、
-              # checkout では移れないことがある。作業ツリーごと合わせる（zip は untracked で残る）
-              git reset --hard "$SHA"
-              VERSION="$LATEST"
-              rm -f ./*.zip
-              .github/scripts/build-package.sh "$VERSION"
-            fi
-
-            # 決め直しの fetch で同じ名前のタグが手元に来ていることは無い（採番が使われていない
-            # 番号を出す）が、来ていても止まらないよう -f で打ち、push の拒否で気づく
+          if [ "$MODE" = new ]; then
             git tag -f "$VERSION" "$SHA"
             if ! git push origin "refs/tags/$VERSION"; then
-              # 同じ名前のタグが先に打たれている。取り直して決め直す
+              echo "::error::タグ $VERSION を push できない。同じ名前のタグが先に打たれている。次の取り込みか再実行で決め直す" >&2
               git tag -d "$VERSION"
-              if [ "$ATTEMPT" -ge 3 ]; then
-                echo "::error::タグ $VERSION を push できない。三度決め直しても同じなので止める" >&2
-                exit 1
-              fi
-              continue
-            fi
-
-            publish "$VERSION"
-
-            # 公開した後にもう一度。自分のタグを手元から外して決め直し、同じなら確定
-            CHECK=$(decide "$VERSION")
-            if [ "$CHECK" = "$VERSION" ]; then
-              break
-            fi
-            echo "::notice::プレリリース $VERSION を公開するあいだに公開済みのタグが変わった（決め直すと $CHECK）。作ったリリースとタグを消してやり直す"
-            gh release delete "$VERSION" --yes
-            git push origin ":refs/tags/$VERSION"
-            if [ "$ATTEMPT" -ge 3 ]; then
-              echo "::error::三度やり直しても版が定まらない。止める" >&2
               exit 1
             fi
-          done
+          fi
+
+          publish "$VERSION"
+
+          CHECK=$(decide "$VERSION")
+          if [ "$CHECK" != "$VERSION" ]; then
+            if [ "$MODE" = new ]; then
+              echo "::error::プレリリース $VERSION を公開するあいだに公開済みのタグが変わった（決め直すと $CHECK）。作ったリリースとタグを消して止める。次の取り込みか再実行が作り直す" >&2
+              gh release delete "$VERSION" --yes
+              git push origin ":refs/tags/$VERSION"
+            else
+              echo "::error::プレリリース $VERSION に zip を付けるあいだに公開済みのタグが変わった（決め直すと $CHECK）。$VERSION は公開済みの最新より古い。そのリリースとタグを消すか、$CHECK を手で作る" >&2
+            fi
+            exit 1
+          fi
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "プレリリース $VERSION をコミット $SHA で公開した"
           mkdir -p "$RUNNER_TEMP/prerelease-record"
           echo "$SHA $VERSION" > "$RUNNER_TEMP/prerelease-record/target.txt"

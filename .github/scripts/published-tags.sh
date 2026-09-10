@@ -14,21 +14,24 @@
 # release.yml が公開の後で付ける。公開から添付までのあいだにこれを読むと、そのタグは
 # zip が無いとして一覧から外れ、採番がそれより古い版を出す。正式版なら SemVer で正式版より
 # 古い X.Y.Z-testN、手で始めた系列なら旧系列の版で、利用者は新しい test 版として取れない。
-# それを避けるため、zip の無いリリースがあれば、そのタグの release.yml の実行を見る。
+# それを避けるため、zip の無いリリースがあれば、そのタグの release.yml の実行をすべて見る。
+# 同じタグで実行が複数になる（リリースを消して作り直した）ことがあるので、最新の一件では足りない。
 #   - build ジョブが終わっていなければ、終わるまで待って読み直す
-#   - build ジョブがどの試行でもタグの検査で落ちていれば、拒まれたリリース（形が違うか、
-#     先端でない）で、数えない。検査のステップは通信をしないので、その失敗は拒否に限る。
-#     どれかの試行で通っていれば、公開の時点では正しく、下の「止める」に入る。
-#     検査が一度も実行されていない（その前のステップで落ちた）ときも、拒まれたか分からないので止める
-#   - それ以外で build ジョブが成功していない（検査の後で落ちた、取り消された）か、
-#     成功しているのに zip が無い（後から消された）なら、止める。
-#     数えないまま進むと、そのリリースより古い版を後から出す。直すか消すまで採番しない
+#   - どの実行のどの試行でもタグの検査で落ちていれば、拒まれたリリース（形が違うか、
+#     先端でない）で、数えない。検査のステップは通信をしないので、その失敗は拒否に限る
+#   - どれかで通っていれば、公開の時点では正しいリリースで、その後に落ちただけである。
+#     zip が無いので、直すか消すまで止める
+#   - 検査が一度も実行されていない（その前のステップで落ちた、取り消された）ときも、
+#     拒まれたか分からないので止める。数えないまま進むと、そのリリースより古い版を後から出す
 #   - 実行が無ければ、公開から五分のあいだは待つ。実行は公開の直後に作られるので、
-#     五分たっても無いものは待っても付かない（ワークフローを置く前のリリースや、
-#     prerelease.yml が GITHUB_TOKEN で作った失敗したプレリリース。後者は release
-#     イベントを起こさず、再実行で拾う）。数えない
+#     五分たっても無いものは待っても付かない。X.Y.Z-testN は prerelease.yml が
+#     GITHUB_TOKEN で作って release イベントを起こさないので数えず、正式版は止める
 # 実行全体ではなく build ジョブを見るのは、その後の prod デプロイが長く、それまで
 # 採番を止める理由が無いためである。
+#
+# タグの形とリリースの種別（X.Y.Z は正式版、X.Y.Z-testN はプレリリース）が食い違っていれば、
+# zip の有無にかかわらず止める。食い違ったものを数えると、release.yml が拒んで prod も
+# 出ていない版を起点に採番が進む。
 #
 # concurrency の群を release.yml と共有して直列にする形は採らない。
 # 群で待てる実行は一件で、後から来た実行が待っている実行を取り消す。
@@ -55,12 +58,29 @@ while :; do
   # gh api --paginate はページごとの配列を続けて出す。jq は配列ごとに処理するので、そのまま読める
   gh api --paginate "repos/$GH_REPO/releases" > "$RELEASES"
 
+  # タグの形とリリースの種別が合っているかを、先に全部見る。
+  # X.Y.Z は正式版として、X.Y.Z-testN はプレリリースとして公開されていなければならない。
+  # 食い違ったものは、下の一覧にも待つ対象の判定にも通り、正しい版として数えられてしまう。
+  # X.Y.Z をプレリリースとして公開すると、release.yml のタグ検査は落ちて prod も出ないのに、
+  # 次の自動の版はその先へ進む。人が直すまで採番しない
+  MISMATCH=$(jq -r --arg pat "$TAG_PATTERN" '
+      .[] | select(.draft | not) | . as $r
+      | select($r.tag_name | test($pat))
+      | select(if ($r.tag_name | test("-test[1-9][0-9]*$")) then ($r.prerelease | not) else $r.prerelease end)
+      | $r.tag_name' "$RELEASES" | tr '\n' ' ')
+  if [ -n "$MISMATCH" ]; then
+    echo "::error::タグの形とリリースの種別が食い違っている: $MISMATCH。X.Y.Z は正式版、X.Y.Z-testN はプレリリースとして公開する。直すまで採番しない" >&2
+    exit 1
+  fi
+
   WAIT_FOR=""
   while read -r TAG PUBLISHED_AT; do
     [ -n "$TAG" ] || continue
-    RUN_ID=$(gh run list --workflow release.yml --event release --branch "$TAG" --limit 1 \
-      --json databaseId --jq '.[0].databaseId // empty')
-    if [ -z "$RUN_ID" ]; then
+    # 同じタグの実行をすべて見る。リリースを消して同じタグで作り直すと実行が複数になり、
+    # 最新の一件だけでは、前の実行で検査が通っていた事実を見落とす
+    RUN_IDS=$(gh run list --workflow release.yml --event release --branch "$TAG" --limit 100 \
+      --json databaseId --jq '.[].databaseId')
+    if [ -z "$RUN_IDS" ]; then
       if [ "$PUBLISHED_AT" \> "$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)" ]; then
         WAIT_FOR="$TAG（公開の直後で release.yml の実行がまだ無い）"
         break
@@ -77,47 +97,51 @@ while :; do
       echo "::error::正式版 $TAG のリリースに zip が無く、release.yml の実行も無い。release.yml を手で流して zip を付けるか、そのリリースとタグを消すまで採番しない" >&2
       exit 1
     fi
-    gh run view "$RUN_ID" --json jobs --jq ".jobs[] | select(.name == \"$BUILD_JOB\")" > "$JOB"
-    if [ ! -s "$JOB" ] || [ "$(jq -r '.status' "$JOB")" != completed ]; then
-      WAIT_FOR="$TAG（release.yml の実行 $RUN_ID の build が終わっていない）"
-      break
-    fi
-    if [ "$(jq -r '.conclusion' "$JOB")" = success ]; then
-      echo "::error::$TAG の release.yml の実行 $RUN_ID は成功しているのに、リリースに zip が無い。zip を戻すかリリースを消すまで採番しない" >&2
-      exit 1
-    fi
-    # 検査のステップの結論を、すべての試行について見る。
-    # 検査のステップは通信をしない（fetch は前のステップ）ので、その失敗は拒否に限る。
-    #   - どれかの試行で通っていれば、公開の時点では先端だった正しいリリースである。
-    #     その後の build の失敗と、master が進んでからの再実行で検査が落ちただけなので、
-    #     直すか消すまで採番を止める。最新の試行だけを見ると、これを拒まれたものと
-    #     取り違えて数えず、それより古い版を出す
-    #   - 通った試行が無く、落ちた試行があれば、拒まれたリリース（形が違うか、先端でない）。数えない
-    #   - どちらも無いのは、検査が一度も実行されていない場合である。前のステップ（fetch）が
-    #     落ちた、取り消された、などで、拒まれたかどうかは分からない。数えずに進むと、
-    #     zip の無い正しい正式版より古い版を出すので、止める
-    ATTEMPTS=$(gh run view "$RUN_ID" --json attempt --jq '.attempt')
+
+    # すべての実行の、すべての試行の build ジョブを見て、次の三つを集める。
+    #   - まだ終わっていない build があるか（待つ）
+    #   - タグの検査を通った試行があるか。検査のステップは通信をしない（fetch は前のステップ）
+    #     ので、その成否は拒否かどうかに限る。通っていれば、公開の時点では先端だった
+    #     正しいリリースで、その後に落ちただけである。zip が無いので、直すか消すまで止める
+    #   - 検査が落ちた試行があるか。通った試行が無ければ、拒まれたリリース（形が違うか、
+    #     先端でない）で、数えない
+    # どれも無いのは、検査が一度も実行されていない場合である。前のステップ（fetch）が落ちた、
+    # 取り消された、などで、拒まれたかどうかは分からない。数えずに進むと、zip の無い
+    # 正しい正式版より古い版を出すので、止める
+    PENDING=""
     VERIFIED=false
     REJECTED=false
-    for K in $(seq 1 "$ATTEMPTS"); do
-      CONCLUSIONS=$(gh run view "$RUN_ID" --attempt "$K" --json jobs \
-        --jq ".jobs[] | select(.name == \"$BUILD_JOB\") | .steps[] | select(.name == \"$VERIFY_STEP\") | .conclusion")
-      if printf '%s\n' "$CONCLUSIONS" | grep -qx success; then
-        VERIFIED=true
-        break
-      fi
-      if printf '%s\n' "$CONCLUSIONS" | grep -qx failure; then
-        REJECTED=true
-      fi
+    for RUN_ID in $RUN_IDS; do
+      ATTEMPTS=$(gh run view "$RUN_ID" --json attempt --jq '.attempt')
+      for K in $(seq 1 "$ATTEMPTS"); do
+        gh run view "$RUN_ID" --attempt "$K" --json jobs \
+          --jq ".jobs[] | select(.name == \"$BUILD_JOB\")" > "$JOB"
+        [ -s "$JOB" ] || continue
+        if [ "$(jq -r '.status' "$JOB")" != completed ]; then
+          PENDING="$RUN_ID"
+          continue
+        fi
+        CONCLUSIONS=$(jq -r --arg step "$VERIFY_STEP" \
+          '.steps[] | select(.name == $step) | .conclusion' "$JOB")
+        if printf '%s\n' "$CONCLUSIONS" | grep -qx success; then
+          VERIFIED=true
+        elif printf '%s\n' "$CONCLUSIONS" | grep -qx failure; then
+          REJECTED=true
+        fi
+      done
     done
+    if [ -n "$PENDING" ] && [ "$VERIFIED" = false ]; then
+      WAIT_FOR="$TAG（release.yml の実行 $PENDING の build が終わっていない）"
+      break
+    fi
     if [ "$VERIFIED" = true ]; then
-      echo "::error::$TAG の release.yml の実行 $RUN_ID はタグの検査を通った後で落ちている。再実行して zip を付けるか、リリースとタグを消すまで採番しない" >&2
+      echo "::error::$TAG の release.yml はタグの検査を通っているのに、リリースに zip が無い。再実行して zip を付けるか、リリースとタグを消すまで採番しない" >&2
       exit 1
     fi
     if [ "$REJECTED" = true ]; then
       continue
     fi
-    echo "::error::$TAG の release.yml の実行 $RUN_ID は、タグの検査まで進まずに落ちている。拒まれたのかどうか分からないので採番しない。再実行して zip を付けるか、リリースとタグを消す" >&2
+    echo "::error::$TAG の release.yml は、タグの検査まで進まずに落ちている。拒まれたのかどうか分からないので採番しない。再実行して zip を付けるか、リリースとタグを消す" >&2
     exit 1
   done < <(jq -r --arg pkg "$PACKAGE_NAME" --arg pat "$TAG_PATTERN" '
       .[] | select(.draft | not) | . as $r
