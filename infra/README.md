@@ -522,7 +522,7 @@ OIDC プロバイダ、デプロイロール、実行時ロールの権限境界
 長い寿命の鍵を Secrets へ置かずに済む。
 
 ロールはリポジトリに対して一つで、`dev` と `prod` で同じものを使う。
-引けるのは既定で `master` への push に限る。
+引けるのは environment `dev` か `prod` を参照するジョブに限る（`docs/aws-oidc.md`）。
 
 ### 本体へ渡すもの
 
@@ -554,11 +554,17 @@ AWS 側も OIDC で入る。
 OIDC で交換したトークンで `pulumi stack ls` を打つと `limit7412/dev` と修飾して出るのに、
 `--stack dev` は `no stack named 'dev' found` で止まった（#41）。
 
-**資格情報を出す前に `npm ci` を済ませる。**
+**依存の取得は `id-token` を持たないジョブで済ませる。**
 どちらのアクションも、以降のステップから見える環境変数に資格情報を置く。
 `npm ci` をあとに回すと、依存パッケージのインストールスクリプトからデプロイロールの一時資格情報と `PULUMI_ACCESS_TOKEN` が読める。
 手元の `deploy.sh` が Cloudflare のトークンを `npm ci` の前で外しているのと同じ理由である。
-Pulumi CLI を入れる `pulumi/actions` も資格情報を要らないので、先へ寄せてある。
+同じジョブの中で先へ寄せるだけでは足りない。
+`id-token: write` はジョブ全体に効き、そのジョブで動くどのプロセスも `ACTIONS_ID_TOKEN_REQUEST_TOKEN` で OIDC トークンを発行できる。
+認証のステップより前にある `npm ci` や `build.sh` が起こす docker も、その気になれば AWS と Pulumi Cloud に入れるトークンを取れる。
+実物の `deploy.yml` はビルドと依存の取得を `id-token` の無いジョブで済ませ、`bootstrap.zip` と `infra` の `node_modules` を artifact で `pulumi up` のジョブへ渡す。
+その artifact は三十日残す。
+`prod` に required reviewers を掛けると、承認まで `pulumi up` のジョブは始まらず、先に消えると承認の後で受け取れない。
+下の例は並びの理由を示すために一つのジョブに並べた形で、実物とはそこが違う。
 
 ```yaml
 permissions:
@@ -626,6 +632,8 @@ Secrets に置くのは三つだけである。
 | `PULUMI_CONFIG_PASSPHRASE` | `Pulumi.<スタック名>.yaml` の暗号文を開ける |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare プロバイダ |
 
+VPM リスティングへの通知に使う `LISTING_DISPATCH_TOKEN` はデプロイには要らない（`docs/release.md`）。
+
 **Pulumi Cloud 側の下ごしらえが一つ要る。**
 GitHub Actions を OIDC issuer として登録する。
 登録しないと `pulumi/auth-actions` の交換が通らない。
@@ -646,13 +654,30 @@ yt-dlp の Layer を Pulumi が持っていたころのもので（仕様書 7�
 実体は `.github/workflows/deploy.yml` にある。
 上の並びをそのまま書いたものである。
 
-**手で起動したときだけ動く。**
-`master` への push では出さない。
-まだ一度もデプロイしていないので、押した覚えのない更新が走るほうが害が大きい。
-常時デプロイへ変えるなら `push: branches: [master]` を足す。
+起動は三つある（`docs/release.md`）。
 
-出す先のスタックは起動時に選ぶ。
-既定は `dev` である。
+| 起動 | 出す先 |
+| --- | --- |
+| 手で流す（`workflow_dispatch`、ref は `master`） | 入力で選ぶ。既定は `dev`。切り戻しは `ref` の入力に前のタグを入れる |
+| `deploy-dev.yml`（`master` への push） | `dev` |
+| `release.yml`（正式版の公開） | `prod` |
+
+`deploy-dev.yml` も `release.yml` も、`master` の ref で `workflow_dispatch` として起こし、終わるまで待つ（`.github/scripts/dispatch-deploy.sh`）。
+起こした実行が environment の承認待ちで止まったら、また承認待ちの実行の後ろで群の空きを待つ形になったら、待たずに終える。
+起こした側のジョブが取り消されたとき、また状態を読めないなど結果を見届けられずに落ちるときは、起こした実行も取り消す。
+状態の読み取りは三度まで試すので、API の一時的な不調では取り消さない。
+ジョブは六時間で打ち切られ、承認がそれより遅れると起こした側だけが失敗して食い違うためで、承認後の結果は `deploy.yml` の実行で見る。
+`workflow_call` で呼ばないのは、呼ばれたワークフローが呼んだ側のコミットの定義で動くためで、`master` の ref で起こせば定義も内容もその時点の先端になる（`docs/release.md`）。
+手順を一つに置くための分割で、契機ごとの判定（対象パスに触れたか、タグが `master` の先端を指すか）は起こす側にある。
+起こす側は期待するコミットを `expected_sha` で渡せ、こちらは checkout したものと比べる。
+
+ジョブは出す先と同じ名前の environment を参照する。
+手で流すときもその environment の規則が掛かり、`dev` も `prod` も `master` からしか流せない（`docs/release.md`）。
+
+`concurrency` の群は `deploy-<スタック名>` である。
+手で流したものも、`deploy-dev.yml` や `release.yml` が起こしたものも、同じスタックなら直列になる。
+起こした側には同じ名前の群を付けない。
+付けると、起こした側の実行が群を占めたまま、起こされた実行が同じ群の空きを待つ形になる。
 
 ### ロールの権限
 
@@ -705,8 +730,8 @@ AWS の OIDC プロバイダに指紋を渡していないのと同じ理由で�
 登録した直後は、どのトークン交換も拒む Deny のポリシーが一つだけ入っている。
 足すのではなく、これを差し替える形になる。
 
-Subject 違いで二つ要る。
-他の欄はどちらも同じである。
+Subject 違いで四つ要る。
+他の欄はどれも同じである。
 
 | 項目 | 値 |
 | --- | --- |
@@ -714,19 +739,34 @@ Subject 違いで二つ要る。
 | Token type | Personal |
 | Scope | `user:limit7412` |
 | Audience | `urn:pulumi:org:limit7412` |
-| Subject（新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master` |
-| Subject（古い形） | `repo:limit7412/VRCServiceStatusPanel:ref:refs/heads/master` |
+| Subject（`dev`、新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:dev` |
+| Subject（`dev`、古い形） | `repo:limit7412/VRCServiceStatusPanel:environment:dev` |
+| Subject（`prod`、新しい形） | `repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:prod` |
+| Subject（`prod`、古い形） | `repo:limit7412/VRCServiceStatusPanel:environment:prod` |
 
-**Subject が二つあるのは、GitHub がこの claim の形を移しているためである。**
+**形が二つあるのは、GitHub がこの claim の形を移しているためである。**
 いま届くトークンは、所有者とリポジトリの数値 ID を含む新しい形である。
 事情は `docs/aws-oidc.md` の「誰がロールを引けるか」にある。
 数値 ID は `gh api /repos/<owner>/<repo> --jq '"\(.owner.id) \(.id)"'` で引ける。
 
+**ref ではなく environment で絞るのは、`prod` へ出すワークフローがリリースの公開で動くためである。**
+`deploy.yml` のジョブは出す先と同じ名前の environment を参照し、そのトークンの `sub` は `environment:<名前>` になる。
+ブランチもタグも含まないので、`master` の ref の行では通らない。
+タグの ref を `*` で通す形にすると、write 権限を持つ者が任意のブランチにタグを打って `deploy.yml` を手で流すだけでトークンを引ける。
+どの ref からその environment を名乗れるかは、GitHub の environment の規則が決める（`docs/release.md`）。
+
 **Subject は `:*` で終わらせない。**
 公式の例は `repo:<owner>/<repo>:*` だが、それだとそのリポジトリのどのブランチ、どの PR のワークフローからでもトークンを引ける。
-AWS 側の信頼ポリシーも `master` の ref で動くワークフローに絞ってあるので、ここも揃える（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
-`sub` はイベントの種別を持たないため、どちらも push だけには絞れない。
-`master` 上の `workflow_dispatch` も同じ値になる。
+上の四つはどれも完全一致である。
+AWS 側の信頼ポリシーも同じ四つに絞ってあるので、ここも揃える（`docs/aws-oidc.md` の「誰がロールを引けるか」）。
+
+**既に `master` の ref の二つで登録してあるなら、二段で environment の四つに移す。**
+`prod` へ出すワークフローを置いた時点（2026 年 9 月）で、`dev` のスタックは `ref:refs/heads/master` の二つで動いていた。
+まず二つを残したまま environment の四つを足す（六つ）。
+environment を参照するワークフローが `master` に入り、`dev` デプロイが通ったら、`master` の ref の二つを消す。
+先に消すと、それまでの `master` の ref で動くワークフローが交換で止まり、足さずにワークフローを入れると新しいワークフローが止まる。
+コンソールなら同じ issuer のポリシーで Allow を足し、あとで減らす。
+REST API なら下の `PATCH` で並べて送る。
 
 REST API で行うなら三つを順に叩く。
 `<orgName>` は個人アカウントならユーザー名である。
@@ -754,12 +794,13 @@ PATCH /api/orgs/<orgName>/auth/policies/<policyId>
   "authorizedPermissions": null,
   "rules": {
     "aud": "urn:pulumi:org:limit7412",
-    "sub": "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:ref:refs/heads/master"
+    "sub": "repo:limit7412@19320218/VRCServiceStatusPanel@1346007387:environment:dev"
   }
 }
 ```
 
 `authorizedPermissions` は組織トークン向けの項目なので、personal では渡さない。
+残りの三つも `sub` だけを変えた同じ形で、四つを一つの配列に並べる。
 
 **`GET` が返した Deny をそのまま送り返さない。**
 あれは `sub` が空文字であり、`PATCH` は空の `sub` を弾く

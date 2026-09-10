@@ -1,0 +1,209 @@
+name: release
+
+# リリースの公開を契機に、VPM パッケージを作って添付し、正式版なら prod へ出す（仕様書 9.2）。
+#
+# 型は published だけにする。人が作る正式版と、人が作るプレリリース
+# （パッチ以外を上げるとき）の公開で発火する。
+# prerelease.yml が GITHUB_TOKEN で作るプレリリースは release イベントを
+# 発火させないのでここには来ない。あちらは自分で zip を付けて通知する。
+#
+# プレリリースを正式版へ昇格する経路（released）は使わない。
+# 昇格ではタグ名が X.Y.Z-testN のまま変わらず、正式版の形（X.Y.Z）に合わない。
+# 正式版は必ず新しい X.Y.Z のタグで公開する（docs/release.md）。
+#
+# 順序は、タグの検査、zip の作成と添付、リスティングへの通知と prod デプロイである。
+# zip が作れなかったリリースを prod へ出さないよう、デプロイは zip の後ろに置く。
+#
+# prod デプロイは deploy.yml を master の ref で workflow_dispatch として起こし、終わるまで待つ。
+# workflow_call で呼ばないのは、この実行がタグの ref を持ち、deploy.yml のジョブが参照する
+# environment prod の規則（master だけ）に当たるためである。master の ref で起こせば規則に当たらず、
+# 出るのも master の内容に限られる。タグのコミットを expected_sha で渡し、deploy.yml が checkout
+# したものと比べるので、起こしてから master が進んでいれば止まる。
+# GITHUB_TOKEN で起こした workflow_dispatch は実行を作る（GITHUB_TOKEN が起こすイベントのうち
+# workflow_dispatch と repository_dispatch だけが例外である）。
+#
+# 手でも流せる。その場合はリリースへ添付せず、zip を artifact に置くだけである。
+# BOOTH に置く zip を作り直すときに使う。
+#
+# 添付する前に、タグの形と、指すコミットが master の先端であることを確かめる。
+# 正式版は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
+# master に無い内容から作った zip を公開すると、公開した zip とリスティングは戻らない。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版（例 0.1.0）。空なら package.json の version
+        required: false
+        type: string
+      attach:
+        description: その版のリリースへ zip を添付する（既定は artifact に置くだけ）
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える
+    name: build package
+    runs-on: ubuntu-latest
+    permissions:
+      # リリースへ zip を添付する
+      contents: write
+    steps:
+      # release イベントでは、タグが指すコミットが checkout される
+      - name: checkout
+        uses: actions/checkout@v7
+
+      # release イベントの GITHUB_SHA はタグが指すコミットである。
+      # 正式版（プレリリースでない公開）は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
+      # 昇格したプレリリースは released でしか発火しないのでここには来ないが、
+      # 来ても X.Y.Z-testN の形で止まる
+      # 先端の比較に使う origin/master を、検査とは別のステップで取る。
+      # 検査のステップに通信を入れると、通信の失敗と拒否が同じ失敗になり、
+      # published-tags.sh が正しい正式版を拒まれたものとして数えない
+      - name: fetch master
+        if: github.event_name == 'release'
+        # 保存先を明示する。タグを checkout したランナーには origin/master が無く、
+        # 「origin master」だけでは FETCH_HEAD にしか書かれない
+        run: git fetch --no-tags --depth 1 origin +master:refs/remotes/origin/master
+
+      # この表示名は prerelease.yml が呼ぶ published-tags.sh が見る。変えるなら揃える。
+      # このステップは通信をしないので、失敗はタグの拒否（形か、先端でない）である
+      - name: verify the release tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          KIND: ${{ github.event.release.prerelease && 'prerelease' || 'stable' }}
+        run: .github/scripts/verify-release-tag.sh "$TAG" "$GITHUB_SHA" "$KIND"
+
+      - name: determine version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "release" ]; then
+            VERSION="$TAG"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION=$(jq -r '.version' unity/Packages/com.qazx7412.vrcservicestatuspanel/package.json)
+          fi
+
+          # 手で流したときは master の先端でなくてもよいが、形だけは揃える
+          NUM='(0|[1-9][0-9]*)'
+          if ! echo "$VERSION" | grep -qE "^$NUM\.$NUM\.$NUM(-test[1-9][0-9]*)?\$"; then
+            echo "::error::版 $VERSION は X.Y.Z か X.Y.Z-testN の形ではない（v も先頭の 0 も付けない）"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      # prerelease.yml も同じスクリプトを呼ぶので、プレリリースと正式版で中身が食い違わない
+      - name: build package
+        run: .github/scripts/build-package.sh "${{ steps.version.outputs.version }}"
+
+      # 名前に試行番号を含める。同じ実行の中では同じ名前の artifact を作り直せないので、
+      # この後の添付で落ちて再実行したとき、名前が同じだとここで重複の失敗になる
+      - name: upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ github.run_attempt }}
+          path: "*.zip"
+
+      # 手で流したときは、既定では artifact に置くだけで、リリースには添付しない。
+      # タグを打つ前に中身を確かめる用途なので、うっかり添付しないようにしてある。
+      # attach を立てると、その版のリリースへ添付する。
+      # Actions が止まっていたあいだに公開された正式版のように、リリースはあるのに
+      # zip が無いものを直す経路である（published-tags.sh がこれを案内する）
+      - name: upload to release
+        if: github.event_name == 'release' || inputs.attach
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          files: "*.zip"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # secrets コンテキストはジョブの if で参照できないため、
+  # トークンの有無を先行ジョブの出力へ移してから分岐する（prerelease.yml と同じ形）
+  listing-token:
+    name: Check listing token
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        env:
+          LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$LISTING_DISPATCH_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::LISTING_DISPATCH_TOKEN が未設定のため VPM リスティングへの通知をスキップします"
+          fi
+
+  # リリースの公開を VPM リスティング（limit7412/vcc-vpm）へ通知し、
+  # リスティングを作り直させる。secret の扱いと needs の理由は prerelease.yml と同じ。
+  # リリースのタグは release イベントから読まれるので tag は渡さない。
+  notify-listing:
+    name: notify-listing
+    needs: [build, listing-token]
+    if: ${{ !cancelled() && github.event_name == 'release' && needs.build.result == 'success' && needs.listing-token.outputs.available == 'true' }}
+    permissions: {}
+    uses: limit7412/vcc-vpm/.github/workflows/notify-listing.yml@main
+    with:
+      listing-repo: limit7412/vcc-vpm
+    secrets:
+      LISTING_DISPATCH_TOKEN: ${{ secrets.LISTING_DISPATCH_TOKEN }}
+
+  # 正式版なら prod へ出す。zip の添付が通ってからで、プレリリースでは動かない。
+  #
+  # deploy.yml を master の ref で workflow_dispatch として起こし、その実行が終わるまで待つ
+  # （.github/scripts/dispatch-deploy.sh）。タグのコミットを expected_sha で渡す。
+  # 同じスタックへの実行は deploy.yml の concurrency（deploy-prod）で直列になる。
+  # ここには concurrency を付けない。同じ名前を付けると、このジョブが群を占めたまま、
+  # 起こした実行が同じ群の空きを待つ形になる。
+  # 取り消されたら失敗にする。このリリースが出たことを保証したいので、dev とは違う。
+  deploy:
+    name: deploy prod
+    needs: build
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      # deploy.yml を起こし、実行の一覧を読む
+      actions: write
+      # 起こした実行の状態を gh で読む。gh はジョブの経過を checks から読むことがあり、一つでも明示すると他は none に
+      # なるので、これも書く。無いと watch が 403 で止まり、デプロイが通ってもここが失敗する
+      checks: read
+      # スクリプトを取る
+      contents: read
+    steps:
+      # スクリプトは master の先端から取り、起こされる deploy.yml と契約を揃える。
+      # タグのコミットは build ジョブで master の先端と確かめてあるが、ここまでに進んでいてもよい
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          ref: master
+
+      - name: dispatch deploy.yml for prod and wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        # 出す内容は正式版のタグ。master の先端ではない。
+        # build のあいだに master が進むと、先端を出す形では、期待するコミット（タグの
+        # コミット）と食い違って必ず止まる。タグは公開の時点で先端だったことを
+        # verify-release-tag.sh で確かめてあるので、master に含まれることも通る
+        run: .github/scripts/dispatch-deploy.sh prod "release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "$GITHUB_SHA" "$TAG"
