@@ -190,4 +190,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: .github/scripts/dispatch-deploy.sh prod "release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "$GITHUB_SHA"
+          TAG: ${{ github.event.release.tag_name }}
+        # 出す内容は正式版のタグ。master の先端ではない。
+        # build のあいだに master が進むと、先端を出す形では、期待するコミット（タグの
+        # コミット）と食い違って必ず止まる。タグは公開の時点で先端だったことを
+        # verify-release-tag.sh で確かめてあるので、master に含まれることも通る
+        run: .github/scripts/dispatch-deploy.sh prod "release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "$GITHUB_SHA" "$TAG"

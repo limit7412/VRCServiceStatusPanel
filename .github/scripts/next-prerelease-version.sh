@@ -52,6 +52,20 @@ NUM='(0|[1-9][0-9]*)'
 STABLE_PATTERN="^$NUM\.$NUM\.$NUM\$"
 PRERELEASE_PATTERN="^$NUM\.$NUM\.$NUM-test[1-9][0-9]*\$"
 
+# 公開済みの一覧にあるタグは、zip の付いたリリースがあるもので、release.yml か
+# prerelease.yml が master の先端に打ったものである。基準から辿れないのは、force push で
+# その履歴が master から外れたか、タグが消された場合である。
+# 数えずに進むと、公開済みの正式版より低い版まで戻る（安定版が全部外れると FIRST_VERSION
+# から数え直す）ので、止めて人に任せる
+if [ -n "$PUBLISHED_LIST" ]; then
+  UNREACHABLE=$(grep -E "$STABLE_PATTERN|$PRERELEASE_PATTERN" "$PUBLISHED_LIST" \
+    | grep -vxF -f <(git tag --merged "$BASE") || true)
+  if [ -n "$UNREACHABLE" ]; then
+    echo "::error::公開済みのタグ（$(printf '%s' "$UNREACHABLE" | tr '\n' ' ')）が $BASE から辿れない。force push で履歴が変わったか、タグが消えている。そのリリースを消すか、タグを打ち直すまで採番しない" >&2
+    exit 1
+  fi
+fi
+
 # grep は一致が無いと 1 を返す。無いのは正常なので、pipefail の中でも止めない
 STABLE=$(candidate_tags | grep -E "$STABLE_PATTERN" | sort -V | tail -n 1 || true)
 if [ -n "$STABLE" ]; then

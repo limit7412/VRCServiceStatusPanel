@@ -2,7 +2,14 @@
 # deploy.yml を master の ref で workflow_dispatch として起こし、終わるまで待つ。
 # 承認待ちに入ったら、またその後ろに並んだら、待たずに終える（下の注記）。
 #
-#   .github/scripts/dispatch-deploy.sh <スタック名> <識別子> [期待するコミット]
+#   .github/scripts/dispatch-deploy.sh <スタック名> <識別子> [期待するコミット] [出す内容の ref]
+#
+# 出す内容の ref を渡すと、deploy.yml はそれを checkout して、master に含まれることを
+# 確かめてから出す。渡さないと master の先端を出す。
+# release.yml は正式版のタグを渡す。渡さないと、build のあいだに master が進んだとき、
+# 起こされた側は新しい先端を checkout して、期待するコミット（タグのコミット）と食い違い、
+# 必ず止まる。zip の添付も通知も済んでいるので、再実行しても同じところで止まり、
+# 正式版だけが出て prod が動かないままになる。
 #
 # deploy-dev.yml と release.yml から呼ぶ。
 # 環境変数 GH_TOKEN（actions: write と checks: read を持つ GITHUB_TOKEN）と GH_REPO が要る。
@@ -25,6 +32,7 @@ set -euo pipefail
 STACK="${1:?スタック名を指定すること}"
 DISPATCH_ID="${2:?識別子を指定すること}"
 EXPECTED_SHA="${3:-}"
+REF="${4:-}"
 : "${GH_TOKEN:?GH_TOKEN が要る}"
 : "${GH_REPO:?GH_REPO が要る}"
 
@@ -82,8 +90,8 @@ trap on_exit EXIT
 trap on_cancel INT TERM
 
 gh workflow run deploy.yml --ref master \
-  -f "stack=$STACK" -f "expected_sha=$EXPECTED_SHA" -f "dispatch_id=$DISPATCH_ID"
-echo "deploy.yml を master の ref で起こした（stack=$STACK、expected_sha=${EXPECTED_SHA:-なし}、dispatch_id=$DISPATCH_ID）"
+  -f "stack=$STACK" -f "ref=$REF" -f "expected_sha=$EXPECTED_SHA" -f "dispatch_id=$DISPATCH_ID"
+echo "deploy.yml を master の ref で起こした（stack=$STACK、ref=${REF:-なし}、expected_sha=${EXPECTED_SHA:-なし}、dispatch_id=$DISPATCH_ID）"
 
 # 一覧を読めなかったときは空と同じに扱い、残りの回数で読み直す。
 # 一度の失敗で落とすと、起こした実行が動いているのに、単発の読み取りの失敗で取り消してしまう
