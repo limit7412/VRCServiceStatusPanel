@@ -1,5 +1,6 @@
 require "../status/models"
 require "../status/repository"
+require "../status/usecase"
 require "../upstream"
 
 # BOOTH の合成監視（仕様書 3.3）。
@@ -16,9 +17,13 @@ module Booth
   class Repository < Status::SourceRepository
     TOP_URL = "https://booth.pm/ja"
 
-    # top_url を受け取るのは spec から差し替えるためである。
+    # top_url としきい値を受け取るのは spec から差し替えるためである。
     # 表示に出す url は定数のままにする（仕様書 4）。
-    def initialize(@item_id : String, @top_url : String = TOP_URL)
+    def initialize(
+      @item_id : String,
+      @top_url : String = TOP_URL,
+      @latency_threshold : Time::Span = Status::Usecase::LATENCY_THRESHOLD,
+    )
     end
 
     def service_id : String
@@ -43,39 +48,38 @@ module Booth
     end
 
     def observe : Status::Observation
-      started = Time.instant
       top, item = Upstream.get_all([@top_url, item_url])
-      latency = Time.instant - started
-
-      top_ok = Upstream.ok?(top)
-      item_ok = Upstream.ok?(item)
 
       # 両方落ちて初めて届かなかったとみなす（仕様書 3.3）。
       # 二つとも理由を残す。片方だけを出すと、もう片方が何で落ちたか分からない。
-      unless top_ok || item_ok
-        return failure("BOOTH に届かない（#{Upstream.reason(top)} / #{Upstream.reason(item)}）")
+      unless top.ok? || item.ok?
+        return failure("BOOTH に届かない（#{top.reason} / #{item.reason}）")
       end
 
       Status::Observation.new(
         service_id: service_id,
         outcome: Status::Outcome::Success,
         checked_at: Time.utc,
-        latency: latency,
-        note: partial_note(top_ok, item_ok),
-        partial: !(top_ok && item_ok),
+        # 二つを並べて叩いているので、遅いほうが利用者の体感になる。
+        latency: {top.elapsed, item.elapsed}.max,
+        note: note_for(top, item),
+        partial: !(top.ok? && item.ok?),
       )
     rescue error
       failure(error.message || error.class.name)
     end
 
-    # 片方だけが落ちているときに、どちらかを出す。
+    # 片方だけが落ちているときは、どちらかを出す。
     # 商品ページだけが落ちる場合は、その商品が消えた可能性もある。
     # 月次の点検でそこを見る（仕様書 9）ため、どちらが落ちたかを残す。
-    private def partial_note(top_ok : Bool, item_ok : Bool) : String
-      return "商品ページが応答しない" unless item_ok
-      return "トップが応答しない" unless top_ok
+    #
+    # 両方届いていれば、遅かった経路を出す。全体の時間は遅いほうと同じなので、
+    # どちらが遅いかはここでしか分からない。しきい値に届かなければ空になる。
+    private def note_for(top : Upstream::Fetch, item : Upstream::Fetch) : String
+      return "商品ページが応答しない" unless item.ok?
+      return "トップが応答しない" unless top.ok?
 
-      ""
+      Upstream.slowest_note([{"トップ", top}, {"商品ページ", item}], @latency_threshold)
     end
 
     private def failure(reason : String) : Status::Observation
