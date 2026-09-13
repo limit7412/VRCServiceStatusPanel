@@ -16,7 +16,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; connect-src 'self'; script-src 'sha256-VzsqBMLOOLsAwo10U0yJyL4SheCoZGwKQddgtE7c0qg='; style-src 'sha256-m9MyJAJ6VrOs8IAkTMHWaR7KOAQcuJVFwa1NbpA4/LA='; base-uri 'none'; form-action 'none'"
     />
-    <title>関連サービスの状態</title>
+    <title>VRChatの関連サービスの監視状況</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -199,14 +199,13 @@
   </head>
   <body>
     <main>
-      <h1>関連サービスの状態</h1>
+      <h1>VRChatの関連サービスの監視状況</h1>
       <p class="generated" id="generated">取得中</p>
       <p class="notice" id="notice" hidden></p>
       <ul class="services" id="services" hidden></ul>
       <pre class="raw" id="raw" hidden></pre>
       <p class="footer">
-        このページは <a id="feed-link" href="v1/status.json">v1/status.json</a>
-        を取得して表示している。ワールドのパネルが読むのと同じ URL である。
+        <a href="https://github.com/limit7412/VRCServiceStatusPanel">limit7412/VRCServiceStatusPanel</a>
       </p>
     </main>
     <script>
