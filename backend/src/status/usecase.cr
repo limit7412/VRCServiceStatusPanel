@@ -243,23 +243,49 @@ module Status
     #
     # 失敗しても前回値へは戻さない。届かなかったこと自体が判定の材料であり、
     # 前回値を保つと、一回の失敗を 1 とする上の表が働かなくなる。
-    # note はアダプタが返したものをそのまま出すので、失敗の理由を
-    # 表示に出したくない取得元は、note を空にして返すこと。
     private def synthetic_status(
       source : SourceRepository,
       observation : Observation,
       history : History,
     ) : ServiceStatus
       latency = observation.latency
-      slow = !latency.nil? && latency >= LATENCY_THRESHOLD
+      slow = !latency.nil? && Usecase.slow?(latency)
 
       build(
         source,
         level: Usecase.level_for_synthetic(history, degraded: observation.partial? || slow),
-        note: observation.note,
+        note: synthetic_note(observation, history, slow),
         checked_at: observation.checked_at,
         components: observation.components,
       )
+    end
+
+    # 合成監視の note を組み立てる。
+    #
+    # level は直近三回から決まるのに、アダプタの note は今回の観測しか語らない。
+    # 今回届いたのに前回が落ちていれば、黄や赤のまま説明が空になる。遅かった
+    # だけのときも同じで、黄になる回のほとんどがこの形だった。level を下げた
+    # 理由は、アダプタが言わなければここで補う。
+    #
+    # 今回届かなかったときは、アダプタが返した理由をそのまま出す。
+    # 今回届いたときは、直近の失敗、アダプタが見たこと、の順に並べる。
+    # アダプタが何も言わずに遅かったときだけ、秒数をここで出す。経路が一つの
+    # 取得元はどこが遅いかを言い分ける必要が無いので、アダプタ側で書かない。
+    private def synthetic_note(observation : Observation, history : History, slow : Bool) : String
+      return observation.note unless observation.success?
+
+      parts = [] of String
+      if history.failure_count >= 1
+        parts << "直近 #{history.outcomes.size} 回中 #{history.failure_count} 回届かず"
+      end
+
+      if !observation.note.empty?
+        parts << observation.note
+      elsif slow && (latency = observation.latency)
+        parts << Usecase.slow_note(latency)
+      end
+
+      parts.join("、")
     end
 
     # 表示に出す一件を組み立てる。
@@ -281,6 +307,23 @@ module Status
         note: note,
         components: components,
       )
+    end
+
+    # レイテンシしきい値に届いたか（仕様書 3.3）。
+    def self.slow?(latency : Time::Span) : Bool
+      latency >= LATENCY_THRESHOLD
+    end
+
+    # 遅かったことを表示に出す一行。
+    #
+    # 経路の名前を受けるのは、二つの経路を持つ取得元が、どちらが遅いかを
+    # 言うためである。書式をここに置くのは、取得元ごとに秒の丸め方が
+    # ずれないようにするためで、判定のしきい値と同じ場所に揃える。
+    def self.slow_note(latency : Time::Span, path : String = "") : String
+      seconds = "%.1f" % latency.total_seconds
+      return "応答に #{seconds} 秒" if path.empty?
+
+      "#{path}: 応答に #{seconds} 秒"
     end
 
     # 合成監視のレベルを直近三回の結果から決める（仕様書 3.3）。

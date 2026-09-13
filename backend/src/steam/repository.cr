@@ -1,5 +1,6 @@
 require "../status/models"
 require "../status/repository"
+require "../status/usecase"
 require "../upstream"
 require "./models"
 
@@ -16,11 +17,12 @@ module Steam
     WEB_API_URL = "https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/"
     STORE_URL   = "https://store.steampowered.com/"
 
-    # 取得先を受け取るのは spec から差し替えるためである。
+    # 取得先としきい値を受け取るのは spec から差し替えるためである。
     # 表示に出す url は上の定数のままにする（仕様書 4）。
     def initialize(
       @web_api_url : String = WEB_API_URL,
       @store_url : String = STORE_URL,
+      @latency_threshold : Time::Span = Status::Usecase::LATENCY_THRESHOLD,
     )
     end
 
@@ -43,29 +45,35 @@ module Steam
 
     # 失敗を例外として外に出さず、outcome で返す（仕様書 11.4）。
     def observe : Status::Observation
-      started = Time.instant
       web_api, store = Upstream.get_all([@web_api_url, @store_url])
 
-      # 二つを並べて叩いているので、これは遅いほうの時間である。
-      # どちらかが遅ければ利用者の体感も遅いので、主指標だけを測り直さない。
-      latency = Time.instant - started
-
-      if reason = web_api_failure(web_api)
+      if reason = web_api_failure(web_api.result)
         return failure(reason)
       end
 
-      store_down = !Upstream.ok?(store)
+      store_down = !store.ok?
 
       Status::Observation.new(
         service_id: service_id,
         outcome: Status::Outcome::Success,
         checked_at: Time.utc,
-        latency: latency,
-        note: store_down ? "ストアが応答しない（#{Upstream.reason(store)}）" : "",
+        # 二つを並べて叩いているので、遅いほうが利用者の体感になる。
+        # どちらかが遅ければ体感も遅いので、主指標だけを見ない。
+        latency: {web_api.elapsed, store.elapsed}.max,
+        note: store_down ? "ストアが応答しない（#{store.reason}）" : slow_note(web_api, store),
         partial: store_down,
       )
     rescue error
       failure(error.message || error.class.name)
+    end
+
+    # 遅かった経路を表示に出す。しきい値に届かなければ空を返す。
+    #
+    # 全体の時間は遅いほうと同じなので、どちらが遅いかはここでしか分からない。
+    # ストアが重いだけなのか Web API が重いのかで、次に見る先が変わる。
+    # ストアが落ちているときは呼ばない。落ちた理由のほうが先に読みたい。
+    private def slow_note(web_api : Upstream::Fetch, store : Upstream::Fetch) : String
+      Upstream.slowest_note([{"Web API", web_api}, {"ストア", store}], @latency_threshold)
     end
 
     # Web API が使えるかを見て、駄目なら表示に出す一行を返す。使えれば nil を返す。

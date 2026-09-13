@@ -291,7 +291,87 @@ describe Status::Usecase do
 
       feed = refresh([source] of Status::SourceRepository, FakeFeeds.new)
 
-      feed.services.first.level.should eq Status::Level::Degraded.value
+      service = feed.services.first
+      service.level.should eq Status::Level::Degraded.value
+      # 黄になる回のほとんどがこれで、理由が空のままだと何が起きたか分からない。
+      service.note.should eq "応答に 3.0 秒"
+    end
+
+    # level は直近三回から決まるのに、note は今回の観測しか語らない。
+    # 今回届いたのに前回が落ちていれば、黄のまま説明が空になる。
+    it "合成監視は今回届いても直近の失敗を note に残す" do
+      state = Status::State.new(histories: {"steam" => history_of(Status::Outcome::Failure)})
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      service = feed.services.first
+      service.level.should eq Status::Level::Degraded.value
+      service.note.should eq "直近 2 回中 1 回届かず"
+    end
+
+    # 障害の終わりがけは必ずこの形になる。赤のまま説明が無いのがいちばん困る。
+    it "合成監視は二回落ちたあとに届いても赤の理由を残す" do
+      state = Status::State.new(
+        histories: {"steam" => history_of(Status::Outcome::Failure, Status::Outcome::Failure)},
+      )
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      service = feed.services.first
+      service.level.should eq Status::Level::MajorOutage.value
+      service.note.should eq "直近 3 回中 2 回届かず"
+    end
+
+    it "合成監視は直近の失敗と遅さを並べて残す" do
+      state = Status::State.new(histories: {"steam" => history_of(Status::Outcome::Failure)})
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational, latency: 4.6.seconds),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      feed.services.first.note.should eq "直近 2 回中 1 回届かず、応答に 4.6 秒"
+    end
+
+    # 二つの経路を持つ取得元は、どちらが遅いかまで書いて渡してくる。
+    # それを秒数で上書きすると、見る先の情報が落ちる。
+    it "合成監視は取得元の note があれば遅さを書き足さない" do
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational, note: "ストア: 応答に 4.6 秒", latency: 4.6.seconds),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new)
+
+      feed.services.first.note.should eq "ストア: 応答に 4.6 秒"
+    end
+
+    it "合成監視は今回届かなければ取得元の理由だけを残す" do
+      state = Status::State.new(histories: {"steam" => history_of(Status::Outcome::Failure)})
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: failure("steam", "Web API に届かない（Read timed out）"),
+      )
+
+      feed = refresh([source] of Status::SourceRepository, FakeFeeds.new(state))
+
+      service = feed.services.first
+      service.level.should eq Status::Level::MajorOutage.value
+      service.note.should eq "Web API に届かない（Read timed out）"
     end
 
     # observe は例外を出さない契約だが（仕様書 11.4）、破られても他は止めない。

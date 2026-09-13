@@ -1,16 +1,24 @@
 require "../spec_helper"
 
-private record Stub, status : HTTP::Status = HTTP::Status::OK
+# delay は片方だけを遅らせるためのもので、返す前にその時間だけ待つ。
+private record Stub, status : HTTP::Status = HTTP::Status::OK, delay : Time::Span = Time::Span.zero
 
-private def with_booth(top : Stub, item : Stub, &)
+# threshold は遅さの spec で縮める。3 秒待つより、上限を下げて短い待ちで確かめる。
+private def with_booth(
+  top : Stub,
+  item : Stub,
+  threshold : Time::Span = Status::Usecase::LATENCY_THRESHOLD,
+  &
+)
   handler = ->(context : HTTP::Server::Context) do
     stub = context.request.path.starts_with?("/items") ? item : top
+    sleep stub.delay
     context.response.status = stub.status
     nil
   end
 
   with_stub_server(handler) do |endpoint|
-    yield Booth::Repository.new("123456", top_url: endpoint)
+    yield Booth::Repository.new("123456", top_url: endpoint, latency_threshold: threshold)
   end
 end
 
@@ -53,6 +61,41 @@ describe Booth::Repository do
       observation.outcome.should eq Status::Outcome::Success
       observation.partial?.should be_true
       observation.note.should eq "トップが応答しない"
+    end
+  end
+
+  # 全体の時間は遅いほうと同じなので、どちらが遅いかは経路ごとに測るしかない。
+  it "商品ページが遅ければどちらが遅いかを残す" do
+    item = Stub.new(delay: 100.milliseconds)
+
+    with_booth(Stub.new, item, threshold: 50.milliseconds) do |source|
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Success
+      observation.partial?.should be_false
+      observation.note.should start_with("商品ページ: 応答に ")
+      (observation.latency || Time::Span.zero).should be >= 100.milliseconds
+    end
+  end
+
+  it "トップが遅ければそちらを残す" do
+    top = Stub.new(delay: 100.milliseconds)
+
+    with_booth(top, Stub.new, threshold: 50.milliseconds) do |source|
+      observation = source.observe
+
+      observation.note.should start_with("トップ: 応答に ")
+    end
+  end
+
+  # 落ちた理由のほうが先に読みたい。
+  it "片方が落ちていれば遅さより落ちたことを残す" do
+    item = Stub.new(status: HTTP::Status::NOT_FOUND, delay: 100.milliseconds)
+
+    with_booth(Stub.new, item, threshold: 50.milliseconds) do |source|
+      observation = source.observe
+
+      observation.note.should eq "商品ページが応答しない"
     end
   end
 

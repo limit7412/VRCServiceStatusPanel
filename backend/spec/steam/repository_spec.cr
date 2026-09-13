@@ -1,7 +1,11 @@
 require "../spec_helper"
 
 # 二つの経路をパスで分ける。片方だけを落とした場合を作るためである。
-private record Stub, status : HTTP::Status = HTTP::Status::OK, body : String = ""
+# delay は片方だけを遅らせるためのもので、返す前にその時間だけ待つ。
+private record Stub,
+  status : HTTP::Status = HTTP::Status::OK,
+  body : String = "",
+  delay : Time::Span = Time::Span.zero
 
 private def server_info_json : String
   <<-JSON
@@ -9,9 +13,16 @@ private def server_info_json : String
     JSON
 end
 
-private def with_steam(web_api : Stub, store : Stub, &)
+# threshold は遅さの spec で縮める。3 秒待つより、上限を下げて短い待ちで確かめる。
+private def with_steam(
+  web_api : Stub,
+  store : Stub,
+  threshold : Time::Span = Status::Usecase::LATENCY_THRESHOLD,
+  &
+)
   handler = ->(context : HTTP::Server::Context) do
     stub = context.request.path.starts_with?("/api") ? web_api : store
+    sleep stub.delay
     context.response.status = stub.status
     context.response.print stub.body
     nil
@@ -21,6 +32,7 @@ private def with_steam(web_api : Stub, store : Stub, &)
     yield Steam::Repository.new(
       web_api_url: "#{endpoint}/api",
       store_url: "#{endpoint}/store",
+      latency_threshold: threshold,
     )
   end
 end
@@ -57,6 +69,48 @@ describe Steam::Repository do
       observation.partial?.should be_true
       observation.note.should contain("ストア")
       observation.note.should contain("503")
+    end
+  end
+
+  # 全体の時間は遅いほうと同じなので、どちらが遅いかは経路ごとに測るしかない。
+  # ストアが重いだけなのか Web API が重いのかで、次に見る先が変わる。
+  it "ストアが遅ければどちらが遅いかを残す" do
+    store = Stub.new(delay: 100.milliseconds)
+
+    with_steam(Stub.new(body: server_info_json), store, threshold: 50.milliseconds) do |source|
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Success
+      observation.partial?.should be_false
+      observation.note.should start_with("ストア: 応答に ")
+      observation.note.should end_with(" 秒")
+      # 遅いほうの時間が利用者の体感になる。
+      (observation.latency || Time::Span.zero).should be >= 100.milliseconds
+    end
+  end
+
+  it "Web API が遅ければそちらを残す" do
+    web_api = Stub.new(body: server_info_json, delay: 100.milliseconds)
+
+    with_steam(web_api, Stub.new, threshold: 50.milliseconds) do |source|
+      observation = source.observe
+
+      observation.outcome.should eq Status::Outcome::Success
+      observation.note.should start_with("Web API: 応答に ")
+    end
+  end
+
+  # 落ちた理由のほうが先に読みたい。遅さは一段下げる理由として同じ重みで、
+  # 二つ並べても一行に収まらない。
+  it "ストアが落ちていれば遅さより落ちたことを残す" do
+    store = Stub.new(status: HTTP::Status::SERVICE_UNAVAILABLE, delay: 100.milliseconds)
+
+    with_steam(Stub.new(body: server_info_json), store, threshold: 50.milliseconds) do |source|
+      observation = source.observe
+
+      observation.partial?.should be_true
+      observation.note.should contain("ストアが応答しない")
+      observation.note.should_not contain("応答に")
     end
   end
 
