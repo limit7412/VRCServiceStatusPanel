@@ -100,7 +100,7 @@ describe Steam::Repository do
     end
   end
 
-  # 落ちた理由のほうが先に読みたい。遅さは一段下げる理由として同じ重みで、
+  # 落ちた理由のほうが先に読みたい。遅さは level を動かさず、
   # 二つ並べても一行に収まらない。
   it "ストアが落ちていれば遅さより落ちたことを残す" do
     store = Stub.new(status: HTTP::Status::SERVICE_UNAVAILABLE, delay: 100.milliseconds)

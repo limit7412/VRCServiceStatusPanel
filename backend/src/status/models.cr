@@ -79,7 +79,7 @@ module Status
     #
     # Steam はストアだけ、BOOTH は商品ページだけが落ちることがある。
     # そのサービスが使えないわけではないので失敗とは数えず、合成監視は
-    # レイテンシの超過と同じ一段の低下として扱う。
+    # 一段の低下として扱う。
     getter? partial : Bool
 
     def initialize(
