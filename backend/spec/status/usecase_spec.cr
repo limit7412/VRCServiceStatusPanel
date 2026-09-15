@@ -252,7 +252,7 @@ describe Status::Usecase do
     end
 
     # Steam のストアだけ、BOOTH の商品ページだけが落ちた場合にあたる。
-    # 届いてはいるので失敗には数えず、レイテンシの超過と同じ扱いにする。
+    # 届いてはいるので失敗には数えず、一段の低下として扱う。
     it "合成監視は経路の一部の停止を一段の低下として扱う" do
       source = FakeSource.new(
         service_id: "steam",
@@ -282,19 +282,38 @@ describe Status::Usecase do
       end
     end
 
-    it "合成監視はレイテンシの超過を一段の低下として扱う" do
+    # 東京の Lambda から見た応答は平常時でも 1〜2 秒あり、3 秒を超える回は
+    # 日に数回、どれも単発だった。一回の超過で黄にすると、その回だけ点いて
+    # 次の回に消える黄が日に数回出る。遅かったことは note で伝え、level は動かさない。
+    it "合成監視は遅くても level を下げず note にだけ残す" do
       source = FakeSource.new(
         service_id: "steam",
         source_kind: Status::SourceKind::Synthetic,
         observation: success("steam", Status::Level::Operational, latency: 3.seconds),
       )
+      feeds = FakeFeeds.new
+
+      feed = refresh([source] of Status::SourceRepository, feeds)
+
+      service = feed.services.first
+      service.level.should eq Status::Level::Operational.value
+      service.note.should eq "応答に 3.0 秒"
+      # 届いてはいるので、履歴には成功として積む。
+      feeds.states.first.history_of("steam").outcomes.should eq [Status::Outcome::Success]
+    end
+
+    it "合成監視は基準の手前なら遅さを書かない" do
+      source = FakeSource.new(
+        service_id: "steam",
+        source_kind: Status::SourceKind::Synthetic,
+        observation: success("steam", Status::Level::Operational, latency: 3.seconds - 1.millisecond),
+      )
 
       feed = refresh([source] of Status::SourceRepository, FakeFeeds.new)
 
       service = feed.services.first
-      service.level.should eq Status::Level::Degraded.value
-      # 黄になる回のほとんどがこれで、理由が空のままだと何が起きたか分からない。
-      service.note.should eq "応答に 3.0 秒"
+      service.level.should eq Status::Level::Operational.value
+      service.note.should eq ""
     end
 
     # level は直近三回から決まるのに、note は今回の観測しか語らない。

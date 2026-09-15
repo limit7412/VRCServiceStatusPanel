@@ -6,7 +6,14 @@ module Status
   class Usecase
     Log = ::Log.for("status")
 
-    # 合成監視のレイテンシしきい値と接続タイムアウト（仕様書 3.3）。
+    # 合成監視の遅さを表示に出す基準と、接続タイムアウト（仕様書 3.3）。
+    #
+    # 遅さは level には使わず、note にだけ出す。
+    # 東京の Lambda から見た一回の応答は、平常時でも 1〜2 秒ある。3 秒を超える
+    # 回は日に数回あり、どれも単発で、二つ以上の取得元が同時に超えることも
+    # 無かった（2026 年 9 月の 4 日分）。一回の超過で黄にすると、その回だけ
+    # 点いて次の回に消える黄が日に数回出る。障害の入り口の遅さは、続くか、
+    # 届かなくなるかのどちらかの形で現れるので、そちらは履歴が拾う。
     LATENCY_THRESHOLD = 3.seconds
     CONNECT_TIMEOUT   = 5.seconds
 
@@ -243,6 +250,8 @@ module Status
     #
     # 失敗しても前回値へは戻さない。届かなかったこと自体が判定の材料であり、
     # 前回値を保つと、一回の失敗を 1 とする上の表が働かなくなる。
+    #
+    # 遅さは level に使わない。遅かったことは note で伝える。
     private def synthetic_status(
       source : SourceRepository,
       observation : Observation,
@@ -253,7 +262,7 @@ module Status
 
       build(
         source,
-        level: Usecase.level_for_synthetic(history, degraded: observation.partial? || slow),
+        level: Usecase.level_for_synthetic(history, degraded: observation.partial?),
         note: synthetic_note(observation, history, slow),
         checked_at: observation.checked_at,
         components: observation.components,
@@ -263,9 +272,12 @@ module Status
     # 合成監視の note を組み立てる。
     #
     # level は直近三回から決まるのに、アダプタの note は今回の観測しか語らない。
-    # 今回届いたのに前回が落ちていれば、黄や赤のまま説明が空になる。遅かった
-    # だけのときも同じで、黄になる回のほとんどがこの形だった。level を下げた
-    # 理由は、アダプタが言わなければここで補う。
+    # 今回届いたのに前回が落ちていれば、黄や赤のまま説明が空になる。level を
+    # 下げた理由は、アダプタが言わなければここで補う。
+    #
+    # 遅さも note に出す。level は動かさないので、緑のまま「応答に 4.6 秒」が
+    # 付く形になる。遅さを表示から落とすと、障害の入り口で遅くなっている
+    # ことを、届かなくなるまで誰も知れない。
     #
     # 今回届かなかったときは、アダプタが返した理由をそのまま出す。
     # 今回届いたときは、直近の失敗、アダプタが見たこと、の順に並べる。
@@ -309,7 +321,7 @@ module Status
       )
     end
 
-    # レイテンシしきい値に届いたか（仕様書 3.3）。
+    # 遅さを表示に出す基準に届いたか（仕様書 3.3）。level には使わない。
     def self.slow?(latency : Time::Span) : Bool
       latency >= LATENCY_THRESHOLD
     end
@@ -328,16 +340,16 @@ module Status
 
     # 合成監視のレベルを直近三回の結果から決める（仕様書 3.3）。
     #
-    # | 直近三回の結果                                     | level |
-    # |----------------------------------------------------|-------|
-    # | すべて成功                                         | 0     |
-    # | 一回失敗、または成功したがレイテンシしきい値を超過 | 1     |
-    # | 二回以上失敗                                       | 2     |
-    # | bot 検知に相当する応答                             | 3     |
+    # | 直近三回の結果                               | level |
+    # |----------------------------------------------|-------|
+    # | すべて成功                                   | 0     |
+    # | 一回失敗、または成功したが一部が落ちている   | 1     |
+    # | 二回以上失敗                                 | 2     |
+    # | bot 検知に相当する応答                       | 3     |
     #
     # degraded は、届いたが一段下げる理由があることを表す。
-    # レイテンシの超過と、経路の一部が落ちていること（Observation#partial?）を
-    # まとめて受ける。表の二行目はどちらも同じ扱いである。
+    # いまは経路の一部が落ちていること（Observation#partial?）だけがこれにあたる。
+    # 遅さは含めない。理由は LATENCY_THRESHOLD にある。
     #
     # 判定不能を先に見る。bot 検知は失敗とは別の扱いで、赤くしない。
     # 履歴が空のときは今回の結果だけで暫定判定する（仕様書 5.2）。
