@@ -8,11 +8,11 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "22.20.1",
+    "@types/node": "26.6.6",
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@pulumi/aws": "7.43.0",
+    "@pulumi/aws": "7.53.0",
     "@pulumi/cloudflare": "6.20.0",
     "@pulumi/pulumi": "3.273.0"
   }
