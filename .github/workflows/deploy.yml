@@ -280,7 +280,7 @@ jobs:
       # Pulumi CLI はランナーに入っていない。
       # このアクションは command を渡さなければ CLI を入れるだけで終わる。
       - name: install pulumi cli
-        uses: pulumi/actions@v6
+        uses: pulumi/actions@v7
 
       - name: assume aws deploy role
         uses: aws-actions/configure-aws-credentials@v4
