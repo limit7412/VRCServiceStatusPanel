@@ -266,7 +266,7 @@ jobs:
 
       # 名前は prepare が出力したものを使う（上の注記）
       - name: download build outputs
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.prepare.outputs.artifact }}
           path: ${{ runner.temp }}/deploy-inputs
