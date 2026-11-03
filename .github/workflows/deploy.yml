@@ -158,7 +158,7 @@ jobs:
       # build.sh は linux/arm64 のイメージを走らせる。x86_64 のランナーでは
       # binfmt の登録が要る。
       - name: enable arm64 emulation
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
@@ -283,7 +283,7 @@ jobs:
         uses: pulumi/actions@v7
 
       - name: assume aws deploy role
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-1
