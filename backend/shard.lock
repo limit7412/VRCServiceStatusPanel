@@ -6,7 +6,7 @@ shards:
 
   awscr-s3:
     git: https://github.com/taylorfinnell/awscr-s3.git
-    version: 0.10.0
+    version: 0.11.0
 
   awscr-signer:
     git: https://github.com/taylorfinnell/awscr-signer.git
