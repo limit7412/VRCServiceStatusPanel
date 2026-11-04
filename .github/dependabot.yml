@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # 公開直後のタグは取り下げや付け替えが起きることがあるため、7日経ってから更新PRを作る。
+    # gh actions-lock もこの値を読み、7日以内に公開されたタグを fresh-tag として知らせる。
+    cooldown:
+      default-days: 7
