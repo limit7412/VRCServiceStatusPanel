@@ -38,7 +38,7 @@ jobs:
       relevant: ${{ steps.check.outputs.relevant }}
     steps:
       # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - id: check
         uses: ./.github/actions/changed-paths
@@ -66,10 +66,10 @@ jobs:
         working-directory: infra
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: setup node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           # Pulumi の nodejs ランタイムが対応する LTS に合わせる。
           node-version: 22

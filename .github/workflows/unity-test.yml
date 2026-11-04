@@ -74,7 +74,7 @@ jobs:
       relevant: ${{ steps.check.outputs.relevant }}
     steps:
       # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - id: check
         uses: ./.github/actions/changed-paths
@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Install vrc-get
         run: |
@@ -124,7 +124,7 @@ jobs:
           cat Packages/vpm-manifest.json
 
       - name: Cache Library
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: unity/Library
           key: Library-${{ env.UNITY_VERSION }}-${{ hashFiles('unity/Packages/vpm-manifest.json') }}
@@ -134,7 +134,7 @@ jobs:
       # 他のアクションはNode 24を実行環境とする版へ上げているが、これはv4が最新であり
       # Node 20のまま。上流が新しいメジャーを出すまでは追随できない。
       - name: Run EditMode tests
-        uses: game-ci/unity-test-runner@v4
+        uses: game-ci/unity-test-runner@v4.4.0
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
@@ -151,7 +151,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: editmode-test-results
           path: artifacts

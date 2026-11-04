@@ -58,7 +58,7 @@ jobs:
     steps:
       # release イベントでは、タグが指すコミットが checkout される
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       # release イベントの GITHUB_SHA はタグが指すコミットである。
       # 正式版（プレリリースでない公開）は X.Y.Z、プレリリースは X.Y.Z-testN の形に限る。
@@ -116,7 +116,7 @@ jobs:
       # 名前に試行番号を含める。同じ実行の中では同じ名前の artifact を作り直せないので、
       # この後の添付で落ちて再実行したとき、名前が同じだとここで重複の失敗になる
       - name: upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: package-${{ github.run_attempt }}
           path: "*.zip"
@@ -128,7 +128,7 @@ jobs:
       # zip が無いものを直す経路である（published-tags.sh がこれを案内する）
       - name: upload to release
         if: github.event_name == 'release' || inputs.attach
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           files: "*.zip"
@@ -193,7 +193,7 @@ jobs:
       # スクリプトは master の先端から取り、起こされる deploy.yml と契約を揃える。
       # タグのコミットは build ジョブで master の先端と確かめてあるが、ここまでに進んでいてもよい
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: master
 
