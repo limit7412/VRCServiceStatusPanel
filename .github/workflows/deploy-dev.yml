@@ -38,7 +38,7 @@ jobs:
       relevant: ${{ steps.check.outputs.relevant }}
     steps:
       # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - id: check
         uses: ./.github/actions/changed-paths
@@ -86,7 +86,7 @@ jobs:
       # 起こす側のスクリプトと起こされる deploy.yml の契約（入力、実行の名前）を、
       # 実行の順序が入れ替わっても揃えるためである
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: master
 

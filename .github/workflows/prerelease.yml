@@ -45,7 +45,7 @@ jobs:
       relevant: ${{ steps.check.outputs.relevant }}
     steps:
       # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - id: check
         uses: ./.github/actions/changed-paths
@@ -111,7 +111,7 @@ jobs:
       # 別のブランチを選んで master に無い内容を公開する経路が、これで無くなる。
       # 版をタグの一覧から決めるので、履歴とタグをすべて取る
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: master
           fetch-depth: 0
@@ -395,7 +395,7 @@ jobs:
           fi
 
       - name: upload the record
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: prerelease-target-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prerelease-record/target.txt
@@ -492,7 +492,7 @@ jobs:
       # コミットだけの記録とは別の名前で置くので、これが失敗しても先の記録は残る
       - name: record the tag for re-runs
         if: steps.version.outputs.has_asset != 'true' && steps.version.outputs.mode == 'new'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: prerelease-tag-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prerelease-record/target.txt

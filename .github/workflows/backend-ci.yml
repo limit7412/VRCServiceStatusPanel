@@ -42,7 +42,7 @@ jobs:
       relevant: ${{ steps.check.outputs.relevant }}
     steps:
       # 共有アクションはリポジトリの中にあるので、先に取ってこないと使えない
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - id: check
         uses: ./.github/actions/changed-paths
@@ -71,11 +71,11 @@ jobs:
         working-directory: backend
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       # crystal: latest だと Crystal の更新でいきなり CI が壊れるため固定する。
       - name: install crystal
-        uses: crystal-lang/install-crystal@v1
+        uses: crystal-lang/install-crystal@v1.9.5
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
 
@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: build bootstrap.zip
         run: backend/build.sh
