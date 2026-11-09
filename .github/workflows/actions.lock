@@ -16,7 +16,7 @@ workflows:
         - 'aws-actions/configure-aws-credentials@v6.3.0'
         - 'docker/setup-qemu-action@v4.4.0'
         - 'pulumi/actions@v7.1.0'
-        - 'pulumi/auth-actions@v2.1.1'
+        - 'pulumi/auth-actions@v2.1.2'
     '.github/workflows/infra-ci.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-node@v7.1.0'
@@ -85,9 +85,9 @@ dependencies:
         commit: 'sha1-96c7761824268174e0d2a4e8c7d75671eebd24a7'
         owner_id: 21992475
         repo_id: 153361173
-    'pulumi/auth-actions@v2.1.1':
-        ref: 'v2.1.1'
-        commit: 'sha1-159c3e431aab767d4519b96f3f784d7d3d725622'
+    'pulumi/auth-actions@v2.1.2':
+        ref: 'v2.1.2'
+        commit: 'sha1-273044cc19e63ea565285da8edd4e059126a0bdb'
         owner_id: 21992475
         repo_id: 792502994
     'softprops/action-gh-release@v3.0.3':
