@@ -128,7 +128,7 @@ jobs:
       # zip が無いものを直す経路である（published-tags.sh がこれを案内する）
       - name: upload to release
         if: github.event_name == 'release' || inputs.attach
-        uses: softprops/action-gh-release@v3.0.3
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: ${{ steps.version.outputs.version }}
           files: "*.zip"
