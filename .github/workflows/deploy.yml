@@ -293,7 +293,7 @@ jobs:
       # organization は個人アカウントでも必須で、値は自分のユーザー名になる。
       # 上の ORG と同じ値である。fork するなら三つとも自分のものに書き換える。
       - name: authenticate to pulumi cloud
-        uses: pulumi/auth-actions@v2.1.1
+        uses: pulumi/auth-actions@v2.1.2
         with:
           organization: limit7412
           requested-token-type: urn:pulumi:token-type:access_token:personal
