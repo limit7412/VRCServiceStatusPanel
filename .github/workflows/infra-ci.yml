@@ -72,7 +72,7 @@ jobs:
         uses: actions/setup-node@v7.1.0
         with:
           # Pulumi の nodejs ランタイムが対応する LTS に合わせる。
-          node-version: 22
+          node-version: 26
           cache: npm
           cache-dependency-path: infra/package-lock.json
 
