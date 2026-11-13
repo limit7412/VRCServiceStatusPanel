@@ -42,7 +42,7 @@ env:
   # （com.vrchat.worldsのTests.GraphNodeTestsなど）まで走り、こちらの変更と
   # 無関係な失敗でジョブが落ちる
   TEST_ASSEMBLY: VRCServiceStatusPanel.Editor.Tests
-  VRC_GET_VERSION: v1.9.2
+  VRC_GET_VERSION: v1.9.3
 
 jobs:
   # secretsコンテキストはジョブの`if`で参照できないため、
