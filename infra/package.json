@@ -12,7 +12,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@pulumi/aws": "7.54.0",
+    "@pulumi/aws": "7.55.0",
     "@pulumi/cloudflare": "6.24.0",
     "@pulumi/pulumi": "3.276.0"
   }
