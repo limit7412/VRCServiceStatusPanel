@@ -75,7 +75,7 @@ jobs:
 
       # crystal: latest だと Crystal の更新でいきなり CI が壊れるため固定する。
       - name: install crystal
-        uses: crystal-lang/install-crystal@v1.9.5
+        uses: crystal-lang/install-crystal@v1.10.0
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
 
