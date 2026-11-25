@@ -15,7 +15,7 @@ workflows:
         - 'actions/upload-artifact@v7.0.2'
         - 'aws-actions/configure-aws-credentials@v6.3.0'
         - 'docker/setup-qemu-action@v4.4.0'
-        - 'pulumi/actions@v7.1.0'
+        - 'pulumi/actions@v7.2.0'
         - 'pulumi/auth-actions@v2.1.2'
     '.github/workflows/infra-ci.yml':
         - 'actions/checkout@v7.0.1'
@@ -80,9 +80,9 @@ dependencies:
         commit: 'sha1-32e57712352b500e17974b245a6dce9e11a73213'
         owner_id: 66185740
         repo_id: 225025427
-    'pulumi/actions@v7.1.0':
-        ref: 'v7.1.0'
-        commit: 'sha1-96c7761824268174e0d2a4e8c7d75671eebd24a7'
+    'pulumi/actions@v7.2.0':
+        ref: 'v7.2.0'
+        commit: 'sha1-0ce33695f880624d4f27bd6db25e680c7df4d551'
         owner_id: 21992475
         repo_id: 153361173
     'pulumi/auth-actions@v2.1.2':
